@@ -123,7 +123,14 @@ function Install-Java {
         }
 
         $tmp = Join-Path $env:TEMP "temurin$Major.zip"
-        $url = $asset.binary.installer.link
+        if ($asset.binary.package -and $asset.binary.package.link) {
+            $url = $asset.binary.package.link
+        } elseif ($asset.binary.archive -and $asset.binary.archive.link) {
+            $url = $asset.binary.archive.link
+        } else {
+            Write-Host "  [FAIL] No portable ZIP link in Adoptium API response (only .msi installer found)." -ForegroundColor Red
+            return $false
+        }
         Write-Host ("  Downloading {0} ..." -f (Split-Path $url -Leaf)) -ForegroundColor Cyan
         Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 600
 
@@ -456,9 +463,19 @@ function Install-Il2CppDumper {
 function Install-GhidraCli {
     param([string]$ToolsDir)
 
+    $targetDir = Join-Path $ToolsDir "ghidra-cli"
+    $targetBin = Join-Path $targetDir "ghidra.exe"
+
+    if (Test-Path -LiteralPath $targetBin) {
+        Write-Host "  [SKIP] ghidra-cli already at $targetBin" -ForegroundColor Yellow
+        return $true
+    }
+
     $existing = Get-Command "ghidra" -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-Host "  [SKIP] ghidra-cli already installed at $($existing.Source)" -ForegroundColor Yellow
+        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        Copy-Item -LiteralPath $existing.Source -Destination $targetBin -Force
+        Write-Host ("  [OK]   Copied existing ghidra-cli from PATH to {0}" -f $targetBin) -ForegroundColor Green
         return $true
     }
 
@@ -471,16 +488,25 @@ function Install-GhidraCli {
     Write-Host "  Installing ghidra-cli via cargo (this may take a few minutes)..." -ForegroundColor Cyan
     $repoDir = Join-Path $env:TEMP "ghidra-cli-src"
     if (Test-Path -LiteralPath $repoDir) { Remove-Item -LiteralPath $repoDir -Recurse -Force }
-    & git clone --depth 1 https://github.com/akiselev/ghidra-cli.git $repoDir
-    & cargo install --path $repoDir
+    & git clone --depth 1 https://github.com/akiselev/ghidra-cli.git $repoDir 2>&1 | Out-Null
+    if (Test-Path -LiteralPath $targetDir) { Remove-Item -LiteralPath $targetDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+    & cargo install --path $repoDir --root $targetDir 2>&1 | Out-Null
+
+    $cargoBin = Join-Path (Join-Path $targetDir "bin") "ghidra.exe"
+    if (Test-Path -LiteralPath $cargoBin) {
+        Move-Item -LiteralPath $cargoBin -Destination $targetBin -Force
+        if (Test-Path -LiteralPath (Join-Path $targetDir "bin")) {
+            Remove-Item -LiteralPath (Join-Path $targetDir "bin") -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
     Remove-Item -LiteralPath $repoDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    $installed = Get-Command "ghidra" -ErrorAction SilentlyContinue
-    if ($installed) {
-        Write-Host ("  [OK]   ghidra-cli installed at {0}" -f $installed.Source) -ForegroundColor Green
+    if (Test-Path -LiteralPath $targetBin) {
+        Write-Host ("  [OK]   ghidra-cli installed at {0}" -f $targetBin) -ForegroundColor Green
         return $true
     }
-    Write-Host "  [FAIL] cargo install did not produce a ghidra executable on PATH." -ForegroundColor Red
+    Write-Host "  [FAIL] cargo install did not produce $targetBin." -ForegroundColor Red
     return $false
 }
 
@@ -686,18 +712,23 @@ if ($missing.Count -eq 0) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime              # JDK + Python + Rust"
-Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra               # Ghidra 11.x"
-Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper         # wklin8607/Il2CppDumper v6.7.48"
-Write-Host "  .\install-re-toolkit.ps1 -InstallAssetRipper          # AssetRipper/AssetRipper latest"
-Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraCli            # ghidra-cli (needs cargo)"
-Write-Host "  .\re.ps1 check"
-Write-Host "  .\re.ps1 init <ProjectName>"
-Write-Host "  .\re.ps1 ghidra --% doctor                            # sanity check"
-Write-Host "  .\re.ps1 ghidra --% import <binary> --project <name>"
-Write-Host "  .\re.ps1 dump <libil2cpp.so> <global-metadata.dat> <ProjectName>"
-Write-Host "  .\re.ps1 mcp [ProjectName]"
-Write-Host "  .\re.ps1 install-skill                                # ghidra-reverse-engineering-cli skill"
+Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + Python + Rust"
+Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra 11.x"
+Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper           # wklin8607/Il2CppDumper v6.7.48"
+Write-Host "  .\install-re-toolkit.ps1 -InstallAssetRipper            # AssetRipper/AssetRipper latest"
+Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraCli              # ghidra-cli (needs cargo; lands at tools\ghidra-cli\ghidra.exe)"
+Write-Host "  .\re.ps1 doctor                                        # check toolkit health"
+Write-Host "  .\re.ps1 init    <GameName>"
+Write-Host "  .\re.ps1 scan    <GameName> <ExtractedPath>             # detect libil2cpp.so / GameAssembly.dll"
+Write-Host "  .\re.ps1 dump    <GameName>                             # run Il2CppDumper"
+Write-Host "  .\re.ps1 import  <GameName>                             # ghidra-cli import"
+Write-Host "  .\re.ps1 analyze <GameName>                             # ghidra-cli analyze"
+Write-Host "  .\re.ps1 flow    <GameName> <ExtractedPath>             # all of the above, in order"
+Write-Host "  .\re.ps1 summary <GameName>                             # ghidra-cli summary"
+Write-Host "  .\re.ps1 ghidra-cli --% doctor                          # raw ghidra-cli passthrough"
+Write-Host "  .\re.ps1 ghidra-gui                                     # full GUI"
+Write-Host "  .\re.ps1 mcp                                            # Ghidra MCP bridge"
+Write-Host "  .\re.ps1 install-skill                                  # gh install-ghidra-reverse-engineering-cli skill"
 
 $endSweep = Clear-RetkTemp
 if ($endSweep -gt 0) {
