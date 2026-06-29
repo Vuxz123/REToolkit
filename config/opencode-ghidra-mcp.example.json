@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
+      "args": ["mcp"],
+      "type": "stdio",
+      "env": {
+        "RETOOLKIT_ROOT": "C:\\Users\\DPC00176\\REToolkit"
+      },
+      "notes": "OpenCode reads ~/.config/opencode/opencode.json or project-local opencode.json. Merge this object into existing mcpServers."
+    }
+  }
+}

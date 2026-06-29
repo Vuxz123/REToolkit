@@ -1,0 +1,10 @@
+# Codex CLI config (TOML fragment).
+# Codex config location: %USERPROFILE%\.codex\config.toml
+# Merge the [mcp_servers.ghidra] section into your existing config.toml.
+
+[mcp_servers.ghidra]
+command = "C:\\Users\\DPC00176\\REToolkit\\re.ps1"
+args = ["mcp"]
+
+[mcp_servers.ghidra.env]
+RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"
