@@ -504,10 +504,30 @@ function Install-GhidraCli {
 
     if (Test-Path -LiteralPath $targetBin) {
         Write-Host ("  [OK]   ghidra-cli installed at {0}" -f $targetBin) -ForegroundColor Green
+
+        $ghidraRoot = Join-Path $ToolsDir "ghidra"
+        if (Test-Path -LiteralPath $ghidraRoot) {
+            Seed-GhidraCliConfig -GhidraExe $targetBin -GhidraRoot $ghidraRoot
+        }
         return $true
     }
     Write-Host "  [FAIL] cargo install did not produce $targetBin." -ForegroundColor Red
     return $false
+}
+
+function Seed-GhidraCliConfig {
+    param([string]$GhidraExe, [string]$GhidraRoot)
+    $cfgDir = Join-Path $env:APPDATA "ghidra-cli"
+    $cfgFile = Join-Path $cfgDir "config.yaml"
+    if (Test-Path -LiteralPath $cfgFile) {
+        Write-Host "  [INFO] ghidra-cli config already exists: $cfgFile" -ForegroundColor DarkGray
+        return
+    }
+    New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+    $yaml = "ghidra_install_dir: `"$($GhidraRoot -replace '\\','\\\\')`"`n"
+    Set-Content -LiteralPath $cfgFile -Value $yaml -Encoding UTF8
+    Write-Host "  [FIX] Seeded ghidra-cli config: $cfgFile" -ForegroundColor Cyan
+    Write-Host "         (pointed at $GhidraRoot)" -ForegroundColor Cyan
 }
 
 $startSweep = Clear-RetkTemp

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
     [string]$Command,
@@ -8,163 +8,639 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
 $Root       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Tools      = Join-Path $Root "tools"
 $Workspaces = Join-Path $Root "workspaces"
-if ($null -eq $Rest) { $Rest = @() }
 
-$ToolPaths = @{
-    JdkRoot       = Join-Path $Root "runtime\java\jdk-21"
-    JavaExe       = Join-Path $Root "runtime\java\jdk-21\bin\java.exe"
-    GhidraCli     = Join-Path $Tools "ghidra-cli\ghidra.exe"
-    GhidraGuiBat  = Join-Path $Tools "ghidra\ghidraRun.bat"
-    PyGhidraBat   = Join-Path $Tools "ghidra\support\pyghidraRun.bat"
-    Dumper        = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
+if ($null -eq $Rest) { $Rest = @() }
+if ($Rest.Count -gt 0 -and $Rest[0] -eq "--%") {
+    if ($Rest.Count -gt 1) { $Rest = $Rest[1..($Rest.Count - 1)] } else { $Rest = @() }
 }
 
-function Assert-File {
-    param([string]$Path, [string]$Name)
-    if (-not (Test-Path -LiteralPath $Path)) {
+$ToolPaths = [ordered]@{
+    JdkRoot          = Join-Path $Root  "runtime\java\jdk-21"
+    JavaExe          = Join-Path $Root  "runtime\java\jdk-21\bin\java.exe"
+    GhidraRoot       = Join-Path $Tools "ghidra"
+    GhidraCli        = Join-Path $Tools "ghidra-cli\ghidra.exe"
+    GhidraGuiBat     = Join-Path $Tools "ghidra\ghidraRun.bat"
+    PyGhidraBat      = Join-Path $Tools "ghidra\support\pyghidraRun.bat"
+    AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
+    Dumper           = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
+}
+
+function Assert-PathExists {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Name,
+        [switch]$Directory
+    )
+
+    $ok = if ($Directory) {
+        Test-Path -LiteralPath $Path -PathType Container
+    } else {
+        Test-Path -LiteralPath $Path
+    }
+
+    if (-not $ok) {
         $hint = switch -Regex ($Name) {
-            "JDK 21"        { "Run: .\install-re-toolkit.ps1 -InstallRuntime" }
-            "Ghidra CLI"    { "Run: .\install-re-toolkit.ps1 -InstallGhidraCli" }
-            "Ghidra GUI"    { "Run: .\install-re-toolkit.ps1 -InstallGhidra" }
-            "PyGhidra"      { "Re-install Ghidra with PyGhidra support (run -InstallGhidra)" }
-            "Il2CppDumper"  { "Run: .\install-re-toolkit.ps1 -InstallIl2CppDumper" }
+            "JDK 21"       { "Run local JDK installer, then ensure runtime\java\jdk-21\bin\java.exe exists." }
+            "Ghidra CLI"   { "Install Rust Ghidra CLI into tools\ghidra-cli\ghidra.exe." }
+            "Ghidra GUI"   { "Install Ghidra into tools\ghidra." }
+            "PyGhidra"     { "Check tools\ghidra\support\pyghidraRun.bat." }
+            "Headless"     { "Check tools\ghidra\support\analyzeHeadless.bat." }
+            "Il2CppDumper" { "Install Il2CppDumper into tools\Il2CppDumper\Il2CppDumper.exe." }
             default         { "" }
         }
-        Write-Host "[FAIL] $Name not found: $Path" -ForegroundColor Red
-        if ($hint) { Write-Host "       $hint" -ForegroundColor Yellow }
-        exit 2
+        throw "[FAIL] $Name not found: $Path`n$hint"
     }
 }
 
-function Get-WorkspacePath {
-    param([string]$GameName)
-    return Join-Path $Workspaces $GameName
-}
+function Invoke-WithToolkitEnv {
+    param([Parameter(Mandatory)] [scriptblock]$ScriptBlock)
 
-function Show-ProjectSummary {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
+    $oldJavaHome          = $env:JAVA_HOME
+    $oldJavaHomeOverride  = $env:JAVA_HOME_OVERRIDE
+    $oldGhidraInstallDir  = $env:GHIDRA_INSTALL_DIR
+    $oldPath              = $env:Path
 
-    function _val($v) { if ($null -eq $v -or "$v" -eq "") { "<unset>" } else { "$v" } }
+    try {
+        # Do not permanently override the user's Java setup.
+        # JAVA_HOME_OVERRIDE is what Ghidra launchers prefer.
+        $env:JAVA_HOME_OVERRIDE = $ToolPaths.JdkRoot
+        $env:GHIDRA_INSTALL_DIR = $ToolPaths.GhidraRoot
+        $env:Path = "$($ToolPaths.JdkRoot)\bin;$oldPath"
 
-    Write-Host ""
-    Write-Host "== Project: $GameName ==" -ForegroundColor Magenta
-    Write-Host ("  Platform         : {0}" -f (_val $Project.platform))
-    Write-Host ("  Native binary    : {0}" -f (_val $Project.nativeBinary))
-    Write-Host ("  Metadata         : {0}" -f (_val $Project.metadata))
-    Write-Host ("  Il2CppDumper out : {0}" -f $Project.il2cppDumperOutput)
-    Write-Host ("  Ghidra project   : {0} (in {1})" -f $Project.ghidraProjectName, $Project.ghidraProjectDir)
-    Write-Host ("  Ghidra program   : {0}" -f (_val $Project.ghidraProgramName))
-    Write-Host ""
-    Write-Host "  Status:" -ForegroundColor Cyan
-    foreach ($k in @("scanned","dumped","imported","analyzed","symbolsApplied")) {
-        $flag = if ($Project.status.$k) { "[x]" } else { "[ ]" }
-        Write-Host ("    {0} {1}" -f $flag, $k)
+        # Important: return/emit the scriptblock result to the caller.
+        # Without this, assignments inside the scriptblock can stay in a child scope,
+        # leaving caller variables like $result as $null.
+        & $ScriptBlock
+    }
+    finally {
+        $env:JAVA_HOME          = $oldJavaHome
+        $env:JAVA_HOME_OVERRIDE = $oldJavaHomeOverride
+        $env:GHIDRA_INSTALL_DIR = $oldGhidraInstallDir
+        $env:Path               = $oldPath
     }
 }
 
-function Get-ProjectJsonPath {
-    param([string]$GameName)
-    return Join-Path (Get-WorkspacePath $GameName) "project.re.json"
-}
+function Join-NativeArgumentString {
+    param([Parameter()] [string[]]$Arguments)
 
-function Read-Project {
-    param([string]$GameName)
-    $p = Get-ProjectJsonPath $GameName
-    if (-not (Test-Path -LiteralPath $p)) {
-        throw "Project config not found: $p. Run: .\re.ps1 init $GameName"
-    }
-    return Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
-}
+    if ($null -eq $Arguments) { return "" }
 
-function Save-Project {
-    param([string]$GameName, [object]$Project)
-    $p = Get-ProjectJsonPath $GameName
-    $Project | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $p -Encoding UTF8
-}
-
-function New-Workspace {
-    param([string]$GameName)
-
-    if (-not ($GameName -match '^[A-Za-z0-9_\-\.]{1,64}$')) {
-        throw "Invalid project name. Use letters, digits, '_', '-', '.' (max 64 chars)."
-    }
-
-    $Workspace = Get-WorkspacePath $GameName
-    if (Test-Path -LiteralPath $Workspace) {
-        Write-Host "[WARN] Workspace already exists: $Workspace" -ForegroundColor Yellow
-        if (Test-Path -LiteralPath (Get-ProjectJsonPath $GameName)) {
-            Write-Host "       Reusing existing project.re.json." -ForegroundColor Yellow
-            return
+    $quoted = New-Object System.Collections.Generic.List[string]
+    foreach ($arg in $Arguments) {
+        if ($null -eq $arg) {
+            [void]$quoted.Add('""')
+            continue
         }
-    } else {
-        New-Item -ItemType Directory -Path $Workspace -Force | Out-Null
+
+        $s = [string]$arg
+
+        # Windows PowerShell 5.1 compatibility:
+        # ProcessStartInfo.ArgumentList is not reliable/available there, so we build
+        # ProcessStartInfo.Arguments manually. Quote every argument to preserve paths
+        # with spaces and options exactly enough for this toolkit use case.
+        $s = $s.Replace('"', '\"')
+        [void]$quoted.Add('"' + $s + '"')
     }
 
-    $Folders = @(
-        "00_OriginalBuild", "01_Extracted", "02_Il2CppDumperOutput",
-        "03_GhidraProject", "04_Notes", "05_ReconstructedSource"
+    return ($quoted -join ' ')
+}
+
+function Invoke-NativeProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter()] [string[]]$Arguments,
+        [Parameter()] [string]$WorkingDirectory
     )
-    foreach ($f in $Folders) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $Workspace $f) | Out-Null
+
+    if ($null -eq $Arguments) { $Arguments = @() }
+
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Native process not found: $FilePath"
     }
 
-    $Project = [ordered]@{
-        name               = $GameName
-        platform           = $null
-        extractedPath      = $null
-        nativeBinary       = $null
-        metadata           = $null
-        il2cppDumperOutput = (Join-Path $Workspace "02_Il2CppDumperOutput")
-        ghidraProjectDir   = (Join-Path $Workspace "03_GhidraProject")
-        ghidraProjectName  = $GameName
-        ghidraProgramName  = $null
-        status = [ordered]@{
-            scanned        = $false
-            dumped         = $false
-            imported       = $false
-            analyzed       = $false
-            symbolsApplied = $false
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.Arguments = Join-NativeArgumentString $Arguments
+
+    if ($WorkingDirectory) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    }
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+
+    $started = $proc.Start()
+    if (-not $started) {
+        throw "Failed to start native process: $FilePath"
+    }
+
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+        foreach ($line in ($stdout -split "`r?`n")) {
+            if ($line -ne "") { [void]$lines.Add($line) }
         }
     }
-    Save-Project $GameName $Project
-    Write-Host "Workspace created: $Workspace" -ForegroundColor Green
+
+    if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+        foreach ($line in ($stderr -split "`r?`n")) {
+            if ($line -ne "") { [void]$lines.Add($line) }
+        }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $proc.ExitCode
+        Lines    = @($lines)
+        StdOut   = $stdout
+        StdErr   = $stderr
+        Command  = ("{0} {1}" -f $FilePath, $psi.Arguments)
+    }
 }
 
 function Invoke-GhidraCli {
     [CmdletBinding()]
     param(
-        [Parameter(ValueFromRemainingArguments)] [string[]]$CliArgs,
-        [string]$OutFile
+        [Parameter(Position = 0)] [string[]]$CliArgs,
+        [Parameter()] [string]$OutFile
     )
-    Assert-File $ToolPaths.GhidraCli "Ghidra CLI"
-    Assert-File $ToolPaths.JavaExe   "Toolkit JDK 21"
+
+    if ($null -eq $CliArgs) { $CliArgs = @() }
+
+    Assert-PathExists $ToolPaths.GhidraCli "Ghidra CLI"
+    Assert-PathExists $ToolPaths.JavaExe   "Toolkit JDK 21"
+
+    # Keep all global CLI options before the subcommand.
     $base = @("--java-home", $ToolPaths.JdkRoot) + $CliArgs
+
+    # Use System.Diagnostics.Process instead of PowerShell native redirection.
+    # Windows PowerShell can turn native stderr into NativeCommandError even for normal logs
+    # such as "Starting Ghidra bridge...".
+    $result = Invoke-WithToolkitEnv {
+        Invoke-NativeProcess -FilePath $ToolPaths.GhidraCli -Arguments $base -WorkingDirectory $Root
+    }
+
+    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
+    if ($null -eq $result) { throw "Invoke-GhidraCli internal error: process result is null." }
+
+    $outputLines = @($result.Lines)
+
     if ($OutFile) {
-        & $ToolPaths.GhidraCli @base | Out-File -LiteralPath $OutFile -Encoding UTF8
+        $dir = Split-Path -Parent $OutFile
+        if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $outputLines | Out-File -LiteralPath $OutFile -Encoding UTF8
         Write-Host ("Wrote: {0}" -f $OutFile) -ForegroundColor DarkGray
-    } else {
-        & $ToolPaths.GhidraCli @base
+    }
+    else {
+        $outputLines | ForEach-Object { Write-Host $_ }
+    }
+
+    if ($result.ExitCode -ne 0) {
+        $errText = ($outputLines | Select-Object -Last 16) -join "`n"
+        $cmdLine = ($base -join " ")
+
+        $bridgeHint = ""
+        if ($errText -match "Starting Ghidra bridge|bridge|lock|already open|in use") {
+            $bridgeHint = @"
+
+Bridge hint:
+- Opening the Ghidra GUI is not the same as having the CLI bridge ready.
+- Run: .\re.ps1 ghidra status
+- Then: .\re.ps1 ghidra ping
+- If the bridge is not running, either start it from the GUI/plugin or close the GUI and let the CLI start its own bridge.
+- If the project is locked by the open GUI, close the GUI before running CLI commands that create/start a bridge on the same project.
+"@
+        }
+
+        throw "ghidra-cli exited with code $($result.ExitCode).`nCommand: $cmdLine`nLast output:`n$errText$bridgeHint"
+    }
+
+    return $outputLines
+}
+
+function Invoke-AnalyzeHeadless {
+    param([Parameter(Mandatory)] [string[]]$HeadlessArgs)
+
+    Assert-PathExists $ToolPaths.AnalyzeHeadless "Ghidra Headless Analyzer"
+    Assert-PathExists $ToolPaths.JavaExe         "Toolkit JDK 21"
+
+    $result = Invoke-WithToolkitEnv {
+        Invoke-NativeProcess -FilePath $ToolPaths.AnalyzeHeadless -Arguments $HeadlessArgs -WorkingDirectory $Root
+    }
+
+    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
+    if ($null -eq $result) { throw "Invoke-AnalyzeHeadless internal error: process result is null." }
+
+    $outputLines = @($result.Lines)
+    $outputLines | ForEach-Object { Write-Host $_ }
+
+    if ($result.ExitCode -ne 0) {
+        $errText = ($outputLines | Select-Object -Last 12) -join "`n"
+        throw "analyzeHeadless exited with code $($result.ExitCode).`nLast output:`n$errText"
+    }
+    return $outputLines
+}
+
+function Invoke-NativeProcessHeartbeat {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter()] [string[]]$Arguments,
+        [Parameter()] [string]$WorkingDirectory,
+        [string]$Activity = "Running native process",
+        [int]$HeartbeatSeconds = 10,
+        [string]$LogFile
+    )
+
+    if ($null -eq $Arguments) { $Arguments = @() }
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Native process not found: $FilePath"
+    }
+
+    $argString = Join-NativeArgumentString $Arguments
+    $commandLine = "{0} {1}" -f $FilePath, $argString
+
+    if ($LogFile) {
+        $dir = Split-Path -Parent $LogFile
+        if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        @(
+            "# $Activity",
+            "StartedAt: $((Get-Date).ToString('s'))",
+            "Command: $commandLine",
+            ""
+        ) | Out-File -LiteralPath $LogFile -Encoding UTF8
+    }
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = $argString
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $false
+    $psi.RedirectStandardError = $false
+    $psi.CreateNoWindow = $false
+    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+
+    Write-Host ("[RUN] {0}" -f $Activity) -ForegroundColor Cyan
+    Write-Host ("      {0}" -f $commandLine) -ForegroundColor DarkGray
+
+    $started = $proc.Start()
+    if (-not $started) { throw "Failed to start native process: $FilePath" }
+
+    $startTime = Get-Date
+    $lastHeartbeat = $startTime.AddSeconds(-1 * $HeartbeatSeconds)
+
+    while (-not $proc.WaitForExit(1000)) {
+        $now = Get-Date
+        $elapsed = New-TimeSpan -Start $startTime -End $now
+        Write-Progress -Activity $Activity -Status ("elapsed {0:hh\:mm\:ss}" -f $elapsed)
+
+        if (($now - $lastHeartbeat).TotalSeconds -ge $HeartbeatSeconds) {
+            $message = "[... still running] {0} elapsed {1:hh\:mm\:ss}" -f $Activity, $elapsed
+            Write-Host $message -ForegroundColor DarkGray
+            if ($LogFile) { Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value $message }
+            $lastHeartbeat = $now
+        }
+    }
+
+    Write-Progress -Activity $Activity -Completed
+    $proc.WaitForExit()
+
+    $endMessage = "FinishedAt: $((Get-Date).ToString('s')); ExitCode: $($proc.ExitCode)"
+    if ($LogFile) { Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value $endMessage }
+
+    return [pscustomobject]@{
+        ExitCode = $proc.ExitCode
+        Lines    = @($endMessage)
+        StdOut   = ""
+        StdErr   = ""
+        Command  = $commandLine
     }
 }
 
-function Add-BuildToProject {
-    param([string]$GameName, [string]$ArchivePath)
+function Invoke-GhidraCliHeartbeat {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)] [string[]]$CliArgs,
+        [string]$Activity = "Ghidra CLI",
+        [string]$LogFile
+    )
 
-    if (-not (Test-Path -LiteralPath $ArchivePath)) {
-        throw "Archive not found: $ArchivePath"
-    }
-    $item = Get-Item -LiteralPath $ArchivePath
-    if ($item.PSIsContainer) {
-        throw "Source is a directory. Use scan instead: .\re.ps1 scan $GameName $ArchivePath"
+    if ($null -eq $CliArgs) { $CliArgs = @() }
+    Assert-PathExists $ToolPaths.GhidraCli "Ghidra CLI"
+    Assert-PathExists $ToolPaths.JavaExe   "Toolkit JDK 21"
+
+    $base = @("--java-home", $ToolPaths.JdkRoot) + $CliArgs
+
+    $result = Invoke-WithToolkitEnv {
+        Invoke-NativeProcessHeartbeat -FilePath $ToolPaths.GhidraCli -Arguments $base -WorkingDirectory $Root -Activity $Activity -LogFile $LogFile
     }
 
-    $ext = [System.IO.Path]::GetExtension($ArchivePath).ToLowerInvariant()
-    if ($ext -notin @('.apk','.ipa','.zip','.aab','.xapk')) {
-        Write-Host "[WARN] Unrecognized extension '$ext'. Trying Expand-Archive anyway." -ForegroundColor Yellow
+    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
+    if ($null -eq $result) { throw "Invoke-GhidraCliHeartbeat internal error: process result is null." }
+
+    if ($result.ExitCode -ne 0) {
+        throw "ghidra-cli exited with code $($result.ExitCode).`nCommand: $($result.Command)`nCheck console output above and log: $LogFile"
+    }
+
+    return @($result.Lines)
+}
+
+function Invoke-AnalyzeHeadlessHeartbeat {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string[]]$HeadlessArgs,
+        [string]$Activity = "Ghidra Headless Analyzer",
+        [string]$LogFile
+    )
+
+    Assert-PathExists $ToolPaths.AnalyzeHeadless "Ghidra Headless Analyzer"
+    Assert-PathExists $ToolPaths.JavaExe         "Toolkit JDK 21"
+
+    $result = Invoke-WithToolkitEnv {
+        Invoke-NativeProcessHeartbeat -FilePath $ToolPaths.AnalyzeHeadless -Arguments $HeadlessArgs -WorkingDirectory $Root -Activity $Activity -LogFile $LogFile
+    }
+
+    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
+    if ($null -eq $result) { throw "Invoke-AnalyzeHeadlessHeartbeat internal error: process result is null." }
+
+    if ($result.ExitCode -ne 0) {
+        throw "analyzeHeadless exited with code $($result.ExitCode).`nCommand: $($result.Command)`nCheck console output above and log: $LogFile"
+    }
+
+    return @($result.Lines)
+}
+
+
+function Get-WorkspacePath {
+    param([Parameter(Mandatory)] [string]$GameName)
+    return Join-Path $Workspaces $GameName
+}
+
+function Get-ProjectJsonPath {
+    param([Parameter(Mandatory)] [string]$GameName)
+    return Join-Path (Get-WorkspacePath $GameName) "project.re.json"
+}
+
+function Read-Project {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $path = Get-ProjectJsonPath $GameName
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "Project config not found: $path. Run: .\re.ps1 init $GameName"
+    }
+    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+}
+
+function Save-Project {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [object]$Project
+    )
+
+    $path = Get-ProjectJsonPath $GameName
+    $dir = Split-Path -Parent $path
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $Project | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $path -Encoding UTF8
+}
+
+
+function Set-ProjectStatusValue {
+    param(
+        [Parameter(Mandatory)] [object]$Project,
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter()] $Value
+    )
+
+    if ($null -eq $Project.status) {
+        $statusObject = New-Object psobject
+        Add-Member -InputObject $Project -MemberType NoteProperty -Name "status" -Value $statusObject -Force
+    }
+
+    $prop = $Project.status.PSObject.Properties[$Name]
+    if ($null -eq $prop) {
+        Add-Member -InputObject $Project.status -MemberType NoteProperty -Name $Name -Value $Value -Force
+    }
+    else {
+        $Project.status.$Name = $Value
+    }
+}
+
+
+function Test-GhidraLockError {
+    param([Parameter()] [string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return ($Text -match "LockException|Unable to lock project|already open|in use|Project.*lock")
+}
+
+function Get-GhidraGuiProcessHint {
+    param([Parameter(Mandatory)] [object]$Project)
+
+    $projectDir = [string]$Project.ghidraProjectDir
+    $projectName = [string]$Project.ghidraProjectName
+
+    try {
+        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -match "(?i)java|ghidra") -and
+                ($_.CommandLine -match [regex]::Escape($projectDir) -or $_.CommandLine -match [regex]::Escape($projectName))
+            } |
+            Select-Object -First 5 ProcessId, Name, CommandLine
+
+        if ($procs) {
+            $lines = $procs | ForEach-Object { "PID=$($_.ProcessId) Name=$($_.Name)" }
+            return ($lines -join "`n")
+        }
+    }
+    catch {
+        return ""
+    }
+
+    return ""
+}
+
+function New-GhidraProjectLockedMessage {
+    param([Parameter(Mandatory)] [object]$Project)
+
+    $hint = Get-GhidraGuiProcessHint -Project $Project
+    $processText = if ([string]::IsNullOrWhiteSpace($hint)) {
+        "No matching Ghidra process was found by command-line scan, but the project lock is still active."
+    }
+    else {
+        "Possible locking process:`n$hint"
+    }
+
+    return @"
+Ghidra project is locked:
+$($Project.ghidraProjectDir)\$($Project.ghidraProjectName)
+
+Most likely cause:
+- The Ghidra GUI is open on this project, or another ghidra-cli/bridge/headless process is still running.
+
+Fix:
+1. Save your work in Ghidra GUI.
+2. Close the Ghidra GUI project/window for '$($Project.ghidraProjectName)'.
+3. Run: .\re.ps1 ghidra stop
+4. Run: .\re.ps1 analyze $($Project.name)
+
+$processText
+
+Note:
+- ghidra-cli/analyzeHeadless cannot analyze a project that is locked by the GUI.
+- If you want to keep the GUI open, use a GUI-side bridge/MCP plugin instead of headless analyze on the same project.
+"@
+}
+
+function New-Workspace {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    if (-not ($GameName -match '^[A-Za-z0-9_\-.]{1,64}$')) {
+        throw "Invalid project name. Use letters, digits, '_', '-', '.' only, max 64 chars."
+    }
+
+    $workspace = Get-WorkspacePath $GameName
+    $projectJson = Get-ProjectJsonPath $GameName
+
+    $folders = @(
+        "00_OriginalBuild", "01_Extracted", "02_Il2CppDumperOutput",
+        "03_GhidraProject", "04_Notes", "05_ReconstructedSource"
+    )
+
+    foreach ($folder in $folders) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $workspace $folder) | Out-Null
+    }
+
+    if (Test-Path -LiteralPath $projectJson) {
+        Write-Host "[WARN] Workspace already exists. Reusing project.re.json: $projectJson" -ForegroundColor Yellow
+        return
+    }
+
+    $project = [ordered]@{
+        name               = $GameName
+        platform           = $null
+        extractedPath      = $null
+        nativeBinary       = $null
+        metadata           = $null
+        il2cppDumperOutput = (Join-Path $workspace "02_Il2CppDumperOutput")
+        ghidraProjectDir   = (Join-Path $workspace "03_GhidraProject")
+        ghidraProjectName  = $GameName
+        ghidraProgramName  = $null
+        status = [ordered]@{
+            scanned            = $false
+            dumped             = $false
+            imported           = $false
+            analyzing          = $false
+            analyzed           = $false
+            symbolsApplied     = $false
+            analyzeStartedAt   = $null
+            analyzeCompletedAt = $null
+        }
+    }
+
+    Save-Project $GameName $project
+    Write-Host "Workspace created: $workspace" -ForegroundColor Green
+}
+
+
+function Convert-ToFileUri {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    try {
+        $fullPath = $Path
+        if (Test-Path -LiteralPath $Path) {
+            $fullPath = (Resolve-Path -LiteralPath $Path).Path
+        }
+        return ([System.Uri]$fullPath).AbsoluteUri
+    }
+    catch {
+        return $Path
+    }
+}
+
+function Show-GhidraProjectOpenInfo {
+    param(
+        [Parameter(Mandatory)] [object]$Project,
+        [switch]$Compact
+    )
+
+    $projectDir  = [string]$Project.ghidraProjectDir
+    $projectName = [string]$Project.ghidraProjectName
+    $programName = [string]$Project.ghidraProgramName
+    $gprPath     = Join-Path $projectDir ($projectName + ".gpr")
+
+    if ($Compact) {
+        Write-Host ("  Open path        : {0}" -f $projectDir)
+        Write-Host ("  Open link        : {0}" -f (Convert-ToFileUri $projectDir))
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Open this project in Ghidra GUI:" -ForegroundColor Cyan
+    Write-Host ("  Project folder   : {0}" -f $projectDir) -ForegroundColor Gray
+    Write-Host ("  Project link     : {0}" -f (Convert-ToFileUri $projectDir)) -ForegroundColor Gray
+
+    if (Test-Path -LiteralPath $gprPath) {
+        Write-Host ("  Ghidra .gpr      : {0}" -f $gprPath) -ForegroundColor Gray
+        Write-Host ("  .gpr link        : {0}" -f (Convert-ToFileUri $gprPath)) -ForegroundColor Gray
+    }
+    else {
+        Write-Host ("  Expected .gpr    : {0}" -f $gprPath) -ForegroundColor DarkGray
+    }
+
+    if ($programName) {
+        Write-Host ("  Program          : {0}" -f $programName) -ForegroundColor Gray
+    }
+
+    Write-Host ("  Explorer command : explorer.exe `"{0}`"" -f $projectDir) -ForegroundColor DarkGray
+    Write-Host ("  GUI step         : File > Open Project... > choose the folder/link above > {0}" -f $projectName) -ForegroundColor DarkGray
+}
+
+function Show-ProjectSummary {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    function LocalValue($v) { if ($null -eq $v -or "$v" -eq "") { "<unset>" } else { "$v" } }
+
+    Write-Host ""
+    Write-Host "== Project: $GameName ==" -ForegroundColor Magenta
+    Write-Host ("  Platform         : {0}" -f (LocalValue $project.platform))
+    Write-Host ("  Native binary    : {0}" -f (LocalValue $project.nativeBinary))
+    Write-Host ("  Metadata         : {0}" -f (LocalValue $project.metadata))
+    Write-Host ("  Il2CppDumper out : {0}" -f (LocalValue $project.il2cppDumperOutput))
+    Write-Host ("  Ghidra project   : {0} (in {1})" -f (LocalValue $project.ghidraProjectName), (LocalValue $project.ghidraProjectDir))
+    Show-GhidraProjectOpenInfo -Project $project -Compact
+    Write-Host ("  Ghidra program   : {0}" -f (LocalValue $project.ghidraProgramName))
+    Write-Host ""
+    Write-Host "  Status:" -ForegroundColor Cyan
+    foreach ($key in @("scanned", "dumped", "imported", "analyzing", "analyzed", "symbolsApplied")) {
+        $flag = if ($project.status.$key) { "[x]" } else { "[ ]" }
+        Write-Host ("    {0} {1}" -f $flag, $key)
+    }
+}
+
+function Scan-UnityIl2Cpp {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string]$ExtractedPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ExtractedPath -PathType Container)) {
+        throw "Extracted path not found: $ExtractedPath"
     }
 
     if (-not (Test-Path -LiteralPath (Get-ProjectJsonPath $GameName))) {
@@ -172,56 +648,123 @@ function Add-BuildToProject {
         New-Workspace $GameName
     }
 
-    $Project = Read-Project $GameName
-    $extractedDir = Join-Path (Get-WorkspacePath $GameName) "01_Extracted"
+    $project = Read-Project $GameName
+    $ExtractedPath = (Resolve-Path -LiteralPath $ExtractedPath).Path
 
+    $arm64 = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "libil2cpp.so" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "arm64-v8a" } |
+        Sort-Object FullName |
+        Select-Object -First 1
+
+    $armv7 = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "libil2cpp.so" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "armeabi-v7a" } |
+        Sort-Object FullName |
+        Select-Object -First 1
+
+    $win = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "GameAssembly.dll" -ErrorAction SilentlyContinue |
+        Sort-Object FullName |
+        Select-Object -First 1
+
+    $metadataCandidates = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "global-metadata.dat" -ErrorAction SilentlyContinue |
+        Sort-Object FullName
+
+    $metadata = $metadataCandidates | Select-Object -First 1
+    if (-not $metadata) {
+        throw "global-metadata.dat not found under: $ExtractedPath"
+    }
+
+    if ($arm64) {
+        $project.platform = "android-arm64"
+        $project.nativeBinary = $arm64.FullName
+        $project.ghidraProgramName = "libil2cpp.so"
+    }
+    elseif ($armv7) {
+        $project.platform = "android-armv7"
+        $project.nativeBinary = $armv7.FullName
+        $project.ghidraProgramName = "libil2cpp.so"
+    }
+    elseif ($win) {
+        $project.platform = "windows-x64"
+        $project.nativeBinary = $win.FullName
+        $project.ghidraProgramName = "GameAssembly.dll"
+    }
+    else {
+        throw "No IL2CPP native binary found. Expected libil2cpp.so or GameAssembly.dll under: $ExtractedPath"
+    }
+
+    $project.extractedPath = $ExtractedPath
+    $project.metadata = $metadata.FullName
+    $project.status.scanned = $true
+
+    Save-Project $GameName $project
+
+    Write-Host "Detected platform : $($project.platform)" -ForegroundColor Cyan
+    Write-Host "Native binary     : $($project.nativeBinary)" -ForegroundColor Cyan
+    Write-Host "Metadata          : $($project.metadata)" -ForegroundColor Cyan
+
+    if (($metadataCandidates | Measure-Object).Count -gt 1) {
+        Write-Host "[WARN] Multiple global-metadata.dat files found. Using first sorted path:" -ForegroundColor Yellow
+        Write-Host "       $($metadata.FullName)" -ForegroundColor Yellow
+    }
+}
+
+function Add-BuildToProject {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string]$ArchivePath
+    )
+
+    if (-not (Test-Path -LiteralPath $ArchivePath)) {
+        throw "Archive not found: $ArchivePath"
+    }
+
+    $item = Get-Item -LiteralPath $ArchivePath
+    if ($item.PSIsContainer) {
+        Scan-UnityIl2Cpp $GameName $ArchivePath
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath (Get-ProjectJsonPath $GameName))) {
+        Write-Host "[INFO] Workspace not found; running init first." -ForegroundColor Cyan
+        New-Workspace $GameName
+    }
+
+    $extractedDir = Join-Path (Get-WorkspacePath $GameName) "01_Extracted"
     if (Test-Path -LiteralPath $extractedDir) {
         Get-ChildItem -LiteralPath $extractedDir -Force -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
-    New-Item -ItemType Directory -Path $extractedDir -Force | Out-Null
+    New-Item -ItemType Directory -Force -Path $extractedDir | Out-Null
 
     Write-Host "Extracting: $ArchivePath" -ForegroundColor Cyan
     Write-Host "       to : $extractedDir" -ForegroundColor Cyan
+
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
         [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $extractedDir)
-    } catch {
-        throw "Extract failed: $($_.Exception.Message). File may not be a valid ZIP/APK/IPA/AAB."
+    }
+    catch {
+        throw "Extract failed: $($_.Exception.Message). File may not be a valid ZIP/APK/IPA/AAB/XAPK/APKS."
     }
 
-    $innerApks = Get-ChildItem -LiteralPath $extractedDir -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue
-    if ($innerApks) {
+    foreach ($filter in @("*.apk", "*.obb")) {
+        $nested = Get-ChildItem -LiteralPath $extractedDir -Recurse -Filter $filter -ErrorAction SilentlyContinue
+        if (-not $nested) { continue }
+
         Write-Host ""
-        Write-Host ("Found {0} nested APK file(s); flattening..." -f $innerApks.Count) -ForegroundColor Cyan
-        foreach ($apk in $innerApks) {
-            $apkBase  = [System.IO.Path]::GetFileNameWithoutExtension($apk.Name)
-            $destDir  = Join-Path $apk.DirectoryName $apkBase
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+        Write-Host ("Found {0} nested {1} file(s); flattening..." -f $nested.Count, $filter) -ForegroundColor Cyan
+
+        foreach ($file in $nested) {
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            $destDir = Join-Path $file.DirectoryName $baseName
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
             try {
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($apk.FullName, $destDir)
-                Write-Host ("  [OK]   {0}  ->  {1}" -f $apk.Name, (Split-Path -Leaf $destDir)) -ForegroundColor Green
-                Remove-Item -LiteralPath $apk.FullName -Force
-            } catch {
-                Write-Host ("  [WARN] {0}: {1}" -f $apk.Name, $_.Exception.Message) -ForegroundColor Yellow
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($file.FullName, $destDir)
+                Write-Host ("  [OK]   {0} -> {1}" -f $file.Name, (Split-Path -Leaf $destDir)) -ForegroundColor Green
+                Remove-Item -LiteralPath $file.FullName -Force
             }
-        }
-    }
-
-    $innerObbs = Get-ChildItem -LiteralPath $extractedDir -Recurse -Filter "*.obb" -ErrorAction SilentlyContinue
-    if ($innerObbs) {
-        Write-Host ""
-        Write-Host ("Found {0} OBB file(s); flattening..." -f $innerObbs.Count) -ForegroundColor Cyan
-        foreach ($obb in $innerObbs) {
-            $obbBase = [System.IO.Path]::GetFileNameWithoutExtension($obb.Name)
-            $destDir = Join-Path $obb.DirectoryName $obbBase
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-            try {
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($obb.FullName, $destDir)
-                Write-Host ("  [OK]   {0}  ->  {1}" -f $obb.Name, (Split-Path -Leaf $destDir)) -ForegroundColor Green
-                Remove-Item -LiteralPath $obb.FullName -Force
-            } catch {
-                Write-Host ("  [WARN] {0}: {1}" -f $obb.Name, $_.Exception.Message) -ForegroundColor Yellow
+            catch {
+                Write-Host ("  [WARN] {0}: {1}" -f $file.Name, $_.Exception.Message) -ForegroundColor Yellow
             }
         }
     }
@@ -229,229 +772,384 @@ function Add-BuildToProject {
     Scan-UnityIl2Cpp $GameName $extractedDir
 }
 
-function Scan-UnityIl2Cpp {
-    param([string]$GameName, [string]$ExtractedPath)
-    if (-not (Test-Path -LiteralPath $ExtractedPath)) {
-        throw "Extracted path not found: $ExtractedPath"
-    }
-    if (-not (Test-Path -LiteralPath (Get-ProjectJsonPath $GameName))) {
-        Write-Host "[INFO] Workspace not found; running init first." -ForegroundColor Cyan
-        New-Workspace $GameName
-    }
-    $Project = Read-Project $GameName
-    $ExtractedPath = (Resolve-Path -LiteralPath $ExtractedPath).Path
-
-    $arm64 = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "libil2cpp.so" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "arm64-v8a" } | Select-Object -First 1
-    $armv7 = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "libil2cpp.so" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "armeabi-v7a" } | Select-Object -First 1
-    $win   = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "GameAssembly.dll" -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    $meta  = Get-ChildItem -LiteralPath $ExtractedPath -Recurse -Filter "global-metadata.dat" -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-
-    if (-not $meta) {
-        throw "global-metadata.dat not found under: $ExtractedPath"
-    }
-    if     ($arm64) { $Project.platform = "android-arm64"; $Project.nativeBinary = $arm64.FullName; $Project.ghidraProgramName = "libil2cpp.so" }
-    elseif ($armv7) { $Project.platform = "android-armv7"; $Project.nativeBinary = $armv7.FullName; $Project.ghidraProgramName = "libil2cpp.so" }
-    elseif ($win)   { $Project.platform = "windows-x64";   $Project.nativeBinary = $win.FullName;   $Project.ghidraProgramName = "GameAssembly.dll" }
-    else            { throw "No IL2CPP native binary found. Expected libil2cpp.so or GameAssembly.dll under: $ExtractedPath" }
-
-    $Project.extractedPath = $ExtractedPath
-    $Project.metadata       = $meta.FullName
-    $Project.status.scanned = $true
-    Save-Project $GameName $Project
-
-    Write-Host "Detected platform : $($Project.platform)" -ForegroundColor Cyan
-    Write-Host "Native binary     : $($Project.nativeBinary)" -ForegroundColor Cyan
-    Write-Host "Metadata          : $($Project.metadata)" -ForegroundColor Cyan
-}
-
 function Run-Il2CppDumper {
-    param([string]$GameName)
-    Assert-File $ToolPaths.Dumper "Il2CppDumper"
-    $Project = Read-Project $GameName
-    if (-not $Project.status.scanned) {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    Assert-PathExists $ToolPaths.Dumper "Il2CppDumper"
+
+    $project = Read-Project $GameName
+    if (-not $project.status.scanned) {
         throw "Project not scanned. Run: .\re.ps1 scan $GameName <ExtractedPath>"
     }
-    New-Item -ItemType Directory -Force -Path $Project.il2cppDumperOutput | Out-Null
-    Push-Location $Project.il2cppDumperOutput
+
+    New-Item -ItemType Directory -Force -Path $project.il2cppDumperOutput | Out-Null
+
+    $dumperDir = Split-Path -Parent $ToolPaths.Dumper
+    $cfgPath = Join-Path $dumperDir "config.json"
+    if (Test-Path -LiteralPath $cfgPath) {
+        try {
+            $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+            $changed = $false
+            if ($cfg.PSObject.Properties.Name -contains "RequireAnyKey" -and $cfg.RequireAnyKey -eq $true) {
+                $cfg.RequireAnyKey = $false
+                $changed = $true
+            }
+            if ($cfg.PSObject.Properties.Name -contains "GenerateScript" -and $cfg.GenerateScript -ne $true) {
+                $cfg.GenerateScript = $true
+                $changed = $true
+            }
+            if ($changed) {
+                $cfg | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+                Write-Host "  [FIX] Patched Il2CppDumper config.json for automation." -ForegroundColor Cyan
+            }
+        }
+        catch {
+            Write-Host "  [WARN] Could not inspect/patch Il2CppDumper config.json: $_" -ForegroundColor Yellow
+        }
+    }
+
+    Push-Location $project.il2cppDumperOutput
     try {
-        & $ToolPaths.Dumper $Project.nativeBinary $Project.metadata $Project.il2cppDumperOutput
-    } finally {
+        & $ToolPaths.Dumper $project.nativeBinary $project.metadata $project.il2cppDumperOutput
+        if ($LASTEXITCODE -ne 0) {
+            throw "Il2CppDumper exited with code $LASTEXITCODE"
+        }
+    }
+    finally {
         Pop-Location
     }
-    $dumpCs   = Join-Path $Project.il2cppDumperOutput "dump.cs"
-    $ghidraPy = Join-Path $Project.il2cppDumperOutput "ghidra.py"
+
+    $dumpCs = Join-Path $project.il2cppDumperOutput "dump.cs"
+    $ghidraPy = Join-Path $project.il2cppDumperOutput "ghidra.py"
+    $ghidraPyFallback = Join-Path $dumperDir "ghidra.py"
+
     if (-not (Test-Path -LiteralPath $dumpCs)) {
-        throw "Il2CppDumper finished but dump.cs not found in $($Project.il2cppDumperOutput)."
+        throw "Il2CppDumper finished but dump.cs not found in $($project.il2cppDumperOutput)."
     }
+
+    if (-not (Test-Path -LiteralPath $ghidraPy) -and (Test-Path -LiteralPath $ghidraPyFallback)) {
+        Copy-Item -LiteralPath $ghidraPyFallback -Destination $ghidraPy -Force
+        Write-Host "  [FIX] Copied ghidra.py fallback from dumper folder to project output." -ForegroundColor Cyan
+    }
+
     if (-not (Test-Path -LiteralPath $ghidraPy)) {
-        Write-Host "[WARN] ghidra.py not found. Symbols step may fail." -ForegroundColor Yellow
+        Write-Host "[WARN] ghidra.py not found. Symbols step may need manual PyGhidra fallback." -ForegroundColor Yellow
     }
-    $Project.status.dumped = $true
-    Save-Project $GameName $Project
-    Write-Host "Il2CppDumper output: $($Project.il2cppDumperOutput)" -ForegroundColor Green
+
+    $project.status.dumped = $true
+    Save-Project $GameName $project
+    Write-Host "Il2CppDumper output: $($project.il2cppDumperOutput)" -ForegroundColor Green
 }
 
 function Import-GhidraProgram {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
-    if (-not $Project.status.dumped) {
-        Write-Host "[WARN] project not dumped yet. Import will continue without symbol hints." -ForegroundColor Yellow
-    }
-    New-Item -ItemType Directory -Force -Path $Project.ghidraProjectDir | Out-Null
+    param([Parameter(Mandatory)] [string]$GameName)
 
-    Invoke-GhidraCli @(
-        "--projects-dir", $Project.ghidraProjectDir,
-        "--project",      $Project.ghidraProjectName,
-        "import",         $Project.nativeBinary
+    $project = Read-Project $GameName
+    if (-not $project.status.scanned) {
+        throw "Project not scanned. Run: .\re.ps1 scan $GameName <ExtractedPath>"
+    }
+
+    Assert-PathExists $ToolPaths.AnalyzeHeadless "Ghidra Headless Analyzer"
+    Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+
+    New-Item -ItemType Directory -Force -Path $project.ghidraProjectDir | Out-Null
+
+    $notesDir = Get-NotesDir $GameName
+    New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
+    $logFile = Join-Path $notesDir "import.log"
+
+    Write-Host "== Import only: $GameName ==" -ForegroundColor Magenta
+    Write-Host "Mode    : analyzeHeadless -import -overwrite -noanalysis" -ForegroundColor Cyan
+    Write-Host "Project : $($project.ghidraProjectDir)\$($project.ghidraProjectName)" -ForegroundColor DarkGray
+    Write-Host "Binary  : $($project.nativeBinary)" -ForegroundColor DarkGray
+    Write-Host "Log     : $logFile" -ForegroundColor DarkGray
+    Write-Host "Note    : this step intentionally does NOT run Ghidra analysis." -ForegroundColor DarkGray
+
+    # Important:
+    # Do NOT use ghidra-cli import here.
+    # ghidra-cli may try to start/connect a bridge, which can hang/fail if the bridge
+    # is not ready. For the toolkit flow we only need a plain project import, so the
+    # official Ghidra headless importer is simpler and avoids bridge issues.
+    $headlessArgs = @(
+        [string]$project.ghidraProjectDir,
+        [string]$project.ghidraProjectName,
+        "-import",    [string]$project.nativeBinary,
+        "-overwrite",
+        "-noanalysis"
     )
-    $Project.status.imported = $true
-    Save-Project $GameName $Project
-    Write-Host "Imported: $($Project.ghidraProjectName) <- $($Project.nativeBinary)" -ForegroundColor Green
+
+    try {
+        @(
+            "# Import only - $GameName",
+            "StartedAt: $((Get-Date).ToString('s'))",
+            "Mode: analyzeHeadless -import -overwrite -noanalysis",
+            "ProjectDir: $($project.ghidraProjectDir)",
+            "ProjectName: $($project.ghidraProjectName)",
+            "Binary: $($project.nativeBinary)",
+            ""
+        ) | Out-File -LiteralPath $logFile -Encoding UTF8
+
+        $outputLines = Invoke-AnalyzeHeadless -HeadlessArgs $headlessArgs
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $outputLines
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "FinishedAt: $((Get-Date).ToString('s')); ExitCode: 0"
+    }
+    catch {
+        $message = $_.Exception.Message
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "Import failed: $message"
+
+        if (Test-GhidraLockError $message) {
+            $lockMessage = New-GhidraProjectLockedMessage -Project $project
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $lockMessage
+            throw $lockMessage
+        }
+
+        throw "Ghidra import failed.`n$message`nCheck log: $logFile"
+    }
+
+    $project.status.imported = $true
+    # This import mode intentionally skips analysis.
+    Set-ProjectStatusValue -Project $project -Name "analyzed" -Value $false
+    Set-ProjectStatusValue -Project $project -Name "analyzing" -Value $false
+    Save-Project $GameName $project
+
+    Write-Host "Imported without analysis: $($project.ghidraProjectName) <- $($project.nativeBinary)" -ForegroundColor Green
+    Write-Host "Next: .\re.ps1 open $GameName" -ForegroundColor Cyan
 }
 
 function Analyze-GhidraProgram {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
-    if (-not $Project.status.imported) {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    if (-not $project.status.imported) {
         throw "Program not imported. Run: .\re.ps1 import $GameName"
     }
-    Invoke-GhidraCli @(
-        "--projects-dir", $Project.ghidraProjectDir,
-        "--project",      $Project.ghidraProjectName,
-        "--program",      $Project.ghidraProgramName,
-        "analyze"
-    )
-    $Project.status.analyzed = $true
-    Save-Project $GameName $Project
-    Write-Host "Analysis completed." -ForegroundColor Green
+
+    $notesDir = Get-NotesDir $GameName
+    New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
+    $logFile = Join-Path $notesDir "analyze.log"
+
+    Set-ProjectStatusValue -Project $project -Name "analyzing" -Value $true
+    Set-ProjectStatusValue -Project $project -Name "analyzeStartedAt" -Value ((Get-Date).ToString("s"))
+    Set-ProjectStatusValue -Project $project -Name "analyzeCompletedAt" -Value $null
+    Save-Project $GameName $project
+
+    Write-Host "== Analyze: $GameName ==" -ForegroundColor Magenta
+    Write-Host "Program : $($project.ghidraProgramName)" -ForegroundColor DarkGray
+    Write-Host "Log     : $logFile" -ForegroundColor DarkGray
+    Write-Host "Tip     : this mode does not capture Ghidra output; it lets Ghidra print directly and adds a heartbeat." -ForegroundColor DarkGray
+
+    $success = $false
+    try {
+        try {
+            Invoke-GhidraCliHeartbeat @(
+                "--projects-dir", $project.ghidraProjectDir,
+                "--project",      $project.ghidraProjectName,
+                "--program",      $project.ghidraProgramName,
+                "analyze"
+            ) -Activity "Ghidra analyze: $GameName" -LogFile $logFile | Out-Null
+            $success = $true
+        }
+        catch {
+            $message = $_.Exception.Message
+            Write-Host "[WARN] ghidra-cli analyze failed." -ForegroundColor Yellow
+            Write-Host $message -ForegroundColor DarkYellow
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "ghidra-cli failed: $message"
+
+            if (Test-GhidraLockError $message) {
+                $lockMessage = New-GhidraProjectLockedMessage -Project $project
+                Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+                Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $lockMessage
+                throw $lockMessage
+            }
+
+            Write-Host "[WARN] Trying analyzeHeadless -process fallback..." -ForegroundColor Yellow
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "Trying analyzeHeadless fallback..."
+
+            try {
+                Invoke-AnalyzeHeadlessHeartbeat @(
+                    $project.ghidraProjectDir,
+                    $project.ghidraProjectName,
+                    "-process", $project.ghidraProgramName
+                ) -Activity "Ghidra headless analyze: $GameName" -LogFile $logFile | Out-Null
+                $success = $true
+            }
+            catch {
+                $headlessMessage = $_.Exception.Message
+                if (Test-GhidraLockError $headlessMessage) {
+                    $lockMessage = New-GhidraProjectLockedMessage -Project $project
+                    Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
+                    Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $lockMessage
+                    throw $lockMessage
+                }
+                throw
+            }
+        }
+    }
+    finally {
+        $project = Read-Project $GameName
+        Set-ProjectStatusValue -Project $project -Name "analyzing" -Value $false
+        if ($success) {
+            Set-ProjectStatusValue -Project $project -Name "analyzed" -Value $true
+            Set-ProjectStatusValue -Project $project -Name "analyzeCompletedAt" -Value ((Get-Date).ToString("s"))
+        }
+        Save-Project $GameName $project
+    }
+
+    if ($success) {
+        Write-Host "Analysis completed." -ForegroundColor Green
+        Write-Host "Wrote heartbeat log: $logFile" -ForegroundColor Green
+    }
 }
+
 
 function Apply-GhidraSymbols {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
-    $ghidraPy = Join-Path $Project.il2cppDumperOutput "ghidra.py"
-    if (-not (Test-Path -LiteralPath $ghidraPy)) {
-        throw "ghidra.py not found: $ghidraPy. Re-run Il2CppDumper."
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    if (-not $project.status.imported) {
+        throw "Program not imported. Run: .\re.ps1 import $GameName"
     }
+
+    $ghidraPy = Join-Path $project.il2cppDumperOutput "ghidra.py"
+    $ghidraPyFallback = Join-Path (Split-Path -Parent $ToolPaths.Dumper) "ghidra.py"
+
+    if (-not (Test-Path -LiteralPath $ghidraPy) -and (Test-Path -LiteralPath $ghidraPyFallback)) {
+        Copy-Item -LiteralPath $ghidraPyFallback -Destination $ghidraPy -Force
+        Write-Host "  [FIX] Copied ghidra.py fallback from dumper folder." -ForegroundColor Cyan
+    }
+
+    if (-not (Test-Path -LiteralPath $ghidraPy)) {
+        Write-Host "[WARN] ghidra.py not found. Open PyGhidra manually: .\re.ps1 pyghidra-gui" -ForegroundColor Yellow
+        return
+    }
+
+    $scriptDir = Split-Path -Parent $ghidraPy
+    $scriptName = Split-Path -Leaf $ghidraPy
+    $errors = @()
+
     try {
         Invoke-GhidraCli @(
-            "--projects-dir", $Project.ghidraProjectDir,
-            "--project",      $Project.ghidraProjectName,
-            "--program",      $Project.ghidraProgramName,
+            "--projects-dir", $project.ghidraProjectDir,
+            "--project",      $project.ghidraProjectName,
+            "--program",      $project.ghidraProgramName,
+            "script", "run",  $ghidraPy
+        ) | Out-Null
+        $project.status.symbolsApplied = $true
+        Save-Project $GameName $project
+        Write-Host "Symbols applied via ghidra-cli script run." -ForegroundColor Green
+        return
+    }
+    catch {
+        $errors += "ghidra-cli script run failed: $($_.Exception.Message)"
+    }
+
+    try {
+        Invoke-GhidraCli @(
+            "--projects-dir", $project.ghidraProjectDir,
+            "--project",      $project.ghidraProjectName,
+            "--program",      $project.ghidraProgramName,
             "script",         $ghidraPy
-        )
-        $Project.status.symbolsApplied = $true
-        Save-Project $GameName $Project
-        Write-Host "Symbols applied via ghidra.py." -ForegroundColor Green
-    } catch {
-        Write-Host "[WARN] ghidra-cli 'script' failed. Fallback: .\re.ps1 pyghidra-gui" -ForegroundColor Yellow
-        throw
+        ) | Out-Null
+        $project.status.symbolsApplied = $true
+        Save-Project $GameName $project
+        Write-Host "Symbols applied via ghidra-cli script." -ForegroundColor Green
+        return
     }
-}
-
-function Run-FullFlow {
-    param([string]$GameName, [string]$Source)
-    Write-Host "== RE Flow: $GameName ==" -ForegroundColor Magenta
-    New-Workspace $GameName
-
-    if ($Source -and -not (Test-Path -LiteralPath $Source -PathType Container)) {
-        Add-BuildToProject $GameName $Source
-    } else {
-        Scan-UnityIl2Cpp $GameName $Source
-    }
-
-    Run-Il2CppDumper      $GameName
-    Import-GhidraProgram  $GameName
-    Analyze-GhidraProgram $GameName
-    try { Apply-GhidraSymbols $GameName }
     catch {
-        Write-Host "Symbols step skipped. Open PyGhidra manually if needed: .\re.ps1 pyghidra-gui" -ForegroundColor Yellow
+        $errors += "ghidra-cli script failed: $($_.Exception.Message)"
     }
 
-    try { Run-NotesPipeline $GameName }
+    Write-Host "[WARN] Ghidra CLI script execution failed. Trying analyzeHeadless -postScript fallback..." -ForegroundColor Yellow
+    try {
+        Invoke-AnalyzeHeadless @(
+            $project.ghidraProjectDir,
+            $project.ghidraProjectName,
+            "-process",    $project.ghidraProgramName,
+            "-scriptPath", $scriptDir,
+            "-postScript", $scriptName
+        ) | Out-Null
+        $project.status.symbolsApplied = $true
+        Save-Project $GameName $project
+        Write-Host "Symbols applied via analyzeHeadless -postScript." -ForegroundColor Green
+        return
+    }
     catch {
-        Write-Host "[WARN] Notes pipeline step failed: $_" -ForegroundColor Yellow
+        $errors += "analyzeHeadless -postScript failed: $($_.Exception.Message)"
     }
 
-    Show-ProjectSummary $GameName
-    Write-Host "Flow completed for $GameName." -ForegroundColor Green
+    Write-Host "[FAIL] Could not apply symbols automatically." -ForegroundColor Red
+    foreach ($e in $errors) { Write-Host "  - $e" -ForegroundColor DarkYellow }
+    Write-Host "Fallback: .\re.ps1 pyghidra-gui, then run ghidra.py manually." -ForegroundColor Yellow
 }
 
 function Get-NotesDir {
-    param([string]$GameName)
+    param([Parameter(Mandatory)] [string]$GameName)
     return Join-Path (Get-WorkspacePath $GameName) "04_Notes"
 }
 
-function Run-NotesPipeline {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
-    if (-not $Project.status.dumped) {
-        Write-Host "[SKIP] notes pipeline: project not dumped yet." -ForegroundColor Yellow
-        return
-    }
-    New-CandidatesList $GameName
-    New-AgentContext    $GameName
-}
-
 function New-CandidatesList {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
-    $dump = Join-Path $Project.il2cppDumperOutput "dump.cs"
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    $dump = Join-Path $project.il2cppDumperOutput "dump.cs"
     if (-not (Test-Path -LiteralPath $dump)) {
         throw "dump.cs not found: $dump"
     }
 
     $text = Get-Content -LiteralPath $dump -Raw
+    $classPattern = '(?m)^\s*(?:public|internal|protected|private)?\s*(?:sealed\s+|abstract\s+|partial\s+|static\s+|readonly\s+)*(?:class|interface|struct|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*<[^>]+>)?'
+    $matches = [regex]::Matches($text, $classPattern)
 
-    $classPat = '(?m)^\s*(?:public|internal|protected|private)?\s*(?:sealed\s+|abstract\s+|partial\s+|static\s+|readonly\s+)*(?:class|interface|struct|enum)\s+(?:<[^>]+>\s+)?(\w+)'
-    $allMatches = [regex]::Matches($text, $classPat)
-    $allClasses = @()
-    foreach ($m in $allMatches) {
+    $allTypes = New-Object System.Collections.Generic.List[string]
+    foreach ($m in $matches) {
         $name = $m.Groups[1].Value
-        if ($allClasses -notcontains $name) { $allClasses += $name }
+        if (-not $allTypes.Contains($name)) { $allTypes.Add($name) }
     }
 
     $suffixes = @(
-        @{ pat='Controller'; label='*Controller' },
-        @{ pat='Manager';   label='*Manager'   },
-        @{ pat='Service';   label='*Service'   },
-        @{ pat='Provider';  label='*Provider'  },
-        @{ pat='Handler';   label='*Handler'   },
-        @{ pat='View';      label='*View'      },
-        @{ pat='Config';    label='*Config'    },
-        @{ pat='Behaviour'; label='*Behaviour' },
-        @{ pat='Component'; label='*Component' },
-        @{ pat='Factory';   label='*Factory'   },
-        @{ pat='Loader';    label='*Loader'    },
-        @{ pat='Store';     label='*Store'     },
-        @{ pat='Repository';label='*Repository'},
-        @{ pat='Helper';    label='*Helper'    },
-        @{ pat='Utility';   label='*Utility'   }
+        @{ pat='Controller$'; label='*Controller' },
+        @{ pat='Manager$';    label='*Manager' },
+        @{ pat='Service$';    label='*Service' },
+        @{ pat='Provider$';   label='*Provider' },
+        @{ pat='Handler$';    label='*Handler' },
+        @{ pat='View$';       label='*View' },
+        @{ pat='Config$';     label='*Config' },
+        @{ pat='Behaviour$';  label='*Behaviour' },
+        @{ pat='Component$';  label='*Component' },
+        @{ pat='Factory$';    label='*Factory' },
+        @{ pat='Loader$';     label='*Loader' },
+        @{ pat='Store$';      label='*Store' },
+        @{ pat='Repository$'; label='*Repository' },
+        @{ pat='Helper$';     label='*Helper' },
+        @{ pat='Utility$';    label='*Utility' }
     )
 
-    $groups = @{}
-    foreach ($s in $suffixes) {
-        $groups[$s.label] = @()
-    }
+    $groups = [ordered]@{}
+    foreach ($s in $suffixes) { $groups[$s.label] = @() }
     $groups['(other types)'] = @()
 
-    foreach ($name in $allClasses) {
+    foreach ($name in $allTypes) {
         $matched = $false
         foreach ($s in $suffixes) {
-            if ($name -match $s.pat) { $groups[$s.label] += $name; $matched = $true; break }
+            if ($name -match $s.pat) {
+                $groups[$s.label] += $name
+                $matched = $true
+                break
+            }
         }
         if (-not $matched) { $groups['(other types)'] += $name }
     }
 
-    $topPicks = @('GameManager','MainController','GameController','PlayerController','LevelController','BoardController','AdsManager','AdController','IAPManager','IAPController','NetworkManager','NetworkService','RemoteConfig','RemoteConfigService','AudioManager','ResourceManager','SceneManager','UIManager','GUIManager','PopupManager')
-    $topFound = @()
-    foreach ($t in $topPicks) {
-        if ($allClasses -contains $t) { $topFound += $t }
-    }
+    $topPicks = @(
+        'GameManager','MainController','GameController','PlayerController','LevelController','BoardController',
+        'AdsManager','AdController','IAPManager','IAPController','NetworkManager','NetworkService',
+        'RemoteConfig','RemoteConfigService','AudioManager','ResourceManager','SceneManager','UIManager','GUIManager','PopupManager'
+    )
+    $topFound = @($topPicks | Where-Object { $allTypes.Contains($_) })
 
     $notesDir = Get-NotesDir $GameName
     New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
@@ -460,43 +1158,41 @@ function New-CandidatesList {
     $sb = New-Object System.Text.StringBuilder
     $null = $sb.AppendLine("# Candidate class names - $GameName")
     $null = $sb.AppendLine("")
-    $null = $sb.AppendLine(("Generated from: `{0}` ({1} types declared)" -f $dump, $allClasses.Count))
-    $null = $sb.AppendLine(("Total lines scanned: {0}" -f ($text -split "`n").Count))
+    $null = $sb.AppendLine(("Generated from: `{0}` ({1} types declared)" -f $dump, $allTypes.Count))
     $null = $sb.AppendLine("")
 
+    $null = $sb.AppendLine("## Top picks")
     if ($topFound.Count -gt 0) {
-        $null = $sb.AppendLine("## Top picks (likely entry points)")
         foreach ($c in $topFound) { $null = $sb.AppendLine("- $c") }
-        $null = $sb.AppendLine("")
     } else {
-        $null = $sb.AppendLine("## Top picks (likely entry points)")
-        $null = $sb.AppendLine("- (none of $topPicks found in dump.cs)")
-        $null = $sb.AppendLine("")
+        $null = $sb.AppendLine("- (none found from default top-pick list)")
     }
+    $null = $sb.AppendLine("")
 
-    foreach ($key in @($groups.Keys | Sort-Object)) {
-        $list = $groups[$key]
+    foreach ($key in $groups.Keys) {
+        $list = @($groups[$key] | Sort-Object)
         if ($list.Count -eq 0) { continue }
-        $null = $sb.AppendLine(("## {0} ({1} found)" -f $key, $list.Count))
-        foreach ($n in ($list | Sort-Object)) {
-            $null = $sb.AppendLine("- $n")
-        }
+        $null = $sb.AppendLine(("## {0} ({1})" -f $key, $list.Count))
+        foreach ($name in $list) { $null = $sb.AppendLine("- $name") }
         $null = $sb.AppendLine("")
     }
 
     Set-Content -LiteralPath $out -Value $sb.ToString() -Encoding UTF8
-    Write-Host ("  [OK]   Wrote: {0}   ({1} types, top picks: {2})" -f $out, $allClasses.Count, $topFound.Count) -ForegroundColor Green
+    Write-Host ("  [OK] Wrote: {0}" -f $out) -ForegroundColor Green
 }
 
 function New-AgentContext {
-    param([string]$GameName)
-    $Project = Read-Project $GameName
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
     $notesDir = Get-NotesDir $GameName
     New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
     $out = Join-Path $notesDir "agent-context.md"
 
-    $dump = Join-Path $Project.il2cppDumperOutput "dump.cs"
-    $py   = Join-Path $Project.il2cppDumperOutput "ghidra.py"
+    $dump = Join-Path $project.il2cppDumperOutput "dump.cs"
+    $py = Join-Path $project.il2cppDumperOutput "ghidra.py"
+
+    function Fallback($v) { if ($null -eq $v -or "$v" -eq "") { "<unset>" } else { "$v" } }
 
     $sb = New-Object System.Text.StringBuilder
     $null = $sb.AppendLine("# Agent Context - $GameName")
@@ -504,242 +1200,316 @@ function New-AgentContext {
     $null = $sb.AppendLine("## Project state")
     $null = $sb.AppendLine("| Field | Value |")
     $null = $sb.AppendLine("|---|---|")
-    $null = $sb.AppendLine(("| Project name     | {0} |" -f $GameName))
-    $null = $sb.AppendLine(("| Platform         | {0} |" -f ($(if ($Project.platform)            { $Project.platform }            else { "<unset>" }))))
-    $null = $sb.AppendLine(("| Native binary    | `{0}` |" -f ($(if ($Project.nativeBinary)        { $Project.nativeBinary }        else { "<unset>" }))))
-    $null = $sb.AppendLine(("| Metadata         | `{0}` |" -f ($(if ($Project.metadata)            { $Project.metadata }            else { "<unset>" }))))
-    $null = $sb.AppendLine(("| il2cppDumper out | `{0}` |" -f $Project.il2cppDumperOutput))
-    $null = $sb.AppendLine(("| Dump.cs          | `{0}` |" -f $dump))
-    $null = $sb.AppendLine(("| ghidra.py        | `{0}` |" -f $py))
-    $null = $sb.AppendLine(("| Ghidra project   | {0} (in {1}) |" -f $Project.ghidraProjectName, $Project.ghidraProjectDir))
-    $null = $sb.AppendLine(("| Ghidra program   | {0} |" -f ($(if ($Project.ghidraProgramName) { $Project.ghidraProgramName } else { "<unset>" }))))
+    $null = $sb.AppendLine(("| Project name | {0} |" -f $GameName))
+    $null = $sb.AppendLine(("| Platform | {0} |" -f (Fallback $project.platform)))
+    $null = $sb.AppendLine(("| Native binary | `{0}` |" -f (Fallback $project.nativeBinary)))
+    $null = $sb.AppendLine(("| Metadata | `{0}` |" -f (Fallback $project.metadata)))
+    $null = $sb.AppendLine(("| Il2CppDumper output | `{0}` |" -f (Fallback $project.il2cppDumperOutput)))
+    $null = $sb.AppendLine(("| dump.cs | `{0}` |" -f $dump))
+    $null = $sb.AppendLine(("| ghidra.py | `{0}` |" -f $py))
+    $null = $sb.AppendLine(("| Ghidra project | {0} |" -f (Fallback $project.ghidraProjectName)))
+    $null = $sb.AppendLine(("| Ghidra project dir | `{0}` |" -f (Fallback $project.ghidraProjectDir)))
+    $null = $sb.AppendLine(("| Ghidra program | {0} |" -f (Fallback $project.ghidraProgramName)))
     $null = $sb.AppendLine("")
 
     $null = $sb.AppendLine("## Pipeline status")
     $null = $sb.AppendLine("| Step | Done? |")
     $null = $sb.AppendLine("|---|---|")
-    foreach ($k in @("scanned","dumped","imported","analyzed","symbolsApplied")) {
-        $flag = if ($Project.status.$k) { "[x]" } else { "[ ]" }
-        $null = $sb.AppendLine(("| {0} | {1} |" -f $k, $flag))
+    foreach ($key in @("scanned", "dumped", "imported", "analyzing", "analyzed", "symbolsApplied")) {
+        $flag = if ($project.status.$key) { "[x]" } else { "[ ]" }
+        $null = $sb.AppendLine(("| {0} | {1} |" -f $key, $flag))
     }
     $null = $sb.AppendLine("")
 
-    $null = $sb.AppendLine("## Toolkit commands")
+    $null = $sb.AppendLine("## Useful commands")
     $null = $sb.AppendLine('```powershell')
-    $null = $sb.AppendLine((".\re.ps1 status    {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 summary   {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 strings   {0}" -f $GameName))
+    $null = $sb.AppendLine((".\re.ps1 status {0}" -f $GameName))
+    $null = $sb.AppendLine((".\re.ps1 summary {0}" -f $GameName))
+    $null = $sb.AppendLine((".\re.ps1 strings {0}" -f $GameName))
     $null = $sb.AppendLine((".\re.ps1 functions {0}" -f $GameName))
     $null = $sb.AppendLine((".\re.ps1 candidates {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 symbols   {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 ghidra-cli --% function list --project {0} --program {1}" -f $Project.ghidraProjectName, $Project.ghidraProgramName))
-    $null = $sb.AppendLine((".\re.ps1 ghidra-cli --% decompile <FuncName> --project {0} --program {1}" -f $Project.ghidraProjectName, $Project.ghidraProgramName))
+    $null = $sb.AppendLine((".\re.ps1 symbols {0}" -f $GameName))
+    $null = $sb.AppendLine((".\re.ps1 ghidra-cli --project {0} --program {1} function list" -f $project.ghidraProjectName, $project.ghidraProgramName))
     $null = $sb.AppendLine('```')
     $null = $sb.AppendLine("")
 
     $null = $sb.AppendLine("## Suggested first searches")
     $null = $sb.AppendLine('```')
-    $null = $sb.AppendLine("MainController")
-    $null = $sb.AppendLine("GameManager")
-    $null = $sb.AppendLine("BoardController")
-    $null = $sb.AppendLine("LevelManager")
-    $null = $sb.AppendLine("AdsManager")
-    $null = $sb.AppendLine("AdController")
-    $null = $sb.AppendLine("IAPManager")
-    $null = $sb.AppendLine("IAPController")
-    $null = $sb.AppendLine("RemoteConfig")
-    $null = $sb.AppendLine("NetworkManager")
-    $null = $sb.AppendLine("Service")
-    $null = $sb.AppendLine("Controller")
-    $null = $sb.AppendLine("Presenter")
-    $null = $sb.AppendLine("View")
+    foreach ($term in @("MainController", "GameManager", "BoardController", "LevelManager", "AdsManager", "IAPManager", "RemoteConfig", "NetworkManager", "Service", "Controller", "Presenter", "View")) {
+        $null = $sb.AppendLine($term)
+    }
     $null = $sb.AppendLine('```')
-    $null = $sb.AppendLine("")
 
     Set-Content -LiteralPath $out -Value $sb.ToString() -Encoding UTF8
-    Write-Host ("  [OK]   Wrote: {0}" -f $out) -ForegroundColor Green
+    Write-Host ("  [OK] Wrote: {0}" -f $out) -ForegroundColor Green
+}
+
+function Run-NotesPipeline {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    if (-not $project.status.dumped) {
+        Write-Host "[SKIP] notes pipeline: project not dumped yet." -ForegroundColor Yellow
+        return
+    }
+
+    New-CandidatesList $GameName
+    New-AgentContext $GameName
 }
 
 function Run-GhidraQueryAndCapture {
     param(
-        [string]$GameName,
-        [string]$SubCmd,
-        [string]$OutFileName
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string[]]$SubArgs,
+        [Parameter(Mandatory)] [string]$OutFileName
     )
-    $Project = Read-Project $GameName
-    if (-not $Project.status.imported) {
+
+    $project = Read-Project $GameName
+    if (-not $project.status.imported) {
         throw "Program not imported. Run: .\re.ps1 import $GameName"
     }
+
     $notesDir = Get-NotesDir $GameName
     New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
     $out = Join-Path $notesDir $OutFileName
-    Invoke-GhidraCli -OutFile $out @(
-        "--projects-dir", $Project.ghidraProjectDir,
-        "--project",      $Project.ghidraProjectName,
-        "--program",      $Project.ghidraProgramName,
-        $SubCmd
-    )
+
+    $cliArgs = @(
+        "--projects-dir", $project.ghidraProjectDir,
+        "--project",      $project.ghidraProjectName,
+        "--program",      $project.ghidraProgramName
+    ) + $SubArgs
+
+    Invoke-GhidraCli -CliArgs $cliArgs -OutFile $out | Out-Null
+
     Write-Host ("Wrote: {0}" -f $out) -ForegroundColor Green
+}
+
+
+function Open-PyGhidraProject {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+
+    Assert-PathExists $ToolPaths.PyGhidraBat "PyGhidra launcher"
+    Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+
+    if (-not $project.status.imported) {
+        Write-Host "[WARN] Project is not marked as imported yet. Opening PyGhidra anyway." -ForegroundColor Yellow
+    }
+
+    Write-Host "== Open PyGhidra GUI: $GameName ==" -ForegroundColor Magenta
+    Write-Host ("Project dir : {0}" -f $project.ghidraProjectDir) -ForegroundColor DarkGray
+    Write-Host ("Project name: {0}" -f $project.ghidraProjectName) -ForegroundColor DarkGray
+    Write-Host ("Program     : {0}" -f $project.ghidraProgramName) -ForegroundColor DarkGray
+    Show-GhidraProjectOpenInfo -Project $project
+    Write-Host "Tip: Let Ghidra run Auto Analysis in the GUI, then run ghidra.py manually if needed." -ForegroundColor Cyan
+    Write-Host "Opening PyGhidra the same way as: .
+e.ps1 pyghidra-gui" -ForegroundColor DarkGray
+    Write-Host "Note: project arguments are not passed to pyghidraRun.bat because that launcher may exit silently when it receives unsupported args." -ForegroundColor DarkGray
+
+    # Important: keep this identical in behavior to the working `pyghidra-gui` wrapper.
+    # Do not pass project dir/name args here. The PyGhidra launcher is not the same as
+    # Ghidra's normal project opener, and some Ghidra/PyGhidra versions exit instantly
+    # when unexpected arguments are supplied. The user should select the imported
+    # project manually from Ghidra's project list.
+    Invoke-WithToolkitEnv {
+        Push-Location $Root
+        try { & $ToolPaths.PyGhidraBat }
+        finally { Pop-Location }
+    }
+
+    Write-Host "PyGhidra closed or launcher returned." -ForegroundColor Green
+}
+
+function Run-FullFlow {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string]$Source
+    )
+
+    Write-Host "== RE Flow: $GameName ==" -ForegroundColor Magenta
+    Write-Host "Mode: scan/add -> Il2CppDumper -> Ghidra import only (-noanalysis) -> open PyGhidra GUI" -ForegroundColor Cyan
+    Write-Host "Note: this flow intentionally skips headless analyze and auto symbol apply to avoid project lock/long-running CLI issues." -ForegroundColor DarkGray
+
+    New-Workspace $GameName
+
+    if (Test-Path -LiteralPath $Source -PathType Container) {
+        Scan-UnityIl2Cpp $GameName $Source
+    }
+    else {
+        Add-BuildToProject $GameName $Source
+    }
+
+    Run-Il2CppDumper $GameName
+    Import-GhidraProgram $GameName
+
+    try { Run-NotesPipeline $GameName }
+    catch { Write-Host "[WARN] Notes pipeline failed: $_" -ForegroundColor Yellow }
+
+    Show-ProjectSummary $GameName
+
+    $project = Read-Project $GameName
+    $ghidraPy = Join-Path $project.il2cppDumperOutput "ghidra.py"
+
+    Write-Host "" 
+    Write-Host "Next manual steps in PyGhidra:" -ForegroundColor Cyan
+    Write-Host "  1. Accept/run Ghidra Auto Analysis in the GUI." -ForegroundColor Gray
+    if (Test-Path -LiteralPath $ghidraPy) {
+        Write-Host ("  2. Run Il2CppDumper script manually: {0}" -f $ghidraPy) -ForegroundColor Gray
+    }
+    else {
+        Write-Host "  2. ghidra.py was not found in the dumper output; skip symbol script or copy it manually." -ForegroundColor Yellow
+    }
+    Write-Host "  3. Use dump.cs / DummyDll as skeleton while reading decompiled functions." -ForegroundColor Gray
+    Write-Host ""
+
+    Open-PyGhidraProject $GameName
+
+    Write-Host "Flow completed for $GameName. PyGhidra is now responsible for analysis/symbol steps." -ForegroundColor Green
 }
 
 function Show-Usage {
     Write-Host "RE Toolkit - RE Pipeline Runner" -ForegroundColor Magenta
     Write-Host ""
-    Write-Host "Tier 1 - Pipeline (state machine in project.re.json)"
+    Write-Host "Pipeline commands:"
     Write-Host "  .\re.ps1 doctor"
     Write-Host "  .\re.ps1 init       <GameName>"
-    Write-Host "  .\re.ps1 add        <GameName> <apk-or-ipa-or-zip>   # extract + auto-scan"
-    Write-Host "  .\re.ps1 scan       <GameName> <ExtractedPath>        # scan an existing folder"
+    Write-Host "  .\re.ps1 add        <GameName> <apk-or-xapk-or-aab-or-zip>"
+    Write-Host "  .\re.ps1 scan       <GameName> <ExtractedPath>"
     Write-Host "  .\re.ps1 dump       <GameName>"
-    Write-Host "  .\re.ps1 import     <GameName>"
-    Write-Host "  .\re.ps1 analyze    <GameName>"
-    Write-Host "  .\re.ps1 symbols    <GameName>"
-    Write-Host "  .\re.ps1 strings    <GameName>        # ghidra-cli strings  -> 04_Notes\strings.txt"
-    Write-Host "  .\re.ps1 functions  <GameName>        # ghidra-cli function -> 04_Notes\functions.txt"
-    Write-Host "  .\re.ps1 stats      <GameName>        # ghidra-cli stats    -> 04_Notes\stats.txt"
-    Write-Host "  .\re.ps1 candidates <GameName>        # parse dump.cs -> 04_Notes\candidates.md"
-    Write-Host "  .\re.ps1 context    <GameName>        # generate 04_Notes\agent-context.md"
-    Write-Host "  .\re.ps1 notes      <GameName>        # candidates + context"
-    Write-Host "  .\re.ps1 flow       <GameName> <apk-or-ExtractedPath>"
-    Write-Host "  .\re.ps1 summary    <GameName>"
+    Write-Host "  .\re.ps1 import     <GameName>                         # import only; no Ghidra analysis"
+    Write-Host "  .\re.ps1 analyze    <GameName>                         # manual/optional; not used by flow"
+    Write-Host "  .\re.ps1 symbols    <GameName>                         # manual/optional; not used by flow"
+    Write-Host "  .\re.ps1 flow       <GameName> <apk-or-ExtractedPath>  # dump/import/open PyGhidra; no headless analyze"
+    Write-Host "  .\re.ps1 open       <GameName>                         # open imported project in PyGhidra GUI"
+    Write-Host "  .\re.ps1 path       <GameName>                         # print Ghidra project folder/link for GUI open"
     Write-Host "  .\re.ps1 status     <GameName>"
+    Write-Host "  .\re.ps1 summary    <GameName>"
+    Write-Host "  .\re.ps1 strings    <GameName>"
+    Write-Host "  .\re.ps1 functions  <GameName>"
+    Write-Host "  .\re.ps1 stats      <GameName>"
+    Write-Host "  .\re.ps1 candidates <GameName>"
+    Write-Host "  .\re.ps1 context    <GameName>"
+    Write-Host "  .\re.ps1 notes      <GameName>"
+    Write-Host ""
+    Write-Host "Tool wrappers:"
+    Write-Host "  .\re.ps1 ghidra-cli <args...>"
+    Write-Host "  .\re.ps1 ghidra     <args...>       # alias for ghidra-cli"
+    Write-Host "  .\re.ps1 ghidra-gui"
+    Write-Host "  .\re.ps1 pyghidra-gui"
+    Write-Host "  .\re.ps1 il2cppdumper <args...>"
     Write-Host "  .\re.ps1 mcp"
-    Write-Host ""
-    Write-Host "Tier 2 - Tool wrappers (raw passthrough)"
-    Write-Host "  .\re.ps1 ghidra-cli     <args...>    # Rust CLI bridge"
-    Write-Host "  .\re.ps1 ghidra-gui                  # full Ghidra GUI"
-    Write-Host "  .\re.ps1 pyghidra-gui                # Ghidra GUI w/ PyGhidra console"
-    Write-Host "  .\re.ps1 il2cppdumper  <args...>    # raw Il2CppDumper"
-    Write-Host "  .\re.ps1 install-skill               # install ghidra-reverse-engineering-cli skill"
-    Write-Host ""
-    Write-Host "If PS parses --flag, prefix with --%: .\re.ps1 ghidra-cli --% import --help"
 }
 
 switch ($Command) {
-
-    ""       { Show-Usage; exit 0 }
-    "help"   { Show-Usage; exit 0 }
-    "--help" { Show-Usage; exit 0 }
-    "-h"     { Show-Usage; exit 0 }
+    { $_ -in @($null, "", "help", "--help", "-h") } { Show-Usage; exit 0 }
 
     "doctor" {
         Write-Host "== Toolkit Doctor ==" -ForegroundColor Magenta
-        foreach ($k in @("JdkRoot","JavaExe","GhidraCli","GhidraGuiBat","PyGhidraBat","Dumper")) {
-            $p = $ToolPaths[$k]
-            if (Test-Path -LiteralPath $p) {
-                Write-Host ("  [OK]   {0,-14} {1}" -f $k, $p) -ForegroundColor Green
-            } else {
-                Write-Host ("  [MISS] {0,-14} {1}" -f $k, $p) -ForegroundColor Red
+        foreach ($key in $ToolPaths.Keys) {
+            $path = $ToolPaths[$key]
+            if (Test-Path -LiteralPath $path) {
+                Write-Host ("  [OK]   {0,-16} {1}" -f $key, $path) -ForegroundColor Green
+            }
+            else {
+                Write-Host ("  [MISS] {0,-16} {1}" -f $key, $path) -ForegroundColor Red
             }
         }
         if (Test-Path -LiteralPath $ToolPaths.JavaExe) {
             Write-Host ""
-            Write-Host "  JDK version:" -ForegroundColor Cyan
+            Write-Host "Toolkit JDK:" -ForegroundColor Cyan
             & $ToolPaths.JavaExe -version
         }
+        if (Test-Path -LiteralPath $ToolPaths.GhidraCli -and Test-Path -LiteralPath $ToolPaths.JavaExe) {
+            Write-Host ""
+            Write-Host "Ghidra CLI doctor:" -ForegroundColor Cyan
+            try { Invoke-GhidraCli @("doctor") | Out-Null }
+            catch { Write-Host $_ -ForegroundColor Yellow }
+        }
     }
 
-    "init"    { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 init <GameName>"; exit 1 } New-Workspace $Rest[0] }
-    "add"     {
-        if (-not $Rest[0] -or -not $Rest[1]) {
-            Write-Host "Usage: .\re.ps1 add <GameName> <path-to-apk-or-ipa-or-zip>" -ForegroundColor Yellow
-            exit 1
-        }
-        Add-BuildToProject $Rest[0] $Rest[1]
-    }
-    "scan"       { if (-not $Rest[0] -or -not $Rest[1]) { Write-Host "Usage: .\re.ps1 scan <GameName> <ExtractedPath>"; exit 1 } Scan-UnityIl2Cpp $Rest[0] $Rest[1] }
-    "dump"       { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 dump <GameName>"; exit 1 } Run-Il2CppDumper $Rest[0] }
-    "import"     { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 import <GameName>"; exit 1 } Import-GhidraProgram $Rest[0] }
-    "analyze"    { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 analyze <GameName>"; exit 1 } Analyze-GhidraProgram $Rest[0] }
-    "symbols"    { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 symbols <GameName>"; exit 1 } Apply-GhidraSymbols $Rest[0] }
-    "flow"       { if (-not $Rest[0] -or -not $Rest[1]) { Write-Host "Usage: .\re.ps1 flow <GameName> <apk-or-ExtractedPath>"; exit 1 } Run-FullFlow $Rest[0] $Rest[1] }
-    "strings"    { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 strings <GameName>"; exit 1 } Run-GhidraQueryAndCapture $Rest[0] "strings"    "strings.txt" }
-    "functions"  { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 functions <GameName>"; exit 1 } Run-GhidraQueryAndCapture $Rest[0] "function"   "functions.txt" }
-    "stats"      { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 stats <GameName>"; exit 1 } Run-GhidraQueryAndCapture $Rest[0] "stats"      "stats.txt" }
-    "candidates" { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 candidates <GameName>"; exit 1 } New-CandidatesList $Rest[0] }
-    "context"    { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 context <GameName>"; exit 1 } New-AgentContext $Rest[0] }
-    "notes"      { if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 notes <GameName>"; exit 1 } Run-NotesPipeline $Rest[0] }
+    "init"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 init <GameName>" } New-Workspace $Rest[0] }
+    "add"        { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 add <GameName> <apk-or-xapk-or-aab-or-zip>" } Add-BuildToProject $Rest[0] $Rest[1] }
+    "scan"       { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 scan <GameName> <ExtractedPath>" } Scan-UnityIl2Cpp $Rest[0] $Rest[1] }
+    "dump"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 dump <GameName>" } Run-Il2CppDumper $Rest[0] }
+    "import"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 import <GameName>" } Import-GhidraProgram $Rest[0] }
+    "analyze"    { if (-not $Rest[0]) { throw "Usage: .\re.ps1 analyze <GameName>" } Analyze-GhidraProgram $Rest[0] }
+    "symbols"    { if (-not $Rest[0]) { throw "Usage: .\re.ps1 symbols <GameName>" } Apply-GhidraSymbols $Rest[0] }
+    "flow"       { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 flow <GameName> <apk-or-ExtractedPath>" } Run-FullFlow $Rest[0] $Rest[1] }
+    "open"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 open <GameName>" } Open-PyGhidraProject $Rest[0] }
+    "path"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 path <GameName>" } $project = Read-Project $Rest[0]; Show-GhidraProjectOpenInfo -Project $project }
+    "status"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 status <GameName>" } Show-ProjectSummary $Rest[0] }
+    "candidates" { if (-not $Rest[0]) { throw "Usage: .\re.ps1 candidates <GameName>" } New-CandidatesList $Rest[0] }
+    "context"    { if (-not $Rest[0]) { throw "Usage: .\re.ps1 context <GameName>" } New-AgentContext $Rest[0] }
+    "notes"      { if (-not $Rest[0]) { throw "Usage: .\re.ps1 notes <GameName>" } Run-NotesPipeline $Rest[0] }
 
     "summary" {
-        if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 summary <GameName>"; exit 1 }
-        $Project = Read-Project $Rest[0]
+        if (-not $Rest[0]) { throw "Usage: .\re.ps1 summary <GameName>" }
+        $project = Read-Project $Rest[0]
         Invoke-GhidraCli @(
-            "--projects-dir", $Project.ghidraProjectDir,
-            "--project",      $Project.ghidraProjectName,
-            "--program",      $Project.ghidraProgramName,
+            "--projects-dir", $project.ghidraProjectDir,
+            "--project",      $project.ghidraProjectName,
+            "--program",      $project.ghidraProgramName,
             "summary"
-        )
+        ) | Out-Null
     }
 
-    "status" {
-        if (-not $Rest[0]) { Write-Host "Usage: .\re.ps1 status <GameName>"; exit 1 }
-        Show-ProjectSummary $Rest[0]
-    }
+    "strings"   { if (-not $Rest[0]) { throw "Usage: .\re.ps1 strings <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("strings")        "strings.txt" }
+    "functions" { if (-not $Rest[0]) { throw "Usage: .\re.ps1 functions <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("function", "list") "functions.txt" }
+    "stats"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 stats <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("stats")          "stats.txt" }
 
     "ghidra-cli" {
-        if ($Rest.Count -eq 0) {
-            Write-Host "Usage: .\re.ps1 ghidra-cli <args...>" -ForegroundColor Yellow
-            Write-Host "       e.g.: .\re.ps1 ghidra-cli doctor" -ForegroundColor DarkGray
-            exit 1
-        }
-        Invoke-GhidraCli $Rest
+        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 ghidra-cli <args...>" }
+        Invoke-GhidraCli $Rest | Out-Null
+    }
+
+    "ghidra" {
+        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 ghidra <args...>" }
+        Invoke-GhidraCli $Rest | Out-Null
     }
 
     "ghidra-gui" {
-        Assert-File $ToolPaths.GhidraGuiBat "Ghidra GUI"
-        Assert-File $ToolPaths.JavaExe       "Toolkit JDK 21"
-        $env:JAVA_HOME          = $ToolPaths.JdkRoot
-        $env:JAVA_HOME_OVERRIDE = $ToolPaths.JdkRoot
-        $env:GHIDRA_INSTALL_DIR = (Join-Path $Tools "ghidra")
-        $env:Path = "$($ToolPaths.JdkRoot)\bin;$env:Path"
-        Push-Location $Root
-        try { & $ToolPaths.GhidraGuiBat @Rest }
-        finally { Pop-Location }
+        Assert-PathExists $ToolPaths.GhidraGuiBat "Ghidra GUI"
+        Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+        Invoke-WithToolkitEnv {
+            Push-Location $Root
+            try { & $ToolPaths.GhidraGuiBat @Rest }
+            finally { Pop-Location }
+        }
     }
 
     "pyghidra-gui" {
-        Assert-File $ToolPaths.PyGhidraBat  "PyGhidra launcher"
-        Assert-File $ToolPaths.JavaExe      "Toolkit JDK 21"
-        $env:JAVA_HOME          = $ToolPaths.JdkRoot
-        $env:JAVA_HOME_OVERRIDE = $ToolPaths.JdkRoot
-        $env:GHIDRA_INSTALL_DIR = (Join-Path $Tools "ghidra")
-        $env:Path = "$($ToolPaths.JdkRoot)\bin;$env:Path"
-        Push-Location $Root
-        try { & $ToolPaths.PyGhidraBat @Rest }
-        finally { Pop-Location }
+        Assert-PathExists $ToolPaths.PyGhidraBat "PyGhidra launcher"
+        Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+        Invoke-WithToolkitEnv {
+            Push-Location $Root
+            try { & $ToolPaths.PyGhidraBat @Rest }
+            finally { Pop-Location }
+        }
     }
 
     "il2cppdumper" {
-        Assert-File $ToolPaths.Dumper "Il2CppDumper"
-        if ($Rest.Count -eq 0) {
-            Write-Host "Usage: .\re.ps1 il2cppdumper <native_binary> <global_metadata> [output_dir]" -ForegroundColor Yellow
-            exit 1
-        }
+        Assert-PathExists $ToolPaths.Dumper "Il2CppDumper"
+        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 il2cppdumper <native_binary> <global_metadata> [output_dir]" }
         & $ToolPaths.Dumper @Rest
+        if ($LASTEXITCODE -ne 0) { throw "Il2CppDumper exited with code $LASTEXITCODE" }
     }
 
     "mcp" {
         $bridge = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
         if (Test-Path -LiteralPath $bridge) {
             & uv run --script $bridge --transport stdio
-        } else {
-            foreach ($c in @("ghidra-mcp-bridge","mcp-server-ghidra","bridge_mcp_ghidra")) {
-                $cmd = Get-Command $c -ErrorAction SilentlyContinue
-                if ($cmd) { & $cmd; return }
-            }
-            Write-Host "[FAIL] No MCP bridge entrypoint found." -ForegroundColor Red
-            Write-Host "       Install via: uv tool install mcp-server-ghidra" -ForegroundColor Yellow
-            exit 2
+            if ($LASTEXITCODE -ne 0) { throw "MCP bridge exited with code $LASTEXITCODE" }
         }
-    }
-
-    "install-skill" {
-        $prompt = Join-Path $Root "prompts\install-ghidra-skill.md"
-        if (Test-Path -LiteralPath $prompt) {
-            Get-Content -LiteralPath $prompt
-        } else {
-            Write-Host "Missing prompt: $prompt" -ForegroundColor Red
-            exit 2
+        else {
+            foreach ($candidate in @("ghidra-mcp-bridge", "mcp-server-ghidra", "bridge_mcp_ghidra")) {
+                $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+                if ($cmd) {
+                    & $cmd
+                    return
+                }
+            }
+            throw "No MCP bridge entrypoint found. Put bridge_mcp_ghidra.py in tools\ghidra-mcp or install a bridge command."
         }
     }
 
@@ -749,6 +1519,3 @@ switch ($Command) {
         exit 1
     }
 }
-
-
-
