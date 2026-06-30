@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$InstallDir = (Split-Path -Parent $MyInvocation.MyCommand.Path),
     [switch]$InstallGhidra,
@@ -411,13 +411,25 @@ function Install-Il2CppDumper {
         return $false
     }
 
-    $runtimes = (& dotnet --list-runtimes 2>&1 | Out-String)
-    $tfm  = if ($runtimes -match "Microsoft\.NETCore\.App 8\.") { "net8.0" } else { "net6.0" }
-    $tfmMatches = ($runtimes | Select-String -Pattern "Microsoft\.NETCore\.App $tfm" -SimpleMatching:$false) -as [string]
-    if (-not ($runtimes -match "Microsoft\.NETCore\.App $($tfm.TrimEnd('0').TrimEnd('.'))\.")) {
-        Write-Host "  [WARN] No matching .NET runtime for $tfm detected; install with:" -ForegroundColor Yellow
-        if ($tfm -eq "net8.0") { Write-Host "           winget install Microsoft.DotNet.Runtime.8" -ForegroundColor Yellow }
-        else                    { Write-Host "           winget install Microsoft.DotNet.Runtime.6" -ForegroundColor Yellow }
+    $runtimesText = (& dotnet --list-runtimes 2>&1 | Out-String)
+
+    # Il2CppDumper releases are published as framework-dependent builds such as
+    # net6.0 and net8.0.  Detect the actual Microsoft.NETCore.App runtime version,
+    # not Microsoft.AspNetCore.App / WindowsDesktop.App, then choose the closest
+    # package.  Keep this compatible with Windows PowerShell 5.1.
+    $hasNet8 = $runtimesText -match '(?m)^Microsoft\.NETCore\.App\s+8\.'
+    $hasNet6 = $runtimesText -match '(?m)^Microsoft\.NETCore\.App\s+6\.'
+
+    if ($hasNet8) {
+        $tfm = "net8.0"
+    } elseif ($hasNet6) {
+        $tfm = "net6.0"
+    } else {
+        $tfm = "net6.0"
+        Write-Host "  [WARN] Microsoft.NETCore.App 6.x/8.x was not detected." -ForegroundColor Yellow
+        Write-Host "         Il2CppDumper will be downloaded as net6.0; install runtime if it fails:" -ForegroundColor Yellow
+        Write-Host "           winget install Microsoft.DotNet.Runtime.6" -ForegroundColor Yellow
+        Write-Host "           winget install Microsoft.DotNet.DesktopRuntime.6" -ForegroundColor Yellow
     }
 
     $url = "https://github.com/wklin8607/Il2CppDumper/releases/download/Il2CppDumper/Il2CppDumper-v$Version-$tfm.zip"
