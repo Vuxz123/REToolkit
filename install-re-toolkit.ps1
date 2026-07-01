@@ -7,7 +7,7 @@ param(
     [switch]$InstallAssetRipper,
     [switch]$InstallRuntime,
     [int]$JdkVersion = 21,
-    [string]$PythonVersion = "3.12",
+    [string]$PythonVersion = "3.12.10",
     [string]$GhidraVersion = "",
     [string]$Il2CppDumperVersion = "6.7.48",
     [string]$GhidraMcpReleaseApi = "https://api.github.com/repos/bethington/ghidra-mcp/releases/latest",
@@ -33,7 +33,16 @@ Set-Location -LiteralPath $InstallDir
 
 $Runtime      = Join-Path $InstallDir "runtime"
 $PortableJava = Join-Path $Runtime "java\jdk-21"
-$PythonDir    = Join-Path $Runtime "python"
+$PythonRoot   = Join-Path $Runtime "python"
+if ($PythonVersion -match '^(\d+\.\d+)') {
+    $PythonMajorMinor = $Matches[1]
+} else {
+    $PythonMajorMinor = $PythonVersion
+}
+$PythonDir    = Join-Path $PythonRoot "python-$PythonMajorMinor"
+$PythonExe    = Join-Path $PythonDir "python.exe"
+$PyGhidraVenv = Join-Path $PythonRoot "pyghidra-venv"
+$PyGhidraPython = Join-Path $PyGhidraVenv "Scripts\python.exe"
 
 function Write-Section {
     param([string]$Title)
@@ -60,6 +69,39 @@ function Test-PathExists {
         Write-Host ("  [WARN] {0,-22} {1}" -f $Label, $Path) -ForegroundColor Yellow
     }
     return $exists
+}
+
+function Get-PythonMajorMinor {
+    param([Parameter(Mandatory)] [string]$Version)
+
+    if ($Version -match '^(\d+\.\d+)') {
+        return $Matches[1]
+    }
+
+    throw "Python version must start with major.minor, for example 3.12.10"
+}
+
+function Resolve-PythonDownloadVersion {
+    param([Parameter(Mandatory)] [string]$Version)
+
+    switch -Regex ($Version) {
+        '^3\.12$' { return "3.12.10" }
+        '^3\.13$' { return "3.13.3" }
+        default   { return $Version }
+    }
+}
+
+function Get-ToolkitPythonDir {
+    param([Parameter(Mandatory)] [string]$Version)
+
+    $majorMinor = Get-PythonMajorMinor -Version $Version
+    return (Join-Path $PythonRoot "python-$majorMinor")
+}
+
+function Get-ToolkitPythonExe {
+    param([Parameter(Mandatory)] [string]$Version)
+
+    return (Join-Path (Get-ToolkitPythonDir -Version $Version) "python.exe")
 }
 
 function Refresh-Path {
@@ -182,43 +224,82 @@ function Install-Java {
     }
 }
 
-function Install-Python {
-    param([string]$Version)
+function Install-PyGhidraPythonVenv {
+    param(
+        [Parameter(Mandatory)] [string]$BasePythonExe,
+        [Parameter(Mandatory)] [string]$VenvDir
+    )
 
-    $py = Get-Command "python" -ErrorAction SilentlyContinue
-    if ($py) {
-        Write-Host "  [SKIP] python already at $($py.Source)" -ForegroundColor Yellow
+    $venvPython = Join-Path $VenvDir "Scripts\python.exe"
+    if (Test-Path -LiteralPath $venvPython) {
+        Write-Host ("  [SKIP] PyGhidra Python venv already at {0}" -f $VenvDir) -ForegroundColor Yellow
         return $true
     }
 
-    $uv = Get-Command "uv" -ErrorAction SilentlyContinue
-    if ($uv) {
-        Write-Host "  Installing Python $Version via uv..." -ForegroundColor Cyan
-        & uv python install --python-preference only-managed $Version
-        $managed = & uv python find $Version 2>$null
-        if ($managed) {
-            Write-Host ("  [OK]   uv managed Python: {0}" -f $managed) -ForegroundColor Green
-            return $true
+    try {
+        Write-Host ("  Creating PyGhidra Python venv: {0}" -f $VenvDir) -ForegroundColor Cyan
+        New-Item -ItemType Directory -Path (Split-Path -Parent $VenvDir) -Force | Out-Null
+        & $BasePythonExe -m venv $VenvDir
+        if ($LASTEXITCODE -ne 0) { throw "python -m venv failed with exit code $LASTEXITCODE" }
+
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "venv python.exe missing after creation: $venvPython"
         }
-        Write-Host "  [WARN] uv did not return a path; falling back to python.org installer" -ForegroundColor Yellow
+
+        Write-Host ("  [OK]   PyGhidra Python venv: {0}" -f $venvPython) -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host ("  [FAIL] {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+}
+
+function Install-Python {
+    param([string]$Version)
+
+    $downloadVersion = Resolve-PythonDownloadVersion -Version $Version
+    $majorMinor = Get-PythonMajorMinor -Version $downloadVersion
+    $targetDir = Get-ToolkitPythonDir -Version $downloadVersion
+    $targetExe = Join-Path $targetDir "python.exe"
+
+    if (Test-Path -LiteralPath $targetExe) {
+        try {
+            $ver = & $targetExe --version 2>&1
+            Write-Host ("  [SKIP] toolkit Python already installed: {0}" -f $ver) -ForegroundColor Yellow
+            Write-Host ("         Path: {0}" -f $targetDir) -ForegroundColor DarkGray
+            return (Install-PyGhidraPythonVenv -BasePythonExe $targetExe -VenvDir $PyGhidraVenv)
+        }
+        catch {
+            Write-Host ("  [WARN] toolkit Python exists but failed to run: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
     }
 
     $exe = Join-Path $env:TEMP "python-installer.exe"
     try {
-        $verShort = $Version
-        $url = "https://www.python.org/ftp/python/$verShort/python-$verShort-amd64.exe"
-        Write-Host "  Downloading python.org $verShort installer..." -ForegroundColor Cyan
+        New-Item -ItemType Directory -Path (Split-Path -Parent $targetDir) -Force | Out-Null
+
+        $url = "https://www.python.org/ftp/python/$downloadVersion/python-$downloadVersion-amd64.exe"
+        Write-Host ("  Downloading python.org {0} installer for toolkit Python {1}..." -f $downloadVersion, $majorMinor) -ForegroundColor Cyan
         Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -TimeoutSec 600
-        $arg = "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_pip=1 Include_launcher=1 TargetDir=`"$PythonDir`""
-        Write-Host "  Running installer (user scope, no test)..." -ForegroundColor Cyan
+        $arg = "/quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_pip=1 Include_launcher=0 Shortcuts=0 AssociateFiles=0 TargetDir=`"$targetDir`""
+        Write-Host "  Running installer into toolkit runtime (no global PATH/launcher change)..." -ForegroundColor Cyan
         $proc = Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
             Write-Host ("  [FAIL] Installer exited {0}" -f $proc.ExitCode) -ForegroundColor Red
             return $false
         }
-        Refresh-Path
-        Write-Host ("  [OK]   Python installed under {0}" -f $PythonDir) -ForegroundColor Green
-        return $true
+
+        if (-not (Test-Path -LiteralPath $targetExe)) {
+            Write-Host ("  [FAIL] python.exe missing after install: {0}" -f $targetExe) -ForegroundColor Red
+            return $false
+        }
+
+        $pyVer = & $targetExe --version 2>&1
+        Write-Host ("  [OK]   Toolkit Python: {0}" -f $pyVer) -ForegroundColor Green
+        Write-Host ("         Path          : {0}" -f $targetDir) -ForegroundColor Cyan
+        Write-Host          "         (no global Python/PATH/py launcher change)" -ForegroundColor DarkGray
+        return (Install-PyGhidraPythonVenv -BasePythonExe $targetExe -VenvDir $PyGhidraVenv)
     } catch {
         Write-Host "  [FAIL] $_" -ForegroundColor Red
         return $false
@@ -352,12 +433,79 @@ function Install-GhidraMcp {
         ("Release: {0}`nTag: {1}`nExtensionZip: {2}`nDownloadedAt: {3}`n" -f $release.name, $release.tag_name, $extensionPath, (Get-Date).ToString("s")) |
             Set-Content -LiteralPath (Join-Path $targetDir "release.txt") -Encoding UTF8
 
+        if (-not (Install-GhidraMcpRequirements -McpDir $targetDir)) {
+            return $false
+        }
+
         Write-Host ("  [OK]   GhidraMCP release assets saved to {0}" -f $targetDir) -ForegroundColor Green
         Write-Host ("         Extension ZIP: {0}" -f $extensionPath) -ForegroundColor Cyan
         Write-Host "         In Ghidra GUI: File > Install Extensions > Add" -ForegroundColor Cyan
         Write-Host "         Select the extension ZIP above, restart Ghidra, then enable:" -ForegroundColor Cyan
         Write-Host "         File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Cyan
         Write-Host "         Then start: Tools > GhidraMCP > Start MCP Server" -ForegroundColor Cyan
+        return $true
+    }
+    catch {
+        Write-Host ("  [FAIL] {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+}
+
+function Install-GhidraMcpRequirements {
+    param([Parameter(Mandatory)] [string]$McpDir)
+
+    $requirementsPath = Join-Path $McpDir "requirements.txt"
+    if (-not (Test-Path -LiteralPath $requirementsPath)) {
+        Write-Host "  [FAIL] requirements.txt not found: $requirementsPath" -ForegroundColor Red
+        return $false
+    }
+
+    $venvDir = Join-Path $McpDir ".venv"
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
+    $toolkitPython = if (Test-Path -LiteralPath $PythonExe) { $PythonExe } else { $null }
+    $uv = Get-Command "uv" -ErrorAction SilentlyContinue
+
+    try {
+        if ($uv) {
+            if (-not (Test-Path -LiteralPath $venvPython)) {
+                Write-Host ("  Creating MCP bridge venv: {0}" -f $venvDir) -ForegroundColor Cyan
+                if ($toolkitPython) {
+                    & uv venv --python $toolkitPython $venvDir
+                }
+                else {
+                    & uv venv $venvDir
+                }
+                if ($LASTEXITCODE -ne 0) { throw "uv venv failed with exit code $LASTEXITCODE" }
+            }
+
+            Write-Host "  Installing MCP bridge requirements with uv..." -ForegroundColor Cyan
+            & uv pip install --python $venvPython -r $requirementsPath
+            if ($LASTEXITCODE -ne 0) { throw "uv pip install --python failed with exit code $LASTEXITCODE" }
+        }
+        else {
+            $pythonPath = $toolkitPython
+            if (-not $pythonPath) {
+                $python = Get-Command "python" -ErrorAction SilentlyContinue
+                if ($python) { $pythonPath = $python.Source }
+            }
+
+            if (-not $pythonPath) {
+                Write-Host "  [FAIL] uv and python are both missing. Run -InstallRuntime or install uv." -ForegroundColor Red
+                return $false
+            }
+
+            if (-not (Test-Path -LiteralPath $venvPython)) {
+                Write-Host ("  Creating MCP bridge venv with python: {0}" -f $venvDir) -ForegroundColor Cyan
+                & $pythonPath -m venv $venvDir
+                if ($LASTEXITCODE -ne 0) { throw "python -m venv failed with exit code $LASTEXITCODE" }
+            }
+
+            Write-Host "  Installing MCP bridge requirements with pip..." -ForegroundColor Cyan
+            & $venvPython -m pip install -r $requirementsPath
+            if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
+        }
+
+        Write-Host ("  [OK]   MCP bridge Python env: {0}" -f $venvPython) -ForegroundColor Green
         return $true
     }
     catch {
@@ -565,22 +713,38 @@ if (Test-Path -LiteralPath $portableJavaExe) {
     Write-Host "  [WARN] java                  NOT FOUND. Run with -InstallRuntime." -ForegroundColor Yellow
 }
 
+$pythonOk = $false
+if (Test-Path -LiteralPath $PythonExe) {
+    try {
+        $pyVer = & $PythonExe --version 2>&1
+        Write-Host ("  [OK]   python (toolkit)      {0}" -f $pyVer) -ForegroundColor Green
+        Write-Host ("                            {0}" -f $PythonDir) -ForegroundColor DarkGray
+        $pythonOk = $true
+    }
+    catch {
+        Write-Host ("  [WARN] python (toolkit)      found but failed to run: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host ("  [WARN] python (toolkit)      NOT FOUND. Run with -InstallRuntime. Expected: {0}" -f $PythonExe) -ForegroundColor Yellow
+}
+
 $python = Test-Command "python"
-$pythonOk = $python.Found
 if ($python.Found) {
     try {
         $pyVer = & $python.Path --version 2>&1
-        Write-Host ("  [OK]   python                {0}" -f $pyVer) -ForegroundColor Green
+        Write-Host ("  [INFO] python (system)       {0} at {1}" -f $pyVer, $python.Path) -ForegroundColor DarkGray
     }
     catch {
-        Write-Host ("  [WARN] python                found but failed to run: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        $pythonOk = $false
+        Write-Host ("  [INFO] python (system)       found but failed to run: {0}" -f $_.Exception.Message) -ForegroundColor DarkGray
     }
-} elseif (Test-Path -LiteralPath $PythonDir) {
-    Write-Host ("  [OK]   python                (portable) {0}" -f $PythonDir) -ForegroundColor Green
-    $pythonOk = $true
-} else {
-    Write-Host "  [WARN] python                NOT FOUND. Run with -InstallRuntime." -ForegroundColor Yellow
+}
+
+if (Test-Path -LiteralPath $PyGhidraPython) {
+    Write-Host ("  [OK]   python (PyGhidra)     {0}" -f $PyGhidraPython) -ForegroundColor Green
+}
+elseif ($pythonOk) {
+    Write-Host ("  [WARN] python (PyGhidra)     venv missing. Run -InstallRuntime again or start .\re.ps1 pyghidra-gui to create it.") -ForegroundColor Yellow
 }
 
 $dotnet = Test-Command "dotnet"
@@ -702,7 +866,7 @@ if ($missing.Count -eq 0) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + Python"
+Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + toolkit-local Python 3.12"
 Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra"
 Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper           # wklin8607/Il2CppDumper v6.7.48"
 Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraMcp              # bethington/ghidra-mcp plugin + bridge"

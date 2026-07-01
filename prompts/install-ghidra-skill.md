@@ -27,6 +27,11 @@ From the REToolkit root:
 .\install-re-toolkit.ps1 -InstallGhidraMcp
 ```
 
+`-InstallRuntime` installs JDK 21 plus a toolkit-local Python 3.12 under
+`runtime/python/python-3.12`. REToolkit/PyGhidra should use this local runtime
+instead of any global Python 3.14 on the machine. It also prepares
+`runtime/python/pyghidra-venv` for PyGhidra launches.
+
 `-InstallGhidraMcp` downloads the latest release assets from:
 
 ```text
@@ -38,6 +43,10 @@ It saves these files under `tools/ghidra-mcp`:
 - `GhidraMCP-<version>.zip`
 - `bridge_mcp_ghidra.py`
 - `requirements.txt`
+
+It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` into
+that local environment. `bridge_mcp_ghidra.py` is the AI-client-side bridge,
+not the GUI plugin.
 
 ## Ghidra GUI Setup
 

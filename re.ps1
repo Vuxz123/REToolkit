@@ -21,10 +21,14 @@ if ($Rest.Count -gt 0 -and $Rest[0] -eq "--%") {
 $ToolPaths = [ordered]@{
     JdkRoot          = Join-Path $Root  "runtime\java\jdk-21"
     JavaExe          = Join-Path $Root  "runtime\java\jdk-21\bin\java.exe"
+    PythonRoot       = Join-Path $Root  "runtime\python\python-3.12"
+    PythonExe        = Join-Path $Root  "runtime\python\python-3.12\python.exe"
+    PyGhidraVenv     = Join-Path $Root  "runtime\python\pyghidra-venv"
+    PyGhidraPython   = Join-Path $Root  "runtime\python\pyghidra-venv\Scripts\python.exe"
     GhidraRoot       = Join-Path $Tools "ghidra"
     GhidraMcpBridge  = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
     GhidraGuiBat     = Join-Path $Tools "ghidra\ghidraRun.bat"
-    PyGhidraBat      = Join-Path $Tools "ghidra\support\pyghidraRun.bat"
+    PyGhidraLauncher = Join-Path $Tools "ghidra\Ghidra\Features\PyGhidra\support\pyghidra_launcher.py"
     AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
     Dumper           = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
 }
@@ -45,9 +49,10 @@ function Assert-PathExists {
     if (-not $ok) {
         $hint = switch -Regex ($Name) {
             "JDK 21"       { "Run local JDK installer, then ensure runtime\java\jdk-21\bin\java.exe exists." }
+            "Python"       { "Run .\install-re-toolkit.ps1 -InstallRuntime, then ensure runtime\python\python-3.12\python.exe exists." }
             "Ghidra MCP"   { "Run .\install-re-toolkit.ps1 -InstallGhidraMcp." }
             "Ghidra GUI"   { "Install Ghidra into tools\ghidra." }
-            "PyGhidra"     { "Check tools\ghidra\support\pyghidraRun.bat." }
+            "PyGhidra"     { "Check tools\ghidra\Ghidra\Features\PyGhidra\support\pyghidra_launcher.py." }
             "Headless"     { "Check tools\ghidra\support\analyzeHeadless.bat." }
             "Il2CppDumper" { "Install Il2CppDumper into tools\Il2CppDumper\Il2CppDumper.exe." }
             default         { "" }
@@ -62,6 +67,9 @@ function Invoke-WithToolkitEnv {
     $oldJavaHome          = $env:JAVA_HOME
     $oldJavaHomeOverride  = $env:JAVA_HOME_OVERRIDE
     $oldGhidraInstallDir  = $env:GHIDRA_INSTALL_DIR
+    $oldPyGhidraPython    = $env:PYGHIDRA_PYTHON
+    $oldPythonNoUserSite  = $env:PYTHONNOUSERSITE
+    $oldPythonPath        = $env:PYTHONPATH
     $oldPath              = $env:Path
 
     try {
@@ -69,7 +77,16 @@ function Invoke-WithToolkitEnv {
         # JAVA_HOME_OVERRIDE is what Ghidra launchers prefer.
         $env:JAVA_HOME_OVERRIDE = $ToolPaths.JdkRoot
         $env:GHIDRA_INSTALL_DIR = $ToolPaths.GhidraRoot
-        $env:Path = "$($ToolPaths.JdkRoot)\bin;$oldPath"
+        if (Test-Path -LiteralPath $ToolPaths.PythonExe) {
+            $selectedPython = if (Test-Path -LiteralPath $ToolPaths.PyGhidraPython) { $ToolPaths.PyGhidraPython } else { $ToolPaths.PythonExe }
+            $env:PYGHIDRA_PYTHON = $selectedPython
+            $env:PYTHONNOUSERSITE = "1"
+            $env:PYTHONPATH = ""
+            $env:Path = "$($ToolPaths.PyGhidraVenv)\Scripts;$($ToolPaths.PythonRoot);$($ToolPaths.PythonRoot)\Scripts;$($ToolPaths.JdkRoot)\bin;$oldPath"
+        }
+        else {
+            $env:Path = "$($ToolPaths.JdkRoot)\bin;$oldPath"
+        }
 
         # Important: return/emit the scriptblock result to the caller.
         # Without this, assignments inside the scriptblock can stay in a child scope,
@@ -80,7 +97,70 @@ function Invoke-WithToolkitEnv {
         $env:JAVA_HOME          = $oldJavaHome
         $env:JAVA_HOME_OVERRIDE = $oldJavaHomeOverride
         $env:GHIDRA_INSTALL_DIR = $oldGhidraInstallDir
+        $env:PYGHIDRA_PYTHON    = $oldPyGhidraPython
+        $env:PYTHONNOUSERSITE   = $oldPythonNoUserSite
+        $env:PYTHONPATH         = $oldPythonPath
         $env:Path               = $oldPath
+    }
+}
+
+function Get-PyGhidraVmArgs {
+    $items = New-Object System.Collections.Generic.List[string]
+
+    foreach ($raw in @($env:JDK_JAVA_OPTIONS, $env:GHIDRA_JAVA_OPTIONS, $env:PYGHIDRA_JAVA_OPTIONS)) {
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        foreach ($part in ($raw -split '\s+')) {
+            if (-not [string]::IsNullOrWhiteSpace($part)) {
+                [void]$items.Add($part)
+            }
+        }
+    }
+
+    [void]$items.Add("-Dsun.java2d.dpiaware=true")
+    return @($items.ToArray())
+}
+
+function Ensure-PyGhidraPython {
+    Assert-PathExists $ToolPaths.PythonExe "Toolkit Python"
+
+    if (Test-Path -LiteralPath $ToolPaths.PyGhidraPython) {
+        return $ToolPaths.PyGhidraPython
+    }
+
+    Write-Host ("Creating PyGhidra venv with toolkit Python: {0}" -f $ToolPaths.PyGhidraVenv) -ForegroundColor Cyan
+    New-Item -ItemType Directory -Path (Split-Path -Parent $ToolPaths.PyGhidraVenv) -Force | Out-Null
+    & $ToolPaths.PythonExe -m venv $ToolPaths.PyGhidraVenv
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create PyGhidra venv with toolkit Python. Exit code: $LASTEXITCODE" }
+
+    if (-not (Test-Path -LiteralPath $ToolPaths.PyGhidraPython)) {
+        throw "PyGhidra venv was created but python.exe is missing: $($ToolPaths.PyGhidraPython)"
+    }
+
+    return $ToolPaths.PyGhidraPython
+}
+
+function Invoke-PyGhidraGui {
+    param([Parameter()] [string[]]$Arguments)
+
+    if ($null -eq $Arguments) { $Arguments = @() }
+
+    $pyGhidraPython = Ensure-PyGhidraPython
+    Assert-PathExists $ToolPaths.PyGhidraLauncher "PyGhidra launcher"
+    Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+
+    $vmArgs = Get-PyGhidraVmArgs
+
+    Invoke-WithToolkitEnv {
+        Push-Location $Root
+        try {
+            Write-Host ("Using PyGhidra Python: {0}" -f $pyGhidraPython) -ForegroundColor Cyan
+            & $pyGhidraPython --version
+            & $pyGhidraPython $ToolPaths.PyGhidraLauncher $ToolPaths.GhidraRoot @vmArgs @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "PyGhidra exited with code $LASTEXITCODE" }
+        }
+        finally {
+            Pop-Location
+        }
     }
 }
 
@@ -1131,7 +1211,8 @@ function Open-PyGhidraProject {
 
     $project = Read-Project $GameName
 
-    Assert-PathExists $ToolPaths.PyGhidraBat "PyGhidra launcher"
+    Assert-PathExists $ToolPaths.PythonExe "Toolkit Python"
+    Assert-PathExists $ToolPaths.PyGhidraLauncher "PyGhidra launcher"
     Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
 
     if (-not $project.status.imported) {
@@ -1145,18 +1226,11 @@ function Open-PyGhidraProject {
     Show-GhidraProjectOpenInfo -Project $project
     Write-Host "Tip: Let Ghidra run Auto Analysis in the GUI, then run ghidra.py manually if needed." -ForegroundColor Cyan
     Write-Host "Opening PyGhidra the same way as: .\re.ps1 pyghidra-gui" -ForegroundColor DarkGray
-    Write-Host "Note: project arguments are not passed to pyghidraRun.bat because that launcher may exit silently when it receives unsupported args." -ForegroundColor DarkGray
+    Write-Host "Note: project arguments are not passed to the PyGhidra launcher because some versions exit silently when they receive unsupported args." -ForegroundColor DarkGray
 
-    # Important: keep this identical in behavior to the working `pyghidra-gui` wrapper.
-    # Do not pass project dir/name args here. The PyGhidra launcher is not the same as
-    # Ghidra's normal project opener, and some Ghidra/PyGhidra versions exit instantly
-    # when unexpected arguments are supplied. The user should select the imported
-    # project manually from Ghidra's project list.
-    Invoke-WithToolkitEnv {
-        Push-Location $Root
-        try { & $ToolPaths.PyGhidraBat }
-        finally { Pop-Location }
-    }
+    # Keep this identical in behavior to the `pyghidra-gui` wrapper: do not pass
+    # project dir/name args because some PyGhidra versions exit on unsupported args.
+    Invoke-PyGhidraGui
 
     Write-Host "PyGhidra closed or launcher returned." -ForegroundColor Green
 }
@@ -1307,13 +1381,7 @@ switch ($Command) {
     }
 
     "pyghidra-gui" {
-        Assert-PathExists $ToolPaths.PyGhidraBat "PyGhidra launcher"
-        Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
-        Invoke-WithToolkitEnv {
-            Push-Location $Root
-            try { & $ToolPaths.PyGhidraBat @Rest }
-            finally { Pop-Location }
-        }
+        Invoke-PyGhidraGui -Arguments $Rest
     }
 
     "il2cppdumper" {
@@ -1326,7 +1394,13 @@ switch ($Command) {
     "mcp" {
         $bridge = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
         if (Test-Path -LiteralPath $bridge) {
-            & uv run --script $bridge --transport stdio
+            $venvPython = Join-Path $Tools "ghidra-mcp\.venv\Scripts\python.exe"
+            if (Test-Path -LiteralPath $venvPython) {
+                & $venvPython $bridge --transport stdio
+            }
+            else {
+                & uv run --script $bridge --transport stdio
+            }
             if ($LASTEXITCODE -ne 0) { throw "MCP bridge exited with code $LASTEXITCODE" }
         }
         else {

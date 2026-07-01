@@ -21,6 +21,12 @@ Unblock-File .\install-re-toolkit.ps1
 .\install-re-toolkit.ps1 -InstallGhidraMcp
 ```
 
+`-InstallRuntime` installs a toolkit-local Python 3.12 at
+`runtime/python/python-3.12`. It does not modify your global Python or `py.exe`
+launcher. PyGhidra is launched through `runtime/python/pyghidra-venv`, which is
+created from that local Python by the installer and recreated by the wrapper if
+it is missing.
+
 `-InstallGhidraMcp` downloads the latest release assets from:
 
 ```text
@@ -28,7 +34,11 @@ https://github.com/bethington/ghidra-mcp
 ```
 
 It saves the extension ZIP, Python bridge, and requirements file under
-`tools/ghidra-mcp`.
+`tools/ghidra-mcp`. It also creates `tools/ghidra-mcp/.venv` and installs
+`requirements.txt` there for the MCP bridge.
+
+`bridge_mcp_ghidra.py` is the MCP bridge used by AI clients. It is separate
+from the Ghidra extension ZIP that you install into the GUI.
 
 Optional:
 
@@ -158,4 +168,5 @@ only print MCP guidance now. Query the live Ghidra program through MCP instead.
 - MCP cannot see `FoodHunt`: open the correct project/program in CodeBrowser and start `Tools > GhidraMCP > Start MCP Server`.
 - `Unable to lock project`: close other Ghidra/headless processes for that project, or use MCP from the already-open GUI.
 - PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui`, then open the project manually.
+- PyGhidra picks Python 3.14/global Python: run `.\install-re-toolkit.ps1 -InstallRuntime`; `.\re.ps1 pyghidra-gui` should report `runtime\python\pyghidra-venv\Scripts\python.exe`.
 - Il2CppDumper says `This file may be protected`: check whether `dump.cs`, `DummyDll`, and `ghidra.py` were still generated.

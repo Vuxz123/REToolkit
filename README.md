@@ -39,7 +39,8 @@ REToolkit/
     AssetRipper/
   runtime/
     java/jdk-21/
-    python/
+    python/python-3.12/
+    python/pyghidra-venv/
   workspaces/
   workspace-template/
   config/
@@ -65,9 +66,7 @@ workspaces/<GameName>/
 - Windows PowerShell 5.1 or PowerShell 7.
 - Ghidra compatible with the installed GhidraMCP plugin.
 - JDK 21, preferably the toolkit portable JDK at `runtime/java/jdk-21`.
-- Python 3.10+ for GhidraMCP bridge/setup.
-- Git for cloning GhidraMCP.
-- Maven 3.9+ for building the GhidraMCP extension.
+- Toolkit-local Python 3.12 at `runtime/python/python-3.12`.
 - .NET Desktop Runtime for Il2CppDumper.
 - `uv` for running the Python MCP bridge from `re.ps1 mcp`.
 
@@ -96,6 +95,12 @@ Install runtime and core tools:
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
 ```
 
+`-InstallRuntime` installs JDK 21 and a toolkit-local Python 3.12 under
+`runtime/python/python-3.12`. It does not change the global Python, PATH, or
+`py.exe` launcher, so a system Python 3.14 can stay installed. `pyghidra-gui`
+uses a separate `runtime/python/pyghidra-venv` created from that local Python.
+If the venv is deleted, the PyGhidra wrapper recreates it before launch.
+
 Download the latest GhidraMCP release assets from
 `https://github.com/bethington/ghidra-mcp/releases/latest`:
 
@@ -109,6 +114,13 @@ assets into `tools/ghidra-mcp`:
 - `GhidraMCP-<version>.zip`, the Ghidra extension ZIP.
 - `bridge_mcp_ghidra.py`, the Python MCP bridge.
 - `requirements.txt`, the Python bridge dependencies.
+
+It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` there.
+`re.ps1 mcp` uses that local Python environment when it exists.
+
+`bridge_mcp_ghidra.py` is not the Ghidra plugin. It is the AI-client-side MCP
+bridge: Codex/OpenCode talks to it over stdio, and it forwards requests to the
+GhidraMCP server running inside the Ghidra GUI.
 
 Optional:
 
