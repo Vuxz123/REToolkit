@@ -21,14 +21,14 @@ Unblock-File .\install-re-toolkit.ps1
 .\install-re-toolkit.ps1 -InstallGhidraMcp
 ```
 
-`-InstallGhidraMcp` installs from:
+`-InstallGhidraMcp` downloads the latest release assets from:
 
 ```text
 https://github.com/bethington/ghidra-mcp
 ```
 
-It copies the Python bridge to `tools/ghidra-mcp` and deploys the Ghidra GUI
-extension with the upstream `python -m tools.setup ... deploy` flow.
+It saves the extension ZIP, Python bridge, and requirements file under
+`tools/ghidra-mcp`.
 
 Optional:
 
@@ -44,20 +44,28 @@ Optional:
 .\re.ps1 pyghidra-gui
 ```
 
-2. Open a CodeBrowser window for your project/program.
-3. Enable the plugin:
+2. Install the release ZIP:
+
+```text
+File > Install Extensions > Add
+```
+
+Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, then restart Ghidra.
+
+3. Open a CodeBrowser window for your project/program.
+4. Enable the plugin:
 
 ```text
 File > Configure > Configure All Plugins > GhidraMCP
 ```
 
-4. Optional: configure port/settings:
+5. Optional: configure port/settings:
 
 ```text
 CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```
 
-5. Start the server:
+6. Start the server:
 
 ```text
 Tools > GhidraMCP > Start MCP Server
@@ -146,7 +154,7 @@ only print MCP guidance now. Query the live Ghidra program through MCP instead.
 ## 8. Common Problems
 
 - `re.ps1 is not digitally signed`: run `Unblock-File .\re.ps1` and use process-scope execution policy bypass.
-- `GhidraMCP` menu is missing: rerun `-InstallGhidraMcp`, restart Ghidra, then enable the plugin from `File > Configure > Configure All Plugins > GhidraMCP`.
+- `GhidraMCP` menu is missing: install `tools/ghidra-mcp/GhidraMCP-<version>.zip` with `File > Install Extensions > Add`, restart Ghidra, then enable the plugin from `File > Configure > Configure All Plugins > GhidraMCP`.
 - MCP cannot see `FoodHunt`: open the correct project/program in CodeBrowser and start `Tools > GhidraMCP > Start MCP Server`.
 - `Unable to lock project`: close other Ghidra/headless processes for that project, or use MCP from the already-open GUI.
 - PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui`, then open the project manually.

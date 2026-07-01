@@ -10,7 +10,7 @@ param(
     [string]$PythonVersion = "3.12",
     [string]$GhidraVersion = "",
     [string]$Il2CppDumperVersion = "6.7.48",
-    [string]$GhidraMcpRepo = "https://github.com/bethington/ghidra-mcp.git",
+    [string]$GhidraMcpReleaseApi = "https://api.github.com/repos/bethington/ghidra-mcp/releases/latest",
     [string]$AssetRipperRepo = "AssetRipper/AssetRipper"
 )
 
@@ -74,7 +74,7 @@ function Clear-RetkTemp {
         "retk-*",
         "ghidra_extract_*",
         "temurin*.zip",
-        "ghidra-mcp-src",
+        "GhidraMCP-*.zip",
         "rustup-init*.exe",
         "Il2CppDumper-v*.zip",
         "il2cppdumper_*",
@@ -296,112 +296,73 @@ function Install-GhidraRuntime {
     }
 }
 
-function Get-PythonExecutable {
-    $py = Get-Command "python" -ErrorAction SilentlyContinue
-    if ($py) { return $py.Source }
-
-    $portable = Join-Path $PythonDir "python.exe"
-    if (Test-Path -LiteralPath $portable) { return $portable }
-
-    return $null
-}
-
-function Invoke-SetupStep {
-    param(
-        [Parameter(Mandatory)] [string]$PythonExe,
-        [Parameter(Mandatory)] [string[]]$Arguments,
-        [Parameter(Mandatory)] [string]$Label
-    )
-
-    Write-Host ("  {0}" -f $Label) -ForegroundColor Cyan
-    & $PythonExe @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Label failed with exit code $LASTEXITCODE"
-    }
-}
-
 function Install-GhidraMcp {
     param(
         [Parameter(Mandatory)] [string]$ToolsDir,
-        [Parameter(Mandatory)] [string]$Repo,
+        [Parameter(Mandatory)] [string]$ReleaseApi,
         [Parameter(Mandatory)] [string]$GhidraRoot
     )
 
     if (-not (Test-Path -LiteralPath $GhidraRoot -PathType Container)) {
-        Write-Host "  [FAIL] Ghidra root not found. Run with -InstallGhidra first." -ForegroundColor Red
-        return $false
+        Write-Host "  [WARN] Ghidra root not found. Downloading release assets anyway; run -InstallGhidra before GUI install." -ForegroundColor Yellow
     }
 
-    $pythonExe = Get-PythonExecutable
-    if (-not $pythonExe) {
-        Write-Host "  [FAIL] python not found. Run with -InstallRuntime first." -ForegroundColor Red
-        return $false
-    }
-
-    if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
-        Write-Host "  [FAIL] git not found. Install Git for Windows before -InstallGhidraMcp." -ForegroundColor Red
-        return $false
-    }
-
-    if (-not (Get-Command "mvn" -ErrorAction SilentlyContinue)) {
-        Write-Host "  [WARN] Maven was not found on PATH. Upstream setup may fail during build." -ForegroundColor Yellow
-        Write-Host "         Install Maven 3.9+ or put mvn.exe on PATH if the build step fails." -ForegroundColor Yellow
-    }
-
-    $srcDir = Join-Path $env:TEMP "ghidra-mcp-src"
     $targetDir = Join-Path $ToolsDir "ghidra-mcp"
 
     try {
-        if (Test-Path -LiteralPath $srcDir) {
-            Remove-Item -LiteralPath $srcDir -Recurse -Force
+        Write-Host ("  Querying latest GhidraMCP release: {0}" -f $ReleaseApi) -ForegroundColor Cyan
+        $release = Invoke-RestMethod -Uri $ReleaseApi -UseBasicParsing -TimeoutSec 30 -Headers @{"User-Agent"="re-toolkit"}
+        if (-not $release -or -not $release.assets) {
+            Write-Host "  [FAIL] Latest release response did not include assets." -ForegroundColor Red
+            return $false
         }
 
-        Write-Host ("  Cloning {0} ..." -f $Repo) -ForegroundColor Cyan
-        & git clone --depth 1 $Repo $srcDir
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  [FAIL] git clone failed." -ForegroundColor Red
+        $extensionAsset = $release.assets | Where-Object { $_.name -match '^GhidraMCP-.+\.zip$' } | Select-Object -First 1
+        $bridgeAsset = $release.assets | Where-Object { $_.name -eq "bridge_mcp_ghidra.py" } | Select-Object -First 1
+        $requirementsAsset = $release.assets | Where-Object { $_.name -eq "requirements.txt" } | Select-Object -First 1
+
+        if (-not $extensionAsset) {
+            Write-Host "  [FAIL] No GhidraMCP release extension asset matched ^GhidraMCP-.+\.zip$." -ForegroundColor Red
+            return $false
+        }
+        if (-not $bridgeAsset) {
+            Write-Host "  [FAIL] No bridge_mcp_ghidra.py release asset found." -ForegroundColor Red
+            return $false
+        }
+        if (-not $requirementsAsset) {
+            Write-Host "  [FAIL] No requirements.txt release asset found." -ForegroundColor Red
             return $false
         }
 
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $srcDir "bridge_mcp_ghidra.py") -Destination (Join-Path $targetDir "bridge_mcp_ghidra.py") -Force
-        Copy-Item -LiteralPath (Join-Path $srcDir "requirements.txt") -Destination (Join-Path $targetDir "requirements.txt") -Force
 
-        $oldJavaHomeOverride = $env:JAVA_HOME_OVERRIDE
-        $oldGhidraInstallDir = $env:GHIDRA_INSTALL_DIR
-        try {
-            $env:JAVA_HOME_OVERRIDE = $PortableJava
-            $env:GHIDRA_INSTALL_DIR = $GhidraRoot
+        $extensionPath = Join-Path $targetDir $extensionAsset.name
+        $bridgePath = Join-Path $targetDir "bridge_mcp_ghidra.py"
+        $requirementsPath = Join-Path $targetDir "requirements.txt"
 
-            Push-Location $srcDir
-            try {
-                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup preflight" -Arguments @("-m", "tools.setup", "preflight", "--ghidra-path", $GhidraRoot)
-                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup ensure-prereqs" -Arguments @("-m", "tools.setup", "ensure-prereqs", "--ghidra-path", $GhidraRoot)
-                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup build" -Arguments @("-m", "tools.setup", "build")
-                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup deploy" -Arguments @("-m", "tools.setup", "deploy", "--ghidra-path", $GhidraRoot)
-            }
-            finally {
-                Pop-Location
-            }
-        }
-        finally {
-            $env:JAVA_HOME_OVERRIDE = $oldJavaHomeOverride
-            $env:GHIDRA_INSTALL_DIR = $oldGhidraInstallDir
-        }
+        Write-Host ("  Downloading {0} ..." -f $extensionAsset.name) -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $extensionAsset.browser_download_url -OutFile $extensionPath -UseBasicParsing -TimeoutSec 600
 
-        Write-Host ("  [OK]   GhidraMCP bridge copied to {0}" -f $targetDir) -ForegroundColor Green
-        Write-Host "         In Ghidra GUI: File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Cyan
-        Write-Host "         Then start:   Tools > GhidraMCP > Start MCP Server" -ForegroundColor Cyan
+        Write-Host "  Downloading bridge_mcp_ghidra.py ..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $bridgeAsset.browser_download_url -OutFile $bridgePath -UseBasicParsing -TimeoutSec 600
+
+        Write-Host "  Downloading requirements.txt ..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $requirementsAsset.browser_download_url -OutFile $requirementsPath -UseBasicParsing -TimeoutSec 600
+
+        ("Release: {0}`nTag: {1}`nExtensionZip: {2}`nDownloadedAt: {3}`n" -f $release.name, $release.tag_name, $extensionPath, (Get-Date).ToString("s")) |
+            Set-Content -LiteralPath (Join-Path $targetDir "release.txt") -Encoding UTF8
+
+        Write-Host ("  [OK]   GhidraMCP release assets saved to {0}" -f $targetDir) -ForegroundColor Green
+        Write-Host ("         Extension ZIP: {0}" -f $extensionPath) -ForegroundColor Cyan
+        Write-Host "         In Ghidra GUI: File > Install Extensions > Add" -ForegroundColor Cyan
+        Write-Host "         Select the extension ZIP above, restart Ghidra, then enable:" -ForegroundColor Cyan
+        Write-Host "         File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Cyan
+        Write-Host "         Then start: Tools > GhidraMCP > Start MCP Server" -ForegroundColor Cyan
         return $true
     }
     catch {
         Write-Host ("  [FAIL] {0}" -f $_.Exception.Message) -ForegroundColor Red
         return $false
-    }
-    finally {
-        if (Test-Path -LiteralPath $srcDir) {
-            Remove-Item -LiteralPath $srcDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
     }
 }
 
@@ -677,7 +638,7 @@ if (-not ($mcpOk)) {
 }
 
 if ($InstallGhidraMcp) {
-    Invoke-Install "GhidraMCP" { Install-GhidraMcp -ToolsDir $Tools -Repo $GhidraMcpRepo -GhidraRoot $toolsGhidra | Out-Null }
+    Invoke-Install "GhidraMCP" { Install-GhidraMcp -ToolsDir $Tools -ReleaseApi $GhidraMcpReleaseApi -GhidraRoot $toolsGhidra | Out-Null }
     $mcpOk = Test-PathExists $toolsMcp "Ghidra MCP bridge"
 }
 

@@ -27,31 +27,42 @@ From the REToolkit root:
 .\install-re-toolkit.ps1 -InstallGhidraMcp
 ```
 
-`-InstallGhidraMcp` uses:
+`-InstallGhidraMcp` downloads the latest release assets from:
 
 ```text
 https://github.com/bethington/ghidra-mcp
 ```
 
-It copies `bridge_mcp_ghidra.py` into `tools/ghidra-mcp` and runs the upstream
-setup/deploy path against `tools/ghidra`.
+It saves these files under `tools/ghidra-mcp`:
+
+- `GhidraMCP-<version>.zip`
+- `bridge_mcp_ghidra.py`
+- `requirements.txt`
 
 ## Ghidra GUI Setup
 
-1. Open the target project/program in Ghidra or PyGhidra.
-2. Enable the plugin:
+1. Install the release extension ZIP:
+
+```text
+File > Install Extensions > Add
+```
+
+Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, then restart Ghidra.
+
+2. Open the target project/program in Ghidra or PyGhidra.
+3. Enable the plugin:
 
 ```text
 File > Configure > Configure All Plugins > GhidraMCP
 ```
 
-3. Optional port settings:
+4. Optional port settings:
 
 ```text
 CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```
 
-4. Start the server:
+5. Start the server:
 
 ```text
 Tools > GhidraMCP > Start MCP Server

@@ -96,21 +96,19 @@ Install runtime and core tools:
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
 ```
 
-Install GhidraMCP from `https://github.com/bethington/ghidra-mcp`:
+Download the latest GhidraMCP release assets from
+`https://github.com/bethington/ghidra-mcp/releases/latest`:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallGhidraMcp
 ```
 
-That installer path clones the upstream repo, copies `bridge_mcp_ghidra.py` into
-`tools/ghidra-mcp`, then runs the upstream setup flow:
+That installer path uses the GitHub Releases API and downloads these release
+assets into `tools/ghidra-mcp`:
 
-```text
-python -m tools.setup preflight --ghidra-path tools\ghidra
-python -m tools.setup ensure-prereqs --ghidra-path tools\ghidra
-python -m tools.setup build
-python -m tools.setup deploy --ghidra-path tools\ghidra
-```
+- `GhidraMCP-<version>.zip`, the Ghidra extension ZIP.
+- `bridge_mcp_ghidra.py`, the Python MCP bridge.
+- `requirements.txt`, the Python bridge dependencies.
 
 Optional:
 
@@ -120,7 +118,7 @@ Optional:
 
 ## Enable GhidraMCP In The GUI
 
-After `-InstallGhidraMcp` deploys the extension:
+After `-InstallGhidraMcp` downloads the release assets:
 
 1. Start Ghidra or PyGhidra:
 
@@ -130,20 +128,29 @@ After `-InstallGhidraMcp` deploys the extension:
 .\re.ps1 pyghidra-gui
 ```
 
-2. Open a CodeBrowser for the target project/program.
-3. Enable the plugin:
+2. Install the downloaded extension ZIP:
+
+```text
+File > Install Extensions > Add
+```
+
+Select the `tools/ghidra-mcp/GhidraMCP-<version>.zip` file and restart Ghidra
+when prompted.
+
+3. Open a CodeBrowser for the target project/program.
+4. Enable the plugin:
 
 ```text
 File > Configure > Configure All Plugins > GhidraMCP
 ```
 
-4. Optional port configuration:
+5. Optional port configuration:
 
 ```text
 CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```
 
-5. Start the server:
+6. Start the server:
 
 ```text
 Tools > GhidraMCP > Start MCP Server
@@ -266,7 +273,14 @@ Enable the plugin in CodeBrowser:
 File > Configure > Configure All Plugins > GhidraMCP
 ```
 
-If the plugin is not listed, rerun:
+If the plugin is not listed, install the downloaded release ZIP:
+
+```text
+File > Install Extensions > Add
+```
+
+Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, restart Ghidra, then enable
+the plugin. If the ZIP is missing, rerun:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallGhidraMcp
