@@ -1,20 +1,34 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$InstallDir = (Split-Path -Parent $MyInvocation.MyCommand.Path),
+    [string]$InstallDir = "",
     [switch]$InstallGhidra,
-    [switch]$InstallGhidraCli,
+    [switch]$InstallGhidraMcp,
     [switch]$InstallIl2CppDumper,
     [switch]$InstallAssetRipper,
     [switch]$InstallRuntime,
     [int]$JdkVersion = 21,
     [string]$PythonVersion = "3.12",
-    [string]$RustToolchain = "stable",
     [string]$GhidraVersion = "",
     [string]$Il2CppDumperVersion = "6.7.48",
+    [string]$GhidraMcpRepo = "https://github.com/bethington/ghidra-mcp.git",
     [string]$AssetRipperRepo = "AssetRipper/AssetRipper"
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $InstallDir = $PSScriptRoot
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        $InstallDir = Split-Path -Parent $PSCommandPath
+    }
+    elseif ($MyInvocation.MyCommand.Path) {
+        $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    else {
+        $InstallDir = (Get-Location).Path
+    }
+}
 Set-Location -LiteralPath $InstallDir
 
 $Runtime      = Join-Path $InstallDir "runtime"
@@ -60,7 +74,7 @@ function Clear-RetkTemp {
         "retk-*",
         "ghidra_extract_*",
         "temurin*.zip",
-        "ghidra-cli-src",
+        "ghidra-mcp-src",
         "rustup-init*.exe",
         "Il2CppDumper-v*.zip",
         "il2cppdumper_*",
@@ -213,51 +227,6 @@ function Install-Python {
     }
 }
 
-function Install-Rust {
-    param([string]$Toolchain)
-
-    $cargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-    if ($cargo) {
-        Write-Host "  [SKIP] cargo already at $($cargo.Source)" -ForegroundColor Yellow
-        return $true
-    }
-
-    $winget = Get-Command "winget" -ErrorAction SilentlyContinue
-    if ($winget) {
-        Write-Host "  Installing Rust via winget..." -ForegroundColor Cyan
-        & winget install --id Rustlang.Rustup -e --source winget --accept-package-agreements --accept-source-agreements
-    }
-
-    if (-not (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
-        $exe = Join-Path $env:TEMP "rustup-init.exe"
-        try {
-            Write-Host "  Fetching rustup-init..." -ForegroundColor Cyan
-            Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $exe -UseBasicParsing -TimeoutSec 600
-            & $exe -y --default-toolchain $Toolchain --profile minimal --no-modify-path
-        } finally {
-            if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue }
-        }
-    }
-
-    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-    if (Test-Path -LiteralPath $cargoBin) {
-        $env:Path = "$cargoBin;$env:Path"
-        [System.Environment]::SetEnvironmentVariable("Path", [System.Environment]::GetEnvironmentVariable("Path","User") + ";$cargoBin", "User")
-        $env:CARGO_HOME = Join-Path $env:USERPROFILE ".cargo"
-        $env:RUSTUP_HOME = Join-Path $env:USERPROFILE ".rustup"
-        [System.Environment]::SetEnvironmentVariable("CARGO_HOME", $env:CARGO_HOME, "User")
-        [System.Environment]::SetEnvironmentVariable("RUSTUP_HOME", $env:RUSTUP_HOME, "User")
-    }
-
-    $ver = (Get-Command "cargo" -ErrorAction SilentlyContinue)
-    if ($ver) {
-        Write-Host ("  [OK]   cargo installed at {0}" -f $ver.Source) -ForegroundColor Green
-        return $true
-    }
-    Write-Host "  [FAIL] cargo not found on PATH after install." -ForegroundColor Red
-    return $false
-}
-
 function Install-GhidraRuntime {
     param([string]$ToolsDir, [string]$Version)
 
@@ -324,6 +293,115 @@ function Install-GhidraRuntime {
     } finally {
         if ($tmpZip -and (Test-Path -LiteralPath $tmpZip))   { Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue }
         if ($tmpExtract -and (Test-Path -LiteralPath $tmpExtract)) { Remove-Item -LiteralPath $tmpExtract -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-PythonExecutable {
+    $py = Get-Command "python" -ErrorAction SilentlyContinue
+    if ($py) { return $py.Source }
+
+    $portable = Join-Path $PythonDir "python.exe"
+    if (Test-Path -LiteralPath $portable) { return $portable }
+
+    return $null
+}
+
+function Invoke-SetupStep {
+    param(
+        [Parameter(Mandatory)] [string]$PythonExe,
+        [Parameter(Mandatory)] [string[]]$Arguments,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    Write-Host ("  {0}" -f $Label) -ForegroundColor Cyan
+    & $PythonExe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Install-GhidraMcp {
+    param(
+        [Parameter(Mandatory)] [string]$ToolsDir,
+        [Parameter(Mandatory)] [string]$Repo,
+        [Parameter(Mandatory)] [string]$GhidraRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $GhidraRoot -PathType Container)) {
+        Write-Host "  [FAIL] Ghidra root not found. Run with -InstallGhidra first." -ForegroundColor Red
+        return $false
+    }
+
+    $pythonExe = Get-PythonExecutable
+    if (-not $pythonExe) {
+        Write-Host "  [FAIL] python not found. Run with -InstallRuntime first." -ForegroundColor Red
+        return $false
+    }
+
+    if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
+        Write-Host "  [FAIL] git not found. Install Git for Windows before -InstallGhidraMcp." -ForegroundColor Red
+        return $false
+    }
+
+    if (-not (Get-Command "mvn" -ErrorAction SilentlyContinue)) {
+        Write-Host "  [WARN] Maven was not found on PATH. Upstream setup may fail during build." -ForegroundColor Yellow
+        Write-Host "         Install Maven 3.9+ or put mvn.exe on PATH if the build step fails." -ForegroundColor Yellow
+    }
+
+    $srcDir = Join-Path $env:TEMP "ghidra-mcp-src"
+    $targetDir = Join-Path $ToolsDir "ghidra-mcp"
+
+    try {
+        if (Test-Path -LiteralPath $srcDir) {
+            Remove-Item -LiteralPath $srcDir -Recurse -Force
+        }
+
+        Write-Host ("  Cloning {0} ..." -f $Repo) -ForegroundColor Cyan
+        & git clone --depth 1 $Repo $srcDir
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [FAIL] git clone failed." -ForegroundColor Red
+            return $false
+        }
+
+        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $srcDir "bridge_mcp_ghidra.py") -Destination (Join-Path $targetDir "bridge_mcp_ghidra.py") -Force
+        Copy-Item -LiteralPath (Join-Path $srcDir "requirements.txt") -Destination (Join-Path $targetDir "requirements.txt") -Force
+
+        $oldJavaHomeOverride = $env:JAVA_HOME_OVERRIDE
+        $oldGhidraInstallDir = $env:GHIDRA_INSTALL_DIR
+        try {
+            $env:JAVA_HOME_OVERRIDE = $PortableJava
+            $env:GHIDRA_INSTALL_DIR = $GhidraRoot
+
+            Push-Location $srcDir
+            try {
+                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup preflight" -Arguments @("-m", "tools.setup", "preflight", "--ghidra-path", $GhidraRoot)
+                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup ensure-prereqs" -Arguments @("-m", "tools.setup", "ensure-prereqs", "--ghidra-path", $GhidraRoot)
+                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup build" -Arguments @("-m", "tools.setup", "build")
+                Invoke-SetupStep -PythonExe $pythonExe -Label "python -m tools.setup deploy" -Arguments @("-m", "tools.setup", "deploy", "--ghidra-path", $GhidraRoot)
+            }
+            finally {
+                Pop-Location
+            }
+        }
+        finally {
+            $env:JAVA_HOME_OVERRIDE = $oldJavaHomeOverride
+            $env:GHIDRA_INSTALL_DIR = $oldGhidraInstallDir
+        }
+
+        Write-Host ("  [OK]   GhidraMCP bridge copied to {0}" -f $targetDir) -ForegroundColor Green
+        Write-Host "         In Ghidra GUI: File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Cyan
+        Write-Host "         Then start:   Tools > GhidraMCP > Start MCP Server" -ForegroundColor Cyan
+        return $true
+    }
+    catch {
+        Write-Host ("  [FAIL] {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $srcDir) {
+            Remove-Item -LiteralPath $srcDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -407,7 +485,7 @@ function Install-Il2CppDumper {
     }
 
     if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
-        Write-Host "  [FAIL] dotnet not on PATH. Run with -InstallRuntime (installs JDK+Python+Rust; .NET runtime is separate: winget install Microsoft.DotNet.Runtime.6)" -ForegroundColor Red
+        Write-Host "  [FAIL] dotnet not on PATH. Run with -InstallRuntime for JDK/Python; .NET runtime is separate: winget install Microsoft.DotNet.Runtime.6" -ForegroundColor Red
         return $false
     }
 
@@ -472,76 +550,6 @@ function Install-Il2CppDumper {
     }
 }
 
-function Install-GhidraCli {
-    param([string]$ToolsDir)
-
-    $targetDir = Join-Path $ToolsDir "ghidra-cli"
-    $targetBin = Join-Path $targetDir "ghidra.exe"
-
-    if (Test-Path -LiteralPath $targetBin) {
-        Write-Host "  [SKIP] ghidra-cli already at $targetBin" -ForegroundColor Yellow
-        return $true
-    }
-
-    $existing = Get-Command "ghidra" -ErrorAction SilentlyContinue
-    if ($existing) {
-        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        Copy-Item -LiteralPath $existing.Source -Destination $targetBin -Force
-        Write-Host ("  [OK]   Copied existing ghidra-cli from PATH to {0}" -f $targetBin) -ForegroundColor Green
-        return $true
-    }
-
-    $cargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-    if (-not $cargo) {
-        Write-Host "  [FAIL] cargo not found. Re-run with -InstallRuntime or install Rust from https://rustup.rs/" -ForegroundColor Red
-        return $false
-    }
-
-    Write-Host "  Installing ghidra-cli via cargo (this may take a few minutes)..." -ForegroundColor Cyan
-    $repoDir = Join-Path $env:TEMP "ghidra-cli-src"
-    if (Test-Path -LiteralPath $repoDir) { Remove-Item -LiteralPath $repoDir -Recurse -Force }
-    & git clone --depth 1 https://github.com/akiselev/ghidra-cli.git $repoDir 2>&1 | Out-Null
-    if (Test-Path -LiteralPath $targetDir) { Remove-Item -LiteralPath $targetDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-    & cargo install --path $repoDir --root $targetDir 2>&1 | Out-Null
-
-    $cargoBin = Join-Path (Join-Path $targetDir "bin") "ghidra.exe"
-    if (Test-Path -LiteralPath $cargoBin) {
-        Move-Item -LiteralPath $cargoBin -Destination $targetBin -Force
-        if (Test-Path -LiteralPath (Join-Path $targetDir "bin")) {
-            Remove-Item -LiteralPath (Join-Path $targetDir "bin") -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-    Remove-Item -LiteralPath $repoDir -Recurse -Force -ErrorAction SilentlyContinue
-
-    if (Test-Path -LiteralPath $targetBin) {
-        Write-Host ("  [OK]   ghidra-cli installed at {0}" -f $targetBin) -ForegroundColor Green
-
-        $ghidraRoot = Join-Path $ToolsDir "ghidra"
-        if (Test-Path -LiteralPath $ghidraRoot) {
-            Seed-GhidraCliConfig -GhidraExe $targetBin -GhidraRoot $ghidraRoot
-        }
-        return $true
-    }
-    Write-Host "  [FAIL] cargo install did not produce $targetBin." -ForegroundColor Red
-    return $false
-}
-
-function Seed-GhidraCliConfig {
-    param([string]$GhidraExe, [string]$GhidraRoot)
-    $cfgDir = Join-Path $env:APPDATA "ghidra-cli"
-    $cfgFile = Join-Path $cfgDir "config.yaml"
-    if (Test-Path -LiteralPath $cfgFile) {
-        Write-Host "  [INFO] ghidra-cli config already exists: $cfgFile" -ForegroundColor DarkGray
-        return
-    }
-    New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
-    $yaml = "ghidra_install_dir: `"$($GhidraRoot -replace '\\','\\\\')`"`n"
-    Set-Content -LiteralPath $cfgFile -Value $yaml -Encoding UTF8
-    Write-Host "  [FIX] Seeded ghidra-cli config: $cfgFile" -ForegroundColor Cyan
-    Write-Host "         (pointed at $GhidraRoot)" -ForegroundColor Cyan
-}
-
 $startSweep = Clear-RetkTemp
 
 Write-Host "RE Toolkit Setup" -ForegroundColor Magenta
@@ -557,7 +565,6 @@ if ($InstallRuntime) {
     New-Item -ItemType Directory -Path $Runtime -Force | Out-Null
     Invoke-Install "Java"   { Install-Java   -Major     $JdkVersion    | Out-Null }
     Invoke-Install "Python" { Install-Python -Version   $PythonVersion | Out-Null }
-    Invoke-Install "Rust"   { Install-Rust   -Toolchain $RustToolchain | Out-Null }
     Refresh-Path
 }
 
@@ -600,8 +607,14 @@ if (Test-Path -LiteralPath $portableJavaExe) {
 $python = Test-Command "python"
 $pythonOk = $python.Found
 if ($python.Found) {
-    $pyVer = & python --version 2>&1
-    Write-Host ("  [OK]   python                {0}" -f $pyVer) -ForegroundColor Green
+    try {
+        $pyVer = & $python.Path --version 2>&1
+        Write-Host ("  [OK]   python                {0}" -f $pyVer) -ForegroundColor Green
+    }
+    catch {
+        Write-Host ("  [WARN] python                found but failed to run: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        $pythonOk = $false
+    }
 } elseif (Test-Path -LiteralPath $PythonDir) {
     Write-Host ("  [OK]   python                (portable) {0}" -f $PythonDir) -ForegroundColor Green
     $pythonOk = $true
@@ -632,13 +645,6 @@ if ($uv.Found) {
     Write-Host "  [WARN] uv                    NOT FOUND. Install: irm https://astral.sh/uv/install.ps1 | iex" -ForegroundColor Yellow
 }
 
-$cargo = Test-Command "cargo"
-if ($cargo.Found) {
-    Write-Host ("  [OK]   cargo                 {0}" -f (& cargo --version)) -ForegroundColor Green
-} else {
-    Write-Host "  [WARN] cargo                 NOT FOUND. Run with -InstallRuntime." -ForegroundColor Yellow
-}
-
 Write-Section "Tool folders"
 
 $Tools = Join-Path $InstallDir "tools"
@@ -667,26 +673,18 @@ if (-not ($il2cppOk)) {
 
 $mcpOk = Test-PathExists $toolsMcp "Ghidra MCP bridge"
 if (-not ($mcpOk)) {
-    Write-Host "         Tip: install via 'uv tool install mcp-server-ghidra' or drop a wrapper script at the path above." -ForegroundColor Yellow
+    Write-Host "         Tip: re-run with -InstallGhidraMcp to install bethington/ghidra-mcp." -ForegroundColor Yellow
+}
+
+if ($InstallGhidraMcp) {
+    Invoke-Install "GhidraMCP" { Install-GhidraMcp -ToolsDir $Tools -Repo $GhidraMcpRepo -GhidraRoot $toolsGhidra | Out-Null }
+    $mcpOk = Test-PathExists $toolsMcp "Ghidra MCP bridge"
 }
 
 if ($InstallAssetRipper) {
     Invoke-Install "AssetRipper" { Install-AssetRipper -ToolsDir $Tools -Repo $AssetRipperRepo | Out-Null }
 }
 Test-PathExists $toolsRipper "AssetRipper" | Out-Null
-
-$ghidraCli = Get-Command "ghidra" -ErrorAction SilentlyContinue
-if ($ghidraCli) {
-    Write-Host ("  [OK]   ghidra-cli (binary)   {0}" -f $ghidraCli.Source) -ForegroundColor Green
-    $ghidraCliOk = $true
-} else {
-    Write-Host "  [WARN] ghidra-cli (binary)   NOT FOUND. Run with -InstallGhidraCli (requires cargo)" -ForegroundColor Yellow
-    $ghidraCliOk = $false
-}
-
-if ($InstallGhidraCli) {
-    Invoke-Install "ghidra-cli" { Install-GhidraCli -ToolsDir $Tools | Out-Null }
-}
 
 Write-Section "Workspace template"
 
@@ -731,8 +729,7 @@ if (-not $uv.Found)      { $missing += "uv" }
 if (-not (Test-Path -LiteralPath $toolsGhidra)) { $missing += "Ghidra (run -InstallGhidra)" }
 if (-not $il2cppOk)      { $missing += "Il2CppDumper (run -InstallIl2CppDumper)" }
 $ripperOk = Test-Path -LiteralPath $toolsRipper
-if (-not $mcpOk)         { $missing += "Ghidra MCP" }
-if (-not $ghidraCliOk)   { $missing += "ghidra-cli (run -InstallGhidraCli)" }
+if (-not $mcpOk)         { $missing += "Ghidra MCP (run -InstallGhidraMcp)" }
 if (-not $ripperOk)      { $missing += "AssetRipper (run -InstallAssetRipper)" }
 
 if ($missing.Count -eq 0) {
@@ -744,23 +741,21 @@ if ($missing.Count -eq 0) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + Python + Rust"
-Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra 11.x"
+Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + Python"
+Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra"
 Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper           # wklin8607/Il2CppDumper v6.7.48"
+Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraMcp              # bethington/ghidra-mcp plugin + bridge"
 Write-Host "  .\install-re-toolkit.ps1 -InstallAssetRipper            # AssetRipper/AssetRipper latest"
-Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraCli              # ghidra-cli (needs cargo; lands at tools\ghidra-cli\ghidra.exe)"
 Write-Host "  .\re.ps1 doctor                                        # check toolkit health"
 Write-Host "  .\re.ps1 init    <GameName>"
 Write-Host "  .\re.ps1 scan    <GameName> <ExtractedPath>             # detect libil2cpp.so / GameAssembly.dll"
 Write-Host "  .\re.ps1 dump    <GameName>                             # run Il2CppDumper"
-Write-Host "  .\re.ps1 import  <GameName>                             # ghidra-cli import"
-Write-Host "  .\re.ps1 analyze <GameName>                             # ghidra-cli analyze"
-Write-Host "  .\re.ps1 flow    <GameName> <ExtractedPath>             # all of the above, in order"
-Write-Host "  .\re.ps1 summary <GameName>                             # ghidra-cli summary"
-Write-Host "  .\re.ps1 ghidra-cli --% doctor                          # raw ghidra-cli passthrough"
+Write-Host "  .\re.ps1 import  <GameName>                             # Ghidra headless import, no analysis"
+Write-Host "  .\re.ps1 flow    <GameName> <ExtractedPath>             # prepare project and open PyGhidra"
 Write-Host "  .\re.ps1 ghidra-gui                                     # full GUI"
 Write-Host "  .\re.ps1 mcp                                            # Ghidra MCP bridge"
-Write-Host "  .\re.ps1 install-skill                                  # gh install-ghidra-reverse-engineering-cli skill"
+Write-Host "  In Ghidra: File > Configure > Configure All Plugins > GhidraMCP"
+Write-Host "  In Ghidra: Tools > GhidraMCP > Start MCP Server"
 
 $endSweep = Clear-RetkTemp
 if ($endSweep -gt 0) {

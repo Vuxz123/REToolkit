@@ -22,7 +22,7 @@ $ToolPaths = [ordered]@{
     JdkRoot          = Join-Path $Root  "runtime\java\jdk-21"
     JavaExe          = Join-Path $Root  "runtime\java\jdk-21\bin\java.exe"
     GhidraRoot       = Join-Path $Tools "ghidra"
-    GhidraCli        = Join-Path $Tools "ghidra-cli\ghidra.exe"
+    GhidraMcpBridge  = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
     GhidraGuiBat     = Join-Path $Tools "ghidra\ghidraRun.bat"
     PyGhidraBat      = Join-Path $Tools "ghidra\support\pyghidraRun.bat"
     AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
@@ -45,7 +45,7 @@ function Assert-PathExists {
     if (-not $ok) {
         $hint = switch -Regex ($Name) {
             "JDK 21"       { "Run local JDK installer, then ensure runtime\java\jdk-21\bin\java.exe exists." }
-            "Ghidra CLI"   { "Install Rust Ghidra CLI into tools\ghidra-cli\ghidra.exe." }
+            "Ghidra MCP"   { "Run .\install-re-toolkit.ps1 -InstallGhidraMcp." }
             "Ghidra GUI"   { "Install Ghidra into tools\ghidra." }
             "PyGhidra"     { "Check tools\ghidra\support\pyghidraRun.bat." }
             "Headless"     { "Check tools\ghidra\support\analyzeHeadless.bat." }
@@ -170,66 +170,6 @@ function Invoke-NativeProcess {
     }
 }
 
-function Invoke-GhidraCli {
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0)] [string[]]$CliArgs,
-        [Parameter()] [string]$OutFile
-    )
-
-    if ($null -eq $CliArgs) { $CliArgs = @() }
-
-    Assert-PathExists $ToolPaths.GhidraCli "Ghidra CLI"
-    Assert-PathExists $ToolPaths.JavaExe   "Toolkit JDK 21"
-
-    # Keep all global CLI options before the subcommand.
-    $base = @("--java-home", $ToolPaths.JdkRoot) + $CliArgs
-
-    # Use System.Diagnostics.Process instead of PowerShell native redirection.
-    # Windows PowerShell can turn native stderr into NativeCommandError even for normal logs
-    # such as "Starting Ghidra bridge...".
-    $result = Invoke-WithToolkitEnv {
-        Invoke-NativeProcess -FilePath $ToolPaths.GhidraCli -Arguments $base -WorkingDirectory $Root
-    }
-
-    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
-    if ($null -eq $result) { throw "Invoke-GhidraCli internal error: process result is null." }
-
-    $outputLines = @($result.Lines)
-
-    if ($OutFile) {
-        $dir = Split-Path -Parent $OutFile
-        if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        $outputLines | Out-File -LiteralPath $OutFile -Encoding UTF8
-        Write-Host ("Wrote: {0}" -f $OutFile) -ForegroundColor DarkGray
-    }
-    else {
-        $outputLines | ForEach-Object { Write-Host $_ }
-    }
-
-    if ($result.ExitCode -ne 0) {
-        $errText = ($outputLines | Select-Object -Last 16) -join "`n"
-        $cmdLine = ($base -join " ")
-
-        $bridgeHint = ""
-        if ($errText -match "Starting Ghidra bridge|bridge|lock|already open|in use") {
-            $bridgeHint = @"
-
-Bridge hint:
-- Opening the Ghidra GUI is not the same as having the CLI bridge ready.
-- Run: .\re.ps1 ghidra status
-- Then: .\re.ps1 ghidra ping
-- If the bridge is not running, either start it from the GUI/plugin or close the GUI and let the CLI start its own bridge.
-- If the project is locked by the open GUI, close the GUI before running CLI commands that create/start a bridge on the same project.
-"@
-        }
-
-        throw "ghidra-cli exited with code $($result.ExitCode).`nCommand: $cmdLine`nLast output:`n$errText$bridgeHint"
-    }
-
-    return $outputLines
-}
-
 function Invoke-AnalyzeHeadless {
     param([Parameter(Mandatory)] [string[]]$HeadlessArgs)
 
@@ -330,34 +270,6 @@ function Invoke-NativeProcessHeartbeat {
         StdErr   = ""
         Command  = $commandLine
     }
-}
-
-function Invoke-GhidraCliHeartbeat {
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0)] [string[]]$CliArgs,
-        [string]$Activity = "Ghidra CLI",
-        [string]$LogFile
-    )
-
-    if ($null -eq $CliArgs) { $CliArgs = @() }
-    Assert-PathExists $ToolPaths.GhidraCli "Ghidra CLI"
-    Assert-PathExists $ToolPaths.JavaExe   "Toolkit JDK 21"
-
-    $base = @("--java-home", $ToolPaths.JdkRoot) + $CliArgs
-
-    $result = Invoke-WithToolkitEnv {
-        Invoke-NativeProcessHeartbeat -FilePath $ToolPaths.GhidraCli -Arguments $base -WorkingDirectory $Root -Activity $Activity -LogFile $LogFile
-    }
-
-    if ($result -is [array]) { $result = $result | Select-Object -Last 1 }
-    if ($null -eq $result) { throw "Invoke-GhidraCliHeartbeat internal error: process result is null." }
-
-    if ($result.ExitCode -ne 0) {
-        throw "ghidra-cli exited with code $($result.ExitCode).`nCommand: $($result.Command)`nCheck console output above and log: $LogFile"
-    }
-
-    return @($result.Lines)
 }
 
 function Invoke-AnalyzeHeadlessHeartbeat {
@@ -490,7 +402,7 @@ Ghidra project is locked:
 $($Project.ghidraProjectDir)\$($Project.ghidraProjectName)
 
 Most likely cause:
-- The Ghidra GUI is open on this project, or another ghidra-cli/bridge/headless process is still running.
+- The Ghidra GUI is open on this project, or another Ghidra MCP/headless process is still running.
 
 Fix:
 1. Save your work in Ghidra GUI.
@@ -501,8 +413,8 @@ Fix:
 $processText
 
 Note:
-- ghidra-cli/analyzeHeadless cannot analyze a project that is locked by the GUI.
-- If you want to keep the GUI open, use a GUI-side bridge/MCP plugin instead of headless analyze on the same project.
+- analyzeHeadless cannot analyze a project that is locked by the GUI.
+- If you want to keep the GUI open, use the GhidraMCP plugin from that GUI instead of headless analyze on the same project.
 "@
 }
 
@@ -866,10 +778,9 @@ function Import-GhidraProgram {
     Write-Host "Note    : this step intentionally does NOT run Ghidra analysis." -ForegroundColor DarkGray
 
     # Important:
-    # Do NOT use ghidra-cli import here.
-    # ghidra-cli may try to start/connect a bridge, which can hang/fail if the bridge
-    # is not ready. For the toolkit flow we only need a plain project import, so the
-    # official Ghidra headless importer is simpler and avoids bridge issues.
+    # Use Ghidra's official headless importer here, not an agent-side bridge.
+    # The toolkit flow only needs a plain project import; interactive queries
+    # should happen later through the GhidraMCP GUI plugin.
     $headlessArgs = @(
         [string]$project.ghidraProjectDir,
         [string]$project.ghidraProjectName,
@@ -939,25 +850,22 @@ function Analyze-GhidraProgram {
     Write-Host "== Analyze: $GameName ==" -ForegroundColor Magenta
     Write-Host "Program : $($project.ghidraProgramName)" -ForegroundColor DarkGray
     Write-Host "Log     : $logFile" -ForegroundColor DarkGray
-    Write-Host "Tip     : this mode does not capture Ghidra output; it lets Ghidra print directly and adds a heartbeat." -ForegroundColor DarkGray
+    Write-Host "Mode    : analyzeHeadless -process with heartbeat; MCP queries stay in the GUI/plugin." -ForegroundColor DarkGray
 
     $success = $false
     try {
         try {
-            Invoke-GhidraCliHeartbeat @(
-                "--projects-dir", $project.ghidraProjectDir,
-                "--project",      $project.ghidraProjectName,
-                "--program",      $project.ghidraProgramName,
-                "analyze"
+            Invoke-AnalyzeHeadlessHeartbeat @(
+                $project.ghidraProjectDir,
+                $project.ghidraProjectName,
+                "-process", $project.ghidraProgramName
             ) -Activity "Ghidra analyze: $GameName" -LogFile $logFile | Out-Null
             $success = $true
         }
         catch {
             $message = $_.Exception.Message
-            Write-Host "[WARN] ghidra-cli analyze failed." -ForegroundColor Yellow
-            Write-Host $message -ForegroundColor DarkYellow
             Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
-            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "ghidra-cli failed: $message"
+            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "analyzeHeadless failed: $message"
 
             if (Test-GhidraLockError $message) {
                 $lockMessage = New-GhidraProjectLockedMessage -Project $project
@@ -965,28 +873,7 @@ function Analyze-GhidraProgram {
                 Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $lockMessage
                 throw $lockMessage
             }
-
-            Write-Host "[WARN] Trying analyzeHeadless -process fallback..." -ForegroundColor Yellow
-            Add-Content -LiteralPath $logFile -Encoding UTF8 -Value "Trying analyzeHeadless fallback..."
-
-            try {
-                Invoke-AnalyzeHeadlessHeartbeat @(
-                    $project.ghidraProjectDir,
-                    $project.ghidraProjectName,
-                    "-process", $project.ghidraProgramName
-                ) -Activity "Ghidra headless analyze: $GameName" -LogFile $logFile | Out-Null
-                $success = $true
-            }
-            catch {
-                $headlessMessage = $_.Exception.Message
-                if (Test-GhidraLockError $headlessMessage) {
-                    $lockMessage = New-GhidraProjectLockedMessage -Project $project
-                    Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ""
-                    Add-Content -LiteralPath $logFile -Encoding UTF8 -Value $lockMessage
-                    throw $lockMessage
-                }
-                throw
-            }
+            throw
         }
     }
     finally {
@@ -1027,63 +914,18 @@ function Apply-GhidraSymbols {
         return
     }
 
-    $scriptDir = Split-Path -Parent $ghidraPy
-    $scriptName = Split-Path -Leaf $ghidraPy
-    $errors = @()
-
-    try {
-        Invoke-GhidraCli @(
-            "--projects-dir", $project.ghidraProjectDir,
-            "--project",      $project.ghidraProjectName,
-            "--program",      $project.ghidraProgramName,
-            "script", "run",  $ghidraPy
-        ) | Out-Null
-        $project.status.symbolsApplied = $true
-        Save-Project $GameName $project
-        Write-Host "Symbols applied via ghidra-cli script run." -ForegroundColor Green
-        return
-    }
-    catch {
-        $errors += "ghidra-cli script run failed: $($_.Exception.Message)"
-    }
-
-    try {
-        Invoke-GhidraCli @(
-            "--projects-dir", $project.ghidraProjectDir,
-            "--project",      $project.ghidraProjectName,
-            "--program",      $project.ghidraProgramName,
-            "script",         $ghidraPy
-        ) | Out-Null
-        $project.status.symbolsApplied = $true
-        Save-Project $GameName $project
-        Write-Host "Symbols applied via ghidra-cli script." -ForegroundColor Green
-        return
-    }
-    catch {
-        $errors += "ghidra-cli script failed: $($_.Exception.Message)"
-    }
-
-    Write-Host "[WARN] Ghidra CLI script execution failed. Trying analyzeHeadless -postScript fallback..." -ForegroundColor Yellow
-    try {
-        Invoke-AnalyzeHeadless @(
-            $project.ghidraProjectDir,
-            $project.ghidraProjectName,
-            "-process",    $project.ghidraProgramName,
-            "-scriptPath", $scriptDir,
-            "-postScript", $scriptName
-        ) | Out-Null
-        $project.status.symbolsApplied = $true
-        Save-Project $GameName $project
-        Write-Host "Symbols applied via analyzeHeadless -postScript." -ForegroundColor Green
-        return
-    }
-    catch {
-        $errors += "analyzeHeadless -postScript failed: $($_.Exception.Message)"
-    }
-
-    Write-Host "[FAIL] Could not apply symbols automatically." -ForegroundColor Red
-    foreach ($e in $errors) { Write-Host "  - $e" -ForegroundColor DarkYellow }
-    Write-Host "Fallback: .\re.ps1 pyghidra-gui, then run ghidra.py manually." -ForegroundColor Yellow
+    Write-Host "== Apply symbols manually: $GameName ==" -ForegroundColor Magenta
+    Write-Host ("Project dir : {0}" -f $project.ghidraProjectDir) -ForegroundColor Gray
+    Write-Host ("Project name: {0}" -f $project.ghidraProjectName) -ForegroundColor Gray
+    Write-Host ("Program     : {0}" -f $project.ghidraProgramName) -ForegroundColor Gray
+    Write-Host ("Script      : {0}" -f $ghidraPy) -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "MCP-first mode does not run ghidra.py through ghidra-cli." -ForegroundColor Cyan
+    Write-Host "Manual steps in Ghidra/PyGhidra GUI:" -ForegroundColor Cyan
+    Write-Host "  1. Open the project and program above." -ForegroundColor Gray
+    Write-Host "  2. Run Auto Analysis if it has not already completed." -ForegroundColor Gray
+    Write-Host "  3. Open Script Manager and run the ghidra.py path above." -ForegroundColor Gray
+    Write-Host "  4. Start MCP server with: Tools > GhidraMCP > Start MCP Server" -ForegroundColor Gray
 }
 
 function Get-NotesDir {
@@ -1224,13 +1066,19 @@ function New-AgentContext {
     $null = $sb.AppendLine("## Useful commands")
     $null = $sb.AppendLine('```powershell')
     $null = $sb.AppendLine((".\re.ps1 status {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 summary {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 strings {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 functions {0}" -f $GameName))
+    $null = $sb.AppendLine((".\re.ps1 open {0}" -f $GameName))
     $null = $sb.AppendLine((".\re.ps1 candidates {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 symbols {0}" -f $GameName))
-    $null = $sb.AppendLine((".\re.ps1 ghidra-cli --project {0} --program {1} function list" -f $project.ghidraProjectName, $project.ghidraProgramName))
+    $null = $sb.AppendLine(".\re.ps1 mcp")
     $null = $sb.AppendLine('```')
+    $null = $sb.AppendLine("")
+
+    $null = $sb.AppendLine("## MCP workflow for agents")
+    $null = $sb.AppendLine("")
+    $null = $sb.AppendLine("1. Open the imported project/program in Ghidra or PyGhidra GUI.")
+    $null = $sb.AppendLine("2. Enable the plugin: File > Configure > Configure All Plugins > GhidraMCP.")
+    $null = $sb.AppendLine("3. Start the server: Tools > GhidraMCP > Start MCP Server.")
+    $null = $sb.AppendLine("4. Start the bridge from the AI client config or with `.\re.ps1 mcp`.")
+    $null = $sb.AppendLine(("5. In the MCP client: `list_instances`, then `connect_instance {0}`." -f $GameName))
     $null = $sb.AppendLine("")
 
     $null = $sb.AppendLine("## Suggested first searches")
@@ -1257,31 +1105,24 @@ function Run-NotesPipeline {
     New-AgentContext $GameName
 }
 
-function Run-GhidraQueryAndCapture {
-    param(
-        [Parameter(Mandatory)] [string]$GameName,
-        [Parameter(Mandatory)] [string[]]$SubArgs,
-        [Parameter(Mandatory)] [string]$OutFileName
-    )
+function Show-McpFirstQueryMessage {
+    param([Parameter()] [string]$GameName)
 
-    $project = Read-Project $GameName
-    if (-not $project.status.imported) {
-        throw "Program not imported. Run: .\re.ps1 import $GameName"
+    Write-Host "Ghidra CLI commands are disabled in this MCP-first toolkit." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Use GhidraMCP for summary, function, string, xref, symbol, and decompile queries:" -ForegroundColor Cyan
+    Write-Host "  1. Open the project/program in Ghidra or PyGhidra GUI." -ForegroundColor Gray
+    Write-Host "  2. Enable: File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Gray
+    Write-Host "  3. Start:  Tools > GhidraMCP > Start MCP Server" -ForegroundColor Gray
+    Write-Host "  4. Start the MCP bridge through your AI client or run: .\re.ps1 mcp" -ForegroundColor Gray
+    if ($GameName) {
+        Write-Host ("  5. In the MCP client: list_instances, then connect_instance {0}" -f $GameName) -ForegroundColor Gray
     }
-
-    $notesDir = Get-NotesDir $GameName
-    New-Item -ItemType Directory -Force -Path $notesDir | Out-Null
-    $out = Join-Path $notesDir $OutFileName
-
-    $cliArgs = @(
-        "--projects-dir", $project.ghidraProjectDir,
-        "--project",      $project.ghidraProjectName,
-        "--program",      $project.ghidraProgramName
-    ) + $SubArgs
-
-    Invoke-GhidraCli -CliArgs $cliArgs -OutFile $out | Out-Null
-
-    Write-Host ("Wrote: {0}" -f $out) -ForegroundColor Green
+    else {
+        Write-Host "  5. In the MCP client: list_instances, then connect_instance <GameName>" -ForegroundColor Gray
+    }
+    Write-Host ""
+    Write-Host "Tip: .\re.ps1 status <GameName> and .\re.ps1 path <GameName> still work for local project state." -ForegroundColor DarkGray
 }
 
 
@@ -1303,8 +1144,7 @@ function Open-PyGhidraProject {
     Write-Host ("Program     : {0}" -f $project.ghidraProgramName) -ForegroundColor DarkGray
     Show-GhidraProjectOpenInfo -Project $project
     Write-Host "Tip: Let Ghidra run Auto Analysis in the GUI, then run ghidra.py manually if needed." -ForegroundColor Cyan
-    Write-Host "Opening PyGhidra the same way as: .
-e.ps1 pyghidra-gui" -ForegroundColor DarkGray
+    Write-Host "Opening PyGhidra the same way as: .\re.ps1 pyghidra-gui" -ForegroundColor DarkGray
     Write-Host "Note: project arguments are not passed to pyghidraRun.bat because that launcher may exit silently when it receives unsupported args." -ForegroundColor DarkGray
 
     # Important: keep this identical in behavior to the working `pyghidra-gui` wrapper.
@@ -1384,21 +1224,21 @@ function Show-Usage {
     Write-Host "  .\re.ps1 open       <GameName>                         # open imported project in PyGhidra GUI"
     Write-Host "  .\re.ps1 path       <GameName>                         # print Ghidra project folder/link for GUI open"
     Write-Host "  .\re.ps1 status     <GameName>"
-    Write-Host "  .\re.ps1 summary    <GameName>"
-    Write-Host "  .\re.ps1 strings    <GameName>"
-    Write-Host "  .\re.ps1 functions  <GameName>"
-    Write-Host "  .\re.ps1 stats      <GameName>"
     Write-Host "  .\re.ps1 candidates <GameName>"
     Write-Host "  .\re.ps1 context    <GameName>"
     Write-Host "  .\re.ps1 notes      <GameName>"
     Write-Host ""
     Write-Host "Tool wrappers:"
-    Write-Host "  .\re.ps1 ghidra-cli <args...>"
-    Write-Host "  .\re.ps1 ghidra     <args...>       # alias for ghidra-cli"
     Write-Host "  .\re.ps1 ghidra-gui"
     Write-Host "  .\re.ps1 pyghidra-gui"
     Write-Host "  .\re.ps1 il2cppdumper <args...>"
-    Write-Host "  .\re.ps1 mcp"
+    Write-Host "  .\re.ps1 mcp                         # MCP bridge for AI clients"
+    Write-Host ""
+    Write-Host "MCP query workflow:"
+    Write-Host "  1. Open project/program in Ghidra or PyGhidra GUI."
+    Write-Host "  2. Enable: File > Configure > Configure All Plugins > GhidraMCP"
+    Write-Host "  3. Start:  Tools > GhidraMCP > Start MCP Server"
+    Write-Host "  4. Start the client bridge: .\re.ps1 mcp"
 }
 
 switch ($Command) {
@@ -1420,12 +1260,6 @@ switch ($Command) {
             Write-Host "Toolkit JDK:" -ForegroundColor Cyan
             & $ToolPaths.JavaExe -version
         }
-        if (Test-Path -LiteralPath $ToolPaths.GhidraCli -and Test-Path -LiteralPath $ToolPaths.JavaExe) {
-            Write-Host ""
-            Write-Host "Ghidra CLI doctor:" -ForegroundColor Cyan
-            try { Invoke-GhidraCli @("doctor") | Out-Null }
-            catch { Write-Host $_ -ForegroundColor Yellow }
-        }
     }
 
     "init"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 init <GameName>" } New-Workspace $Rest[0] }
@@ -1445,27 +1279,21 @@ switch ($Command) {
 
     "summary" {
         if (-not $Rest[0]) { throw "Usage: .\re.ps1 summary <GameName>" }
-        $project = Read-Project $Rest[0]
-        Invoke-GhidraCli @(
-            "--projects-dir", $project.ghidraProjectDir,
-            "--project",      $project.ghidraProjectName,
-            "--program",      $project.ghidraProgramName,
-            "summary"
-        ) | Out-Null
+        Show-McpFirstQueryMessage $Rest[0]
     }
 
-    "strings"   { if (-not $Rest[0]) { throw "Usage: .\re.ps1 strings <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("strings")        "strings.txt" }
-    "functions" { if (-not $Rest[0]) { throw "Usage: .\re.ps1 functions <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("function", "list") "functions.txt" }
-    "stats"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 stats <GameName>" } Run-GhidraQueryAndCapture $Rest[0] @("stats")          "stats.txt" }
+    "strings"   { if (-not $Rest[0]) { throw "Usage: .\re.ps1 strings <GameName>" } Show-McpFirstQueryMessage $Rest[0] }
+    "functions" { if (-not $Rest[0]) { throw "Usage: .\re.ps1 functions <GameName>" } Show-McpFirstQueryMessage $Rest[0] }
+    "stats"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 stats <GameName>" } Show-McpFirstQueryMessage $Rest[0] }
 
     "ghidra-cli" {
-        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 ghidra-cli <args...>" }
-        Invoke-GhidraCli $Rest | Out-Null
+        Show-McpFirstQueryMessage
+        exit 1
     }
 
     "ghidra" {
-        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 ghidra <args...>" }
-        Invoke-GhidraCli $Rest | Out-Null
+        Show-McpFirstQueryMessage
+        exit 1
     }
 
     "ghidra-gui" {
@@ -1502,7 +1330,7 @@ switch ($Command) {
             if ($LASTEXITCODE -ne 0) { throw "MCP bridge exited with code $LASTEXITCODE" }
         }
         else {
-            foreach ($candidate in @("ghidra-mcp-bridge", "mcp-server-ghidra", "bridge_mcp_ghidra")) {
+            foreach ($candidate in @("ghidra-mcp-bridge", "bridge_mcp_ghidra")) {
                 $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
                 if ($cmd) {
                     & $cmd

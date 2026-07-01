@@ -1,79 +1,153 @@
-# Hướng dẫn sử dụng REToolkit
+# REToolkit Tutorial: MCP-First Ghidra Workflow
 
-Pipeline hỗ trợ phân tích Unity IL2CPP bằng Il2CppDumper, Ghidra và PyGhidra.
+This tutorial prepares a Unity IL2CPP project, opens it in Ghidra/PyGhidra, and
+uses GhidraMCP for AI-assisted queries.
 
-## Phạm vi
-
-Chỉ dùng toolkit cho mục đích học tập, phân tích kỹ thuật hoặc build/game mà bạn có quyền nghiên cứu. Không dùng để bypass DRM, anti-cheat, payment/IAP, license hoặc phát tán source/assets không thuộc quyền sở hữu.
-
-## Flow khuyến nghị
+## 1. Prepare PowerShell
 
 ```powershell
 cd C:\Users\DPC00176\REToolkit
-Unblock-File .\re.ps1
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+Unblock-File .\re.ps1
+Unblock-File .\install-re-toolkit.ps1
+```
 
-.\re.ps1 doctor
+## 2. Install Core Tools
+
+```powershell
+.\install-re-toolkit.ps1 -InstallRuntime
+.\install-re-toolkit.ps1 -InstallGhidra
+.\install-re-toolkit.ps1 -InstallIl2CppDumper
+.\install-re-toolkit.ps1 -InstallGhidraMcp
+```
+
+`-InstallGhidraMcp` installs from:
+
+```text
+https://github.com/bethington/ghidra-mcp
+```
+
+It copies the Python bridge to `tools/ghidra-mcp` and deploys the Ghidra GUI
+extension with the upstream `python -m tools.setup ... deploy` flow.
+
+Optional:
+
+```powershell
+.\install-re-toolkit.ps1 -InstallAssetRipper
+```
+
+## 3. Enable GhidraMCP In The GUI
+
+1. Start Ghidra or PyGhidra:
+
+```powershell
 .\re.ps1 pyghidra-gui
+```
+
+2. Open a CodeBrowser window for your project/program.
+3. Enable the plugin:
+
+```text
+File > Configure > Configure All Plugins > GhidraMCP
+```
+
+4. Optional: configure port/settings:
+
+```text
+CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
+```
+
+5. Start the server:
+
+```text
+Tools > GhidraMCP > Start MCP Server
+```
+
+## 4. Prepare A Game Project
+
+For an APK/XAPK/AAB/ZIP:
+
+```powershell
 .\re.ps1 flow FoodHunt "D:\Path\To\FoodHunt.apk"
 ```
 
-Flow hiện tại:
+For an already extracted folder:
 
-1. Tạo/reuse workspace.
-2. Scan hoặc extract build.
-3. Tìm `libil2cpp.so`/`GameAssembly.dll` và `global-metadata.dat`.
-4. Chạy Il2CppDumper.
-5. Import Ghidra project bằng `analyzeHeadless -import -overwrite -noanalysis`.
-6. Tạo `candidates.md` và `agent-context.md`.
-7. In path/link mở project.
-8. Mở PyGhidra GUI.
+```powershell
+.\re.ps1 flow FoodHunt "D:\Path\To\FoodHunt_Extracted"
+```
 
-Flow không chạy headless analyze và không tự apply symbol. Auto Analysis và `ghidra.py` làm thủ công trong GUI.
+The flow does this:
 
-## Lệnh chính
+1. Create or reuse `workspaces/FoodHunt`.
+2. Extract or scan the build.
+3. Find `libil2cpp.so` or `GameAssembly.dll`.
+4. Find `global-metadata.dat`.
+5. Run Il2CppDumper.
+6. Import the native binary into Ghidra with no analysis.
+7. Generate `candidates.md` and `agent-context.md`.
+8. Open PyGhidra.
+
+## 5. Finish Manual Ghidra Setup
+
+In the GUI:
+
+1. Open `workspaces/FoodHunt/03_GhidraProject`.
+2. Open the imported program, usually `libil2cpp.so` or `GameAssembly.dll`.
+3. Run Auto Analysis.
+4. Run this script from Script Manager if you need Il2CppDumper symbols:
+
+```text
+workspaces/FoodHunt/02_Il2CppDumperOutput/ghidra.py
+```
+
+5. Start the MCP server:
+
+```text
+Tools > GhidraMCP > Start MCP Server
+```
+
+## 6. Connect The AI Client
+
+Configure your AI client to launch:
+
+```powershell
+.\re.ps1 mcp
+```
+
+Then use the Ghidra MCP tools:
+
+```text
+list_instances
+connect_instance FoodHunt
+list_tool_groups
+load_tool_group function
+load_tool_group listing
+```
+
+After `connect_instance <GameName>`, use MCP tools for function lists,
+decompilation, strings, xrefs, symbols, comments, and type work.
+
+## 7. Useful Local Commands
 
 ```powershell
 .\re.ps1 doctor
-.\re.ps1 init <GameName>
-.\re.ps1 add <GameName> <apk-or-xapk-or-aab-or-zip>
-.\re.ps1 scan <GameName> <ExtractedPath>
-.\re.ps1 dump <GameName>
-.\re.ps1 import <GameName>
-.\re.ps1 flow <GameName> <apk-or-ExtractedPath>
-.\re.ps1 open <GameName>
-.\re.ps1 path <GameName>
-.\re.ps1 status <GameName>
-.\re.ps1 candidates <GameName>
-.\re.ps1 context <GameName>
-.\re.ps1 notes <GameName>
-.\re.ps1 pyghidra-gui
+.\re.ps1 status FoodHunt
+.\re.ps1 path FoodHunt
+.\re.ps1 candidates FoodHunt
+.\re.ps1 context FoodHunt
+.\re.ps1 notes FoodHunt
+.\re.ps1 mcp
 ```
 
-## Output quan trọng
+Legacy query aliases such as `summary`, `strings`, `functions`, and `stats`
+only print MCP guidance now. Query the live Ghidra program through MCP instead.
 
-- `project.re.json`: trạng thái project.
-- `01_Extracted`: build đã giải nén.
-- `02_Il2CppDumperOutput/dump.cs`: skeleton/search class.
-- `02_Il2CppDumperOutput/DummyDll`: DLL giả.
-- `02_Il2CppDumperOutput/ghidra.py`: script apply symbol.
-- `03_GhidraProject`: Ghidra project.
-- `04_Notes/candidates.md`: class gợi ý.
-- `04_Notes/agent-context.md`: context cho agent/AI.
+## 8. Common Problems
 
-## Sau khi GUI mở
-
-1. File > Open Project...
-2. Chọn `workspaces/<GameName>/03_GhidraProject`.
-3. Mở program `libil2cpp.so` hoặc `GameAssembly.dll`.
-4. Chạy Auto Analysis trong GUI.
-5. Chạy `ghidra.py` từ `02_Il2CppDumperOutput` nếu cần rename symbol.
-6. Dùng `dump.cs`, `DummyDll`, `candidates.md` để trace và reconstruct.
-
-## Lỗi thường gặp
-
-- `re.ps1 is not digitally signed`: chạy `Unblock-File .\re.ps1` hoặc `Set-ExecutionPolicy -Scope Process Bypass -Force`.
-- `Unable to lock project`: đóng Ghidra GUI/bridge đang mở project đó.
-- `Bridge not responding to ping`: tránh dùng Ghidra CLI khi GUI đang lock project; flow hiện tại không dùng CLI import.
-- PyGhidra không mở từ `open`: thử trực tiếp `.\re.ps1 pyghidra-gui`, sau đó mở project thủ công.
-- Il2CppDumper báo `This file may be protected`: kiểm tra xem `dump.cs`/`DummyDll` có sinh ra không trước khi kết luận fail.
+- `re.ps1 is not digitally signed`: run `Unblock-File .\re.ps1` and use process-scope execution policy bypass.
+- `GhidraMCP` menu is missing: rerun `-InstallGhidraMcp`, restart Ghidra, then enable the plugin from `File > Configure > Configure All Plugins > GhidraMCP`.
+- MCP cannot see `FoodHunt`: open the correct project/program in CodeBrowser and start `Tools > GhidraMCP > Start MCP Server`.
+- `Unable to lock project`: close other Ghidra/headless processes for that project, or use MCP from the already-open GUI.
+- PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui`, then open the project manually.
+- Il2CppDumper says `This file may be protected`: check whether `dump.cs`, `DummyDll`, and `ghidra.py` were still generated.
