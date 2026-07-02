@@ -28,7 +28,7 @@ $ToolPaths = [ordered]@{
     GhidraRoot       = Join-Path $Tools "ghidra"
     GhidraMcpBridge  = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
     GhidraGuiBat     = Join-Path $Tools "ghidra\ghidraRun.bat"
-    PyGhidraLauncher = Join-Path $Tools "ghidra\Ghidra\Features\PyGhidra\support\pyghidra_launcher.py"
+    PyGhidraDist     = Join-Path $Tools "ghidra\Ghidra\Features\PyGhidra\pypkg\dist"
     AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
     Dumper           = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
 }
@@ -52,7 +52,7 @@ function Assert-PathExists {
             "Python"       { "Run .\install-re-toolkit.ps1 -InstallRuntime, then ensure runtime\python\python-3.12\python.exe exists." }
             "Ghidra MCP"   { "Run .\install-re-toolkit.ps1 -InstallGhidraMcp." }
             "Ghidra GUI"   { "Install Ghidra into tools\ghidra." }
-            "PyGhidra"     { "Check tools\ghidra\Ghidra\Features\PyGhidra\support\pyghidra_launcher.py." }
+            "PyGhidra"     { "Check tools\ghidra\Ghidra\Features\PyGhidra\pypkg\dist." }
             "Headless"     { "Check tools\ghidra\support\analyzeHeadless.bat." }
             "Il2CppDumper" { "Install Il2CppDumper into tools\Il2CppDumper\Il2CppDumper.exe." }
             default         { "" }
@@ -139,29 +139,121 @@ function Ensure-PyGhidraPython {
     return $ToolPaths.PyGhidraPython
 }
 
+function Ensure-PyGhidraPackage {
+    param([Parameter(Mandatory)] [string]$PythonExe)
+
+    Assert-PathExists $ToolPaths.PyGhidraDist "PyGhidra package bundle" -Directory
+
+    $current = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($current)) {
+        return $current.Trim()
+    }
+
+    Write-Host ("Installing bundled PyGhidra into local venv from: {0}" -f $ToolPaths.PyGhidraDist) -ForegroundColor Cyan
+    & $PythonExe -m pip install --no-index -f $ToolPaths.PyGhidraDist pyghidra
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install bundled PyGhidra into local venv. Exit code: $LASTEXITCODE" }
+
+    $installed = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installed)) {
+        throw "PyGhidra package install finished but importlib.metadata could not read the version."
+    }
+
+    return $installed.Trim()
+}
+
 function Invoke-PyGhidraGui {
     param([Parameter()] [string[]]$Arguments)
 
     if ($null -eq $Arguments) { $Arguments = @() }
 
     $pyGhidraPython = Ensure-PyGhidraPython
-    Assert-PathExists $ToolPaths.PyGhidraLauncher "PyGhidra launcher"
     Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+    $pyGhidraVersion = Ensure-PyGhidraPackage -PythonExe $pyGhidraPython
 
     $vmArgs = Get-PyGhidraVmArgs
+    $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $ToolPaths.GhidraRoot)
+    if ($vmArgs.Count -gt 0) { $launchArgs += $vmArgs }
+    if ($Arguments.Count -gt 0) {
+        foreach ($arg in $Arguments) {
+            if ($arg -eq "--console") {
+                Write-Host "[INFO] --console is implicit; PyGhidra is launched in the foreground." -ForegroundColor DarkGray
+                continue
+            }
+            $launchArgs += $arg
+        }
+    }
 
     Invoke-WithToolkitEnv {
         Push-Location $Root
         try {
             Write-Host ("Using PyGhidra Python: {0}" -f $pyGhidraPython) -ForegroundColor Cyan
             & $pyGhidraPython --version
-            & $pyGhidraPython $ToolPaths.PyGhidraLauncher $ToolPaths.GhidraRoot @vmArgs @Arguments
+            Write-Host ("Using PyGhidra package: {0}" -f $pyGhidraVersion) -ForegroundColor Cyan
+            & $pyGhidraPython @launchArgs
             if ($LASTEXITCODE -ne 0) { throw "PyGhidra exited with code $LASTEXITCODE" }
         }
         finally {
             Pop-Location
         }
     }
+}
+
+function Repair-Il2CppGhidraScript {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+
+    $text = Get-Content -LiteralPath $Path -Raw
+    $original = $text
+
+    $sourceTypeImport = 'from ghidra.program.model.symbol import SourceType'
+    if ($text -match 'USER_DEFINED = ghidra\.program\.model\.symbol\.SourceType\.USER_DEFINED') {
+        $text = [regex]::Replace(
+            $text,
+            'USER_DEFINED = ghidra\.program\.model\.symbol\.SourceType\.USER_DEFINED',
+            "$sourceTypeImport`r`nUSER_DEFINED = SourceType.USER_DEFINED"
+        )
+    }
+    elseif ($text -notmatch [regex]::Escape($sourceTypeImport) -and $text -match 'USER_DEFINED = SourceType\.USER_DEFINED') {
+        $text = [regex]::Replace(
+            $text,
+            'USER_DEFINED = SourceType\.USER_DEFINED',
+            "$sourceTypeImport`r`nUSER_DEFINED = SourceType.USER_DEFINED"
+        )
+    }
+
+    if ($text -notmatch 'def as_text\(') {
+        $helper = @'
+def as_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    if value is None:
+        return ""
+    return str(value)
+
+
+'@
+        $text = $text.Replace("def get_addr(addr):", $helper + "def get_addr(addr):")
+    }
+
+    $text = $text.Replace('name = name.replace(" ", "-")', 'name = as_text(name).replace(" ", "-")')
+    $text = $text.Replace(
+        'data = json.loads(open(f.absolutePath, "rb").read().decode("utf-8"))',
+        "script_json_path = f.getAbsolutePath() if hasattr(f, `"getAbsolutePath`") else f.absolutePath`r`ndata = json.loads(open(script_json_path, `"rb`").read().decode(`"utf-8`"))"
+    )
+    $text = $text.Replace('name = scriptMethod["Name"].encode("utf-8")', 'name = as_text(scriptMethod["Name"])')
+    $text = $text.Replace('value = scriptString["Value"].encode("utf-8")', 'value = as_text(scriptString["Value"])')
+    $text = $text.Replace('name = scriptMetadata["Name"].encode("utf-8")', 'name = as_text(scriptMetadata["Name"])')
+    $text = $text.Replace('name = scriptMetadataMethod["Name"].encode("utf-8")', 'name = as_text(scriptMetadataMethod["Name"])')
+
+    if ($text -ne $original) {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+        Write-Host ("  [FIX] Patched Il2CppDumper ghidra.py for PyGhidra: {0}" -f $Path) -ForegroundColor Cyan
+        return $true
+    }
+
+    return $false
 }
 
 function Join-NativeArgumentString {
@@ -814,6 +906,7 @@ function Run-Il2CppDumper {
     $dumpCs = Join-Path $project.il2cppDumperOutput "dump.cs"
     $ghidraPy = Join-Path $project.il2cppDumperOutput "ghidra.py"
     $ghidraPyFallback = Join-Path $dumperDir "ghidra.py"
+    Repair-Il2CppGhidraScript -Path $ghidraPyFallback | Out-Null
 
     if (-not (Test-Path -LiteralPath $dumpCs)) {
         throw "Il2CppDumper finished but dump.cs not found in $($project.il2cppDumperOutput)."
@@ -826,6 +919,9 @@ function Run-Il2CppDumper {
 
     if (-not (Test-Path -LiteralPath $ghidraPy)) {
         Write-Host "[WARN] ghidra.py not found. Symbols step may need manual PyGhidra fallback." -ForegroundColor Yellow
+    }
+    else {
+        Repair-Il2CppGhidraScript -Path $ghidraPy | Out-Null
     }
 
     $project.status.dumped = $true
@@ -985,6 +1081,7 @@ function Apply-GhidraSymbols {
     $ghidraPyFallback = Join-Path (Split-Path -Parent $ToolPaths.Dumper) "ghidra.py"
 
     if (-not (Test-Path -LiteralPath $ghidraPy) -and (Test-Path -LiteralPath $ghidraPyFallback)) {
+        Repair-Il2CppGhidraScript -Path $ghidraPyFallback | Out-Null
         Copy-Item -LiteralPath $ghidraPyFallback -Destination $ghidraPy -Force
         Write-Host "  [FIX] Copied ghidra.py fallback from dumper folder." -ForegroundColor Cyan
     }
@@ -993,6 +1090,8 @@ function Apply-GhidraSymbols {
         Write-Host "[WARN] ghidra.py not found. Open PyGhidra manually: .\re.ps1 pyghidra-gui" -ForegroundColor Yellow
         return
     }
+
+    Repair-Il2CppGhidraScript -Path $ghidraPy | Out-Null
 
     Write-Host "== Apply symbols manually: $GameName ==" -ForegroundColor Magenta
     Write-Host ("Project dir : {0}" -f $project.ghidraProjectDir) -ForegroundColor Gray
@@ -1212,7 +1311,7 @@ function Open-PyGhidraProject {
     $project = Read-Project $GameName
 
     Assert-PathExists $ToolPaths.PythonExe "Toolkit Python"
-    Assert-PathExists $ToolPaths.PyGhidraLauncher "PyGhidra launcher"
+    Assert-PathExists $ToolPaths.PyGhidraDist "PyGhidra package bundle" -Directory
     Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
 
     if (-not $project.status.imported) {

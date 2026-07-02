@@ -9,7 +9,7 @@ $PythonExe = Join-Path $PythonRoot "python.exe"
 $PyGhidraVenv = Join-Path $Root "runtime\python\pyghidra-venv"
 $PyGhidraPython = Join-Path $PyGhidraVenv "Scripts\python.exe"
 $GhidraRoot = Join-Path $Root "tools\ghidra"
-$PyGhidraLauncher = Join-Path $GhidraRoot "Ghidra\Features\PyGhidra\support\pyghidra_launcher.py"
+$PyGhidraDist = Join-Path $GhidraRoot "Ghidra\Features\PyGhidra\pypkg\dist"
 
 if (-not (Test-Path -LiteralPath $JdkPath)) {
     Write-Host "[FAIL] JDK 21 portable not found at: $JdkPath" -ForegroundColor Red
@@ -23,8 +23,8 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $PyGhidraLauncher)) {
-    Write-Host "[FAIL] PyGhidra launcher not found at: $PyGhidraLauncher" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $PyGhidraDist -PathType Container)) {
+    Write-Host "[FAIL] PyGhidra package bundle not found at: $PyGhidraDist" -ForegroundColor Red
     Write-Host "       Run: .\install-re-toolkit.ps1 -InstallGhidra" -ForegroundColor Yellow
     exit 1
 }
@@ -53,6 +53,28 @@ if (-not (Test-Path -LiteralPath $PyGhidraPython)) {
     }
 }
 
+function Ensure-PyGhidraPackage {
+    param([Parameter(Mandatory)] [string]$PythonExe)
+
+    $current = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($current)) {
+        return $current.Trim()
+    }
+
+    Write-Host "Installing bundled PyGhidra into local venv from: $PyGhidraDist" -ForegroundColor Cyan
+    & $PythonExe -m pip install --no-index -f $PyGhidraDist pyghidra
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install bundled PyGhidra into local venv. Exit code: $LASTEXITCODE"
+    }
+
+    $installed = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installed)) {
+        throw "PyGhidra package install finished but importlib.metadata could not read the version."
+    }
+
+    return $installed.Trim()
+}
+
 $OldJavaHome          = $env:JAVA_HOME
 $OldJavaHomeOverride  = $env:JAVA_HOME_OVERRIDE
 $OldGhidraInstallDir  = $env:GHIDRA_INSTALL_DIR
@@ -75,12 +97,25 @@ try {
 
     Write-Host "Using PyGhidra Python:" -ForegroundColor Cyan
     & $PyGhidraPython --version
+    $pyGhidraVersion = Ensure-PyGhidraPackage -PythonExe $PyGhidraPython
+    Write-Host ("Using PyGhidra package: {0}" -f $pyGhidraVersion) -ForegroundColor Cyan
 
     $vmArgs = Get-PyGhidraVmArgs
+    $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $GhidraRoot)
+    if ($vmArgs.Count -gt 0) { $launchArgs += $vmArgs }
+    if ($args.Count -gt 0) {
+        foreach ($arg in $args) {
+            if ($arg -eq "--console") {
+                Write-Host "[INFO] --console is implicit; PyGhidra is launched in the foreground." -ForegroundColor DarkGray
+                continue
+            }
+            $launchArgs += $arg
+        }
+    }
 
     Push-Location $Root
     try {
-        & $PyGhidraPython $PyGhidraLauncher $GhidraRoot @vmArgs @args
+        & $PyGhidraPython @launchArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Pop-Location
