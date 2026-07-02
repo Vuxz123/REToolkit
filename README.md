@@ -159,10 +159,15 @@ extension:
 1. Start Ghidra or PyGhidra:
 
 ```powershell
-.\re.ps1 ghidra-gui
+.\re.ps1 ghidra-gui FoodHunt
 # or
-.\re.ps1 pyghidra-gui
+.\re.ps1 pyghidra-gui FoodHunt
 ```
+
+Passing a `GameName` updates Ghidra's user preferences before launch so the
+tool opens with that workspace project as the recent/default project. Plain
+`ghidra-gui` and `pyghidra-gui` still work when you do not want to select a
+project.
 
 2. Restart Ghidra if it was already open while the installer ran.
 
@@ -294,8 +299,8 @@ After the GUI opens:
 | `context <GameName>` | Generate agent context. |
 | `analyze <GameName>` | Optional headless analysis when the GUI is closed. |
 | `symbols <GameName>` | Print manual GUI instructions for running `ghidra.py`. |
-| `ghidra-gui` | Start Ghidra GUI with toolkit env. |
-| `pyghidra-gui` | Start PyGhidra GUI with toolkit env. |
+| `ghidra-gui [GameName]` | Start Ghidra GUI with toolkit env; optional game name sets the default/recent project first. |
+| `pyghidra-gui [GameName]` | Start PyGhidra GUI with toolkit env; optional game name sets the default/recent project first. |
 | `il2cppdumper <args...>` | Raw Il2CppDumper passthrough. |
 | `mcp` | Start the GhidraMCP Python bridge for AI clients. |
 

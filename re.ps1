@@ -38,6 +38,11 @@ if (Test-Path -LiteralPath $GhidraScriptBundleHelper) {
     . $GhidraScriptBundleHelper
 }
 
+$GhidraPreferencesHelper = Join-Path $Root "scripts\ghidra-preferences.ps1"
+if (Test-Path -LiteralPath $GhidraPreferencesHelper) {
+    . $GhidraPreferencesHelper
+}
+
 $RetkScriptModules = @(
     "scripts\retk-core.ps1",
     "scripts\retk-process.ps1",
@@ -113,16 +118,26 @@ switch ($Command) {
     "ghidra-gui" {
         Assert-PathExists $ToolPaths.GhidraGuiBat "Ghidra GUI"
         Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+        $guiArgs = @($Rest)
+        if ($guiArgs.Count -gt 0 -and -not ([string]$guiArgs[0]).StartsWith("-")) {
+            Set-GhidraDefaultProjectForGame -GameName $guiArgs[0] | Out-Null
+            $guiArgs = if ($guiArgs.Count -gt 1) { @($guiArgs[1..($guiArgs.Count - 1)]) } else { @() }
+        }
         Ensure-Il2CppDumperGhidraScriptBundle | Out-Null
         Invoke-WithToolkitEnv {
             Push-Location $Root
-            try { & $ToolPaths.GhidraGuiBat @Rest }
+            try { & $ToolPaths.GhidraGuiBat @guiArgs }
             finally { Pop-Location }
         }
     }
 
     "pyghidra-gui" {
-        Invoke-PyGhidraGui -Arguments $Rest
+        $guiArgs = @($Rest)
+        if ($guiArgs.Count -gt 0 -and -not ([string]$guiArgs[0]).StartsWith("-")) {
+            Set-GhidraDefaultProjectForGame -GameName $guiArgs[0] | Out-Null
+            $guiArgs = if ($guiArgs.Count -gt 1) { @($guiArgs[1..($guiArgs.Count - 1)]) } else { @() }
+        }
+        Invoke-PyGhidraGui -Arguments $guiArgs
     }
 
     "il2cppdumper" {

@@ -73,8 +73,12 @@ Optional:
 1. Start Ghidra or PyGhidra:
 
 ```powershell
-.\re.ps1 pyghidra-gui
+.\re.ps1 pyghidra-gui FoodHunt
 ```
+
+The `FoodHunt` argument is optional, but when provided the wrapper updates
+Ghidra's recent/default project preferences before launching. `flow` and `open`
+do this automatically for the project they open.
 
 2. Restart Ghidra if it was already open while the installer ran.
 
@@ -190,6 +194,6 @@ only print MCP guidance now. Query the live Ghidra program through MCP instead.
 - `GhidraMCP` menu is missing: install `tools/ghidra-mcp/GhidraMCP-<version>.zip` with `File > Install Extensions > Add`, restart Ghidra, then enable the plugin from `File > Configure > Configure All Plugins > GhidraMCP`.
 - MCP cannot see `FoodHunt`: open the correct project/program in CodeBrowser and start `Tools > GhidraMCP > Start MCP Server`.
 - `Unable to lock project`: close other Ghidra/headless processes for that project, or use MCP from the already-open GUI.
-- PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui`, then open the project manually.
+- PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui FoodHunt`; it preselects the matching workspace project before launch.
 - PyGhidra picks Python 3.14/global Python: run `.\install-re-toolkit.ps1 -InstallRuntime`; `.\re.ps1 pyghidra-gui` should report `runtime\python\pyghidra-venv\Scripts\python.exe`.
 - Il2CppDumper says `This file may be protected`: check whether `dump.cs`, `DummyDll`, and `ghidra.py` were still generated.

@@ -475,6 +475,8 @@ function Open-PyGhidraProject {
     Write-Host "Opening PyGhidra the same way as: .\re.ps1 pyghidra-gui" -ForegroundColor DarkGray
     Write-Host "Note: project arguments are not passed to the PyGhidra launcher because some versions exit silently when they receive unsupported args." -ForegroundColor DarkGray
 
+    Set-GhidraDefaultProjectForGame -GameName $GameName | Out-Null
+
     # Keep this identical in behavior to the `pyghidra-gui` wrapper: do not pass
     # project dir/name args because some PyGhidra versions exit on unsupported args.
     Invoke-PyGhidraGui

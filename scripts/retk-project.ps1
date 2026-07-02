@@ -221,6 +221,39 @@ function Show-GhidraProjectOpenInfo {
     Write-Host ("  GUI step         : File > Open Project... > choose the folder/link above > {0}" -f $projectName) -ForegroundColor DarkGray
 }
 
+function Set-GhidraDefaultProjectForGame {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    if (-not (Get-Command "Set-GhidraDefaultProjectPreference" -CommandType Function -ErrorAction SilentlyContinue)) {
+        Write-Host "  [WARN] Ghidra preferences helper missing; default project was not updated." -ForegroundColor Yellow
+        return $null
+    }
+
+    $project = Read-Project $GameName
+    $projectDir = [string]$project.ghidraProjectDir
+    $projectName = [string]$project.ghidraProjectName
+
+    if ([string]::IsNullOrWhiteSpace($projectDir) -or [string]::IsNullOrWhiteSpace($projectName)) {
+        throw "Project '$GameName' does not have ghidraProjectDir/ghidraProjectName in project.re.json."
+    }
+
+    $preferencesPath = Get-GhidraPreferencesPath -GhidraRoot $ToolPaths.GhidraRoot
+    if ([string]::IsNullOrWhiteSpace($preferencesPath)) {
+        Write-Host "  [WARN] Ghidra preferences path could not be detected; default project was not updated." -ForegroundColor Yellow
+        return $null
+    }
+
+    $result = Set-GhidraDefaultProjectPreference -PreferencesPath $preferencesPath -ProjectDir $projectDir -ProjectName $projectName
+    if ($result.Changed) {
+        Write-Host ("  [OK]   Ghidra default project set: {0}" -f $result.ProjectPath) -ForegroundColor Green
+    }
+    else {
+        Write-Host ("  [OK]   Ghidra default project already set: {0}" -f $result.ProjectPath) -ForegroundColor DarkGray
+    }
+
+    return $result
+}
+
 function Show-ProjectSummary {
     param([Parameter(Mandatory)] [string]$GameName)
 
