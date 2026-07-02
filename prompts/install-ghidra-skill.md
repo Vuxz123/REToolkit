@@ -9,6 +9,17 @@ Example user request for an agent:
 cài đặt với prompts trên và chạy flows cho thằng apk này {path}
 ```
 
+Before starting, load the repo-local skills from `skills/`. Use them directly
+if the agent runtime supports repo-local skills; import or install them into
+the agent's normal skill directory only if that runtime requires installed
+skills:
+
+```text
+skills/retoolkit-install
+skills/retoolkit-flow
+skills/retoolkit-mcp-analysis
+```
+
 ## Goal
 
 Use `bethington/ghidra-mcp` as the analysis/query backend. REToolkit prepares

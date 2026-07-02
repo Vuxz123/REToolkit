@@ -1,0 +1,4 @@
+interface:
+  display_name: "REToolkit Flow"
+  short_description: "Prepare APK projects with REToolkit flow."
+  default_prompt: "Run REToolkit flow for this APK path."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "REToolkit MCP Analysis"
+  short_description: "Use GhidraMCP for REToolkit analysis."
+  default_prompt: "Connect to GhidraMCP and analyze this REToolkit project."

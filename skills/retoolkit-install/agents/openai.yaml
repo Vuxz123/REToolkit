@@ -1,0 +1,4 @@
+interface:
+  display_name: "REToolkit Install"
+  short_description: "Install and bootstrap REToolkit."
+  default_prompt: "Install REToolkit and configure GhidraMCP."
