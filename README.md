@@ -1,6 +1,6 @@
-Đây là REToolkit cho Unity Game, cụ thể là Android.
-
 # REToolkit
+
+### REToolkit for Unity games, specifically Android
 
 ## Quick Install
 
