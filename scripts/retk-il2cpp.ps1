@@ -248,14 +248,17 @@ function Ensure-Il2CppDumperGhidraScriptBundle {
     switch ($result.Reason) {
         "Added" {
             Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             return $true
         }
         "Updated" {
             Write-Host ("  [OK]   Ghidra Script Bundle enabled: {0}" -f $result.BundleValue) -ForegroundColor Green
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             return $true
         }
         "AlreadyRegistered" {
             Write-Host ("  [OK]   Ghidra Script Bundle already registered: {0}" -f $result.BundleValue) -ForegroundColor DarkGray
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             return $true
         }
         "MissingToolConfig" {

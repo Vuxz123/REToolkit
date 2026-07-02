@@ -6,6 +6,7 @@ param(
     [switch]$InstallIl2CppDumper,
     [switch]$InstallAssetRipper,
     [switch]$InstallRuntime,
+    [switch]$All,
     [int]$JdkVersion = 21,
     [string]$PythonVersion = "3.12.10",
     [string]$GhidraVersion = "",
@@ -30,6 +31,14 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     }
 }
 Set-Location -LiteralPath $InstallDir
+
+if ($All) {
+    $InstallRuntime = $true
+    $InstallGhidra = $true
+    $InstallIl2CppDumper = $true
+    $InstallGhidraMcp = $true
+    $InstallAssetRipper = $true
+}
 
 $Runtime      = Join-Path $InstallDir "runtime"
 $PortableJava = Join-Path $Runtime "java\jdk-21"
@@ -584,6 +593,7 @@ function Install-Il2CppDumperGhidraScriptBundle {
     switch ($result.Reason) {
         "Added" {
             Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             if (-not [string]::IsNullOrWhiteSpace($result.BackupPath)) {
                 Write-Host ("         Backup: {0}" -f $result.BackupPath) -ForegroundColor DarkGray
             }
@@ -591,6 +601,7 @@ function Install-Il2CppDumperGhidraScriptBundle {
         }
         "Updated" {
             Write-Host ("  [OK]   Ghidra Script Bundle enabled: {0}" -f $result.BundleValue) -ForegroundColor Green
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             if (-not [string]::IsNullOrWhiteSpace($result.BackupPath)) {
                 Write-Host ("         Backup: {0}" -f $result.BackupPath) -ForegroundColor DarkGray
             }
@@ -598,6 +609,7 @@ function Install-Il2CppDumperGhidraScriptBundle {
         }
         "AlreadyRegistered" {
             Write-Host ("  [OK]   Ghidra Script Bundle already registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            Write-Host "         If Script Manager does not show ghidra.py, fully close all Ghidra/PyGhidra windows and reopen." -ForegroundColor DarkGray
             return $true
         }
         "MissingToolConfig" {
@@ -1505,6 +1517,7 @@ if ($missing.Count -eq 0) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  .\install-re-toolkit.ps1 -All                           # recommended full install in order"
 Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + toolkit-local Python 3.12"
 Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra"
 Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper           # wklin8607/Il2CppDumper v6.7.48"
@@ -1519,6 +1532,7 @@ Write-Host "  .\re.ps1 flow    <GameName> <ExtractedPath>             # prepare 
 Write-Host "  .\re.ps1 ghidra-gui                                     # full GUI"
 Write-Host "  .\re.ps1 mcp                                            # Ghidra MCP bridge"
 Write-Host "  In Ghidra: Script Manager should include tools\Il2CppDumper as a Script Bundle"
+Write-Host "  If ghidra.py is missing in Script Manager: fully close all Ghidra/PyGhidra windows and reopen"
 Write-Host "  In Ghidra: File > Configure > Configure All Plugins > GhidraMCP"
 Write-Host "  In Ghidra: Tools > GhidraMCP > Start MCP Server"
 

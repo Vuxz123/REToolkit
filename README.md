@@ -90,6 +90,15 @@ Check current state:
 Install runtime and core tools:
 
 ```powershell
+.\install-re-toolkit.ps1 -All
+```
+
+`-All` runs the recommended full install order: runtime, Ghidra,
+Il2CppDumper, GhidraMCP, then AssetRipper.
+
+Install pieces individually:
+
+```powershell
 .\install-re-toolkit.ps1 -InstallRuntime
 .\install-re-toolkit.ps1 -InstallGhidra
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
@@ -115,6 +124,10 @@ CodeBrowser config does not exist yet, the toolkit creates it from
 `templates/Ghidra/_code_browser.tcd` before registering the Script Bundle.
 Manual fallback: open Script Manager > Bundle Manager and add
 `tools\Il2CppDumper`.
+
+If Ghidra opens but Script Manager still does not show `ghidra.py` or
+`ghidra_with_struct.py`, fully close all Ghidra/PyGhidra windows and reopen the
+GUI so CodeBrowser reloads its Script Bundle config.
 
 Download the latest GhidraMCP release assets from
 `https://github.com/bethington/ghidra-mcp/releases/latest`:

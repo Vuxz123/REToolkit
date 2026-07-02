@@ -12,25 +12,49 @@ Unity IL2CPP projects and launches the MCP bridge with:
 .\re.ps1 mcp
 ```
 
-The live Ghidra GUI instance provides analysis capabilities through the
-GhidraMCP plugin. Agent queries should go through MCP tools, not a separate
-command-line bridge.
+The live Ghidra or PyGhidra GUI instance provides analysis capabilities through
+the GhidraMCP plugin. Agent queries should go through MCP tools, not ghidra-cli
+or a separate headless query bridge.
 
 ## Install
 
 From the REToolkit root:
 
 ```powershell
+.\install-re-toolkit.ps1 -All
+```
+
+`-All` runs the recommended full install order: runtime, Ghidra,
+Il2CppDumper, GhidraMCP, then AssetRipper.
+
+Use individual flags only when repairing or installing a specific component:
+
+```powershell
 .\install-re-toolkit.ps1 -InstallRuntime
 .\install-re-toolkit.ps1 -InstallGhidra
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
 .\install-re-toolkit.ps1 -InstallGhidraMcp
+.\install-re-toolkit.ps1 -InstallAssetRipper
 ```
 
 `-InstallRuntime` installs JDK 21 plus a toolkit-local Python 3.12 under
 `runtime/python/python-3.12`. REToolkit/PyGhidra should use this local runtime
 instead of any global Python 3.14 on the machine. It also prepares
 `runtime/python/pyghidra-venv` for PyGhidra launches.
+
+`-InstallIl2CppDumper` replaces `tools\Il2CppDumper\ghidra.py` and
+`tools\Il2CppDumper\ghidra_with_struct.py` with toolkit-maintained Python 3 /
+PyGhidra-compatible templates. It also registers `tools\Il2CppDumper` as a
+Ghidra Script Bundle. If Ghidra has never created its CodeBrowser tool config,
+REToolkit seeds it from:
+
+```text
+templates/Ghidra/_code_browser.tcd
+```
+
+If Script Manager does not show `ghidra.py` or `ghidra_with_struct.py` after
+the wrapper/installer runs, fully close all Ghidra/PyGhidra windows and reopen
+the GUI so CodeBrowser reloads its Script Bundle config.
 
 `-InstallGhidraMcp` downloads the latest release assets from:
 
@@ -48,9 +72,32 @@ It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` into
 that local environment. `bridge_mcp_ghidra.py` is the AI-client-side bridge,
 not the GUI plugin.
 
+When a local Ghidra install is present, the installer extracts and installs the
+extension under:
+
+```text
+%APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
+```
+
 ## Ghidra GUI Setup
 
-1. Install the release extension ZIP:
+Start Ghidra/PyGhidra with a project name when possible:
+
+```powershell
+.\re.ps1 pyghidra-gui FoodHunt
+# or
+.\re.ps1 ghidra-gui FoodHunt
+```
+
+Passing `FoodHunt` updates Ghidra's recent/default project preferences before
+launch. If Ghidra has never created its `preferences` file, REToolkit seeds it
+from:
+
+```text
+templates/Ghidra/preferences
+```
+
+If the GhidraMCP extension is not visible, install the release extension ZIP:
 
 ```text
 File > Install Extensions > Add
@@ -58,20 +105,19 @@ File > Install Extensions > Add
 
 Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, then restart Ghidra.
 
-2. Open the target project/program in Ghidra or PyGhidra.
-3. Enable the plugin:
+Open the target project/program in a CodeBrowser, then enable the plugin:
 
 ```text
 File > Configure > Configure All Plugins > GhidraMCP
 ```
 
-4. Optional port settings:
+Optional port settings:
 
 ```text
 CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```
 
-5. Start the server:
+Start the server:
 
 ```text
 Tools > GhidraMCP > Start MCP Server
@@ -115,12 +161,20 @@ Prepare the project with REToolkit:
 .\re.ps1 flow FoodHunt "D:\Path\To\FoodHunt.apk"
 ```
 
-Then finish in the GUI:
+`flow` scans/extracts the build, runs Il2CppDumper, imports the binary into
+Ghidra without analysis, generates notes, sets the default Ghidra project, and
+opens PyGhidra. It intentionally does not run long headless Auto Analysis and
+does not auto-apply `ghidra.py`.
+
+Finish in the GUI:
 
 1. Open the imported program.
 2. Run Auto Analysis.
-3. Run `workspaces\FoodHunt\02_Il2CppDumperOutput\ghidra.py` if symbol import is needed.
-4. Start `Tools > GhidraMCP > Start MCP Server`.
+3. Run `ghidra.py` or `ghidra_with_struct.py` from the `tools\Il2CppDumper`
+   Script Bundle if symbol import is needed.
+4. When prompted, choose
+   `workspaces\FoodHunt\02_Il2CppDumperOutput\script.json`.
+5. Start `Tools > GhidraMCP > Start MCP Server`.
 
 Then in the MCP client:
 
@@ -135,6 +189,22 @@ load_tool_group listing
 Use MCP tools for function listing, decompilation, xrefs, strings, symbols,
 comments, types, script execution, and batch operations.
 
+## Workspace Archives
+
+Use `.re` archives to move a prepared workspace between machines or toolkit
+folders:
+
+```powershell
+.\re.ps1 export FoodHunt
+.\re.ps1 import .\exports\FoodHunt.re
+.\re.ps1 import .\exports\FoodHunt.re FoodHuntCopy
+.\re.ps1 import .\exports\FoodHunt.re FoodHunt --force
+```
+
+The `.re` file is a ZIP archive with a REToolkit extension. Import restores the
+workspace under `workspaces/` and rebases absolute paths in `project.re.json` to
+the current toolkit folder.
+
 ## REToolkit Commands
 
 Use these local commands to prepare and inspect workspace state:
@@ -146,6 +216,8 @@ Use these local commands to prepare and inspect workspace state:
 .\re.ps1 scan <GameName> <ExtractedPath>
 .\re.ps1 dump <GameName>
 .\re.ps1 import <GameName>
+.\re.ps1 export <GameName> [OutFile.re]
+.\re.ps1 import <Archive.re> [GameName] [--force]
 .\re.ps1 flow <GameName> <apk-or-ExtractedPath>
 .\re.ps1 open <GameName>
 .\re.ps1 path <GameName>
@@ -153,13 +225,28 @@ Use these local commands to prepare and inspect workspace state:
 .\re.ps1 candidates <GameName>
 .\re.ps1 context <GameName>
 .\re.ps1 notes <GameName>
-.\re.ps1 ghidra-gui
-.\re.ps1 pyghidra-gui
+.\re.ps1 ghidra-gui [GameName]
+.\re.ps1 pyghidra-gui [GameName]
 .\re.ps1 mcp
 ```
 
+`import <GameName>` means Ghidra import. `import <Archive.re>` means workspace
+archive import.
+
 Legacy query aliases `summary`, `strings`, `functions`, and `stats` print MCP
 guidance only. Do project queries through the connected GhidraMCP tools.
+
+## Troubleshooting
+
+- GhidraMCP menu is missing: install `tools/ghidra-mcp/GhidraMCP-<version>.zip`
+  with `File > Install Extensions > Add`, restart Ghidra, then enable the
+  plugin from `File > Configure > Configure All Plugins > GhidraMCP`.
+- Script Manager does not show `ghidra.py`: fully close all Ghidra/PyGhidra
+  windows and reopen the GUI.
+- MCP cannot see the project: open the correct project/program in CodeBrowser
+  and start `Tools > GhidraMCP > Start MCP Server`.
+- Project lock error: close other Ghidra/headless processes for that project,
+  or use MCP from the already-open GUI.
 
 ## Safety
 
