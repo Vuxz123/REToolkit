@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TOOL_CONFIG CONFIG_NAME="NO_LONGER_USED">
+    <TOOL TOOL_NAME="CodeBrowser" INSTANCE_NAME="">
+        <PLUGIN_STATE CLASS="ghidra.app.plugin.core.script.GhidraScriptMgrPlugin">
+            <ARRAY NAME="BundleHost_ACTIVE" TYPE="boolean">
+                <A VALUE="false" />
+            </ARRAY>
+            <ARRAY NAME="BundleHost_ENABLE" TYPE="boolean">
+                <A VALUE="true" />
+            </ARRAY>
+            <ARRAY NAME="BundleHost_FILE" TYPE="string">
+                <A VALUE="$GHIDRA_HOME/Features/Base/ghidra_scripts" />
+            </ARRAY>
+            <ARRAY NAME="BundleHost_SYSTEM" TYPE="boolean">
+                <A VALUE="true" />
+            </ARRAY>
+        </PLUGIN_STATE>
+    </TOOL>
+</TOOL_CONFIG>

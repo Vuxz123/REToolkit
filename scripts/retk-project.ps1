@@ -168,6 +168,286 @@ function New-Workspace {
     Write-Host "Workspace created: $workspace" -ForegroundColor Green
 }
 
+function Test-RetkPathWithin {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Parent
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\','/'))
+    $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd([char[]]@('\','/'))
+
+    return $fullPath.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($fullParent + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-WorkspaceName {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    if (-not ($GameName -match '^[A-Za-z0-9_\-.]{1,64}$')) {
+        throw "Invalid workspace name. Use letters, digits, '_', '-', '.' only, max 64 chars."
+    }
+}
+
+function Resolve-WorkspaceArchiveOutputPath {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [string]$OutputPath = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        $OutputPath = Join-Path (Join-Path $Root "exports") ($GameName + ".re")
+    }
+    elseif ((Test-Path -LiteralPath $OutputPath -PathType Container) -or $OutputPath.EndsWith("\") -or $OutputPath.EndsWith("/")) {
+        $OutputPath = Join-Path $OutputPath ($GameName + ".re")
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($OutputPath)
+    if (-not $fullPath.EndsWith(".re", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $fullPath = [System.IO.Path]::ChangeExtension($fullPath, ".re")
+    }
+
+    return $fullPath
+}
+
+function Export-WorkspaceArchive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [string]$OutputPath = ""
+    )
+
+    Assert-WorkspaceName $GameName
+
+    $workspace = Get-WorkspacePath $GameName
+    if (-not (Test-Path -LiteralPath $workspace -PathType Container)) {
+        throw "Workspace not found: $workspace"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $workspace "project.re.json") -PathType Leaf)) {
+        throw "Workspace project.re.json not found: $(Join-Path $workspace "project.re.json")"
+    }
+
+    $archivePath = Resolve-WorkspaceArchiveOutputPath -GameName $GameName -OutputPath $OutputPath
+    if (Test-RetkPathWithin -Path $archivePath -Parent $workspace) {
+        throw "Output archive cannot be inside the workspace being exported: $archivePath"
+    }
+
+    $archiveParent = Split-Path -Parent $archivePath
+    if ($archiveParent) {
+        New-Item -ItemType Directory -Path $archiveParent -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $archivePath -PathType Leaf) {
+        Remove-Item -LiteralPath $archivePath -Force
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::Open($archivePath, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        [void]$zip.CreateEntry(($GameName.TrimEnd('/','\') + "/"))
+
+        $workspaceFull = [System.IO.Path]::GetFullPath($workspace).TrimEnd([char[]]@('\','/'))
+        foreach ($dir in Get-ChildItem -LiteralPath $workspaceFull -Recurse -Directory -Force) {
+            $relative = $dir.FullName.Substring($workspaceFull.Length).TrimStart([char[]]@('\','/')) -replace '\\','/'
+            if (-not [string]::IsNullOrWhiteSpace($relative)) {
+                [void]$zip.CreateEntry(("{0}/{1}/" -f $GameName, $relative.TrimEnd('/')))
+            }
+        }
+
+        foreach ($file in Get-ChildItem -LiteralPath $workspaceFull -Recurse -File -Force) {
+            $relative = $file.FullName.Substring($workspaceFull.Length).TrimStart([char[]]@('\','/')) -replace '\\','/'
+            $entryName = "{0}/{1}" -f $GameName, $relative
+            [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+
+    Write-Host ("  [OK]   Exported workspace: {0}" -f $archivePath) -ForegroundColor Green
+    return [pscustomobject]@{
+        GameName      = $GameName
+        WorkspacePath = $workspace
+        ArchivePath   = $archivePath
+    }
+}
+
+function Get-WorkspaceArchiveSourceDir {
+    param([Parameter(Mandatory)] [string]$ExtractDir)
+
+    $rootProject = Join-Path $ExtractDir "project.re.json"
+    if (Test-Path -LiteralPath $rootProject -PathType Leaf) {
+        return $ExtractDir
+    }
+
+    $candidates = @(Get-ChildItem -LiteralPath $ExtractDir -Directory -Force | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.FullName "project.re.json") -PathType Leaf
+    })
+
+    if ($candidates.Count -eq 1) {
+        return $candidates[0].FullName
+    }
+
+    if ($candidates.Count -gt 1) {
+        throw "Archive contains multiple workspace roots with project.re.json; pass a single-workspace .re archive."
+    }
+
+    throw "Archive does not contain project.re.json at the root or inside one top-level workspace folder."
+}
+
+function Set-ObjectNoteProperty {
+    param(
+        [Parameter(Mandatory)] [object]$Object,
+        [Parameter(Mandatory)] [string]$Name,
+        [AllowNull()] $Value
+    )
+
+    if ($null -eq $Object.PSObject.Properties[$Name]) {
+        Add-Member -InputObject $Object -MemberType NoteProperty -Name $Name -Value $Value -Force
+    }
+    else {
+        $Object.$Name = $Value
+    }
+}
+
+function Find-WorkspaceFileByLeaf {
+    param(
+        [Parameter(Mandatory)] [string]$WorkspacePath,
+        [string]$OriginalPath = "",
+        [string[]]$FallbackNames = @()
+    )
+
+    $names = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($OriginalPath)) {
+        $leaf = Split-Path -Leaf $OriginalPath
+        if (-not [string]::IsNullOrWhiteSpace($leaf)) {
+            [void]$names.Add($leaf)
+        }
+    }
+    foreach ($fallback in $FallbackNames) {
+        if (-not [string]::IsNullOrWhiteSpace($fallback) -and -not $names.Contains($fallback)) {
+            [void]$names.Add($fallback)
+        }
+    }
+
+    foreach ($name in $names) {
+        $match = Get-ChildItem -LiteralPath $WorkspacePath -Recurse -File -Filter $name -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($match) {
+            return $match.FullName
+        }
+    }
+
+    return $OriginalPath
+}
+
+function Update-ImportedWorkspaceProject {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string]$WorkspacePath
+    )
+
+    $projectPath = Join-Path $WorkspacePath "project.re.json"
+    if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
+        throw "Imported workspace is missing project.re.json: $projectPath"
+    }
+
+    $project = Get-Content -LiteralPath $projectPath -Raw | ConvertFrom-Json
+    Set-ObjectNoteProperty -Object $project -Name "name" -Value $GameName
+    Set-ObjectNoteProperty -Object $project -Name "il2cppDumperOutput" -Value (Join-Path $WorkspacePath "02_Il2CppDumperOutput")
+    Set-ObjectNoteProperty -Object $project -Name "ghidraProjectDir" -Value (Join-Path $WorkspacePath "03_GhidraProject")
+    if ([string]::IsNullOrWhiteSpace([string]$project.ghidraProjectName)) {
+        Set-ObjectNoteProperty -Object $project -Name "ghidraProjectName" -Value $GameName
+    }
+
+    $extractedPath = Join-Path $WorkspacePath "01_Extracted"
+    if (Test-Path -LiteralPath $extractedPath -PathType Container) {
+        Set-ObjectNoteProperty -Object $project -Name "extractedPath" -Value $extractedPath
+    }
+
+    $nativeBinary = Find-WorkspaceFileByLeaf -WorkspacePath $WorkspacePath -OriginalPath ([string]$project.nativeBinary) -FallbackNames @("libil2cpp.so", "GameAssembly.dll")
+    if (-not [string]::IsNullOrWhiteSpace($nativeBinary)) {
+        Set-ObjectNoteProperty -Object $project -Name "nativeBinary" -Value $nativeBinary
+    }
+
+    $metadata = Find-WorkspaceFileByLeaf -WorkspacePath $WorkspacePath -OriginalPath ([string]$project.metadata) -FallbackNames @("global-metadata.dat")
+    if (-not [string]::IsNullOrWhiteSpace($metadata)) {
+        Set-ObjectNoteProperty -Object $project -Name "metadata" -Value $metadata
+    }
+
+    Save-Project $GameName $project
+    return $project
+}
+
+function Import-WorkspaceArchive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$ArchivePath,
+        [string]$GameName = "",
+        [switch]$Force
+    )
+
+    if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+        throw "Workspace archive not found: $ArchivePath"
+    }
+
+    $archiveFull = (Resolve-Path -LiteralPath $ArchivePath).Path
+    $extension = [System.IO.Path]::GetExtension($archiveFull)
+    if ($extension -notin @(".re", ".zip")) {
+        throw "Workspace archive must use .re or .zip extension: $archiveFull"
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $extractRoot = Join-Path $env:TEMP ("retk-import-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($archiveFull, $extractRoot)
+
+        $sourceDir = Get-WorkspaceArchiveSourceDir -ExtractDir $extractRoot
+        $sourceProjectPath = Join-Path $sourceDir "project.re.json"
+        $sourceProject = Get-Content -LiteralPath $sourceProjectPath -Raw | ConvertFrom-Json
+
+        if ([string]::IsNullOrWhiteSpace($GameName)) {
+            $GameName = [string]$sourceProject.name
+        }
+        if ([string]::IsNullOrWhiteSpace($GameName)) {
+            $GameName = Split-Path -Leaf $sourceDir
+        }
+        Assert-WorkspaceName $GameName
+
+        $destination = Get-WorkspacePath $GameName
+        if (Test-Path -LiteralPath $destination) {
+            if (-not $Force) {
+                throw "Workspace already exists: $destination. Use: .\re.ps1 import `"$archiveFull`" $GameName --force"
+            }
+            if (-not (Test-RetkPathWithin -Path $destination -Parent $Workspaces)) {
+                throw "Refusing to overwrite path outside the workspaces folder: $destination"
+            }
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+        Get-ChildItem -LiteralPath $sourceDir -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force
+        }
+
+        $project = Update-ImportedWorkspaceProject -GameName $GameName -WorkspacePath $destination
+
+        Write-Host ("  [OK]   Imported workspace: {0}" -f $destination) -ForegroundColor Green
+        return [pscustomobject]@{
+            GameName      = $GameName
+            ArchivePath   = $archiveFull
+            WorkspacePath = $destination
+            Project       = $project
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $extractRoot) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Convert-ToFileUri {
     param([Parameter(Mandatory)] [string]$Path)
 
@@ -243,7 +523,8 @@ function Set-GhidraDefaultProjectForGame {
         return $null
     }
 
-    $result = Set-GhidraDefaultProjectPreference -PreferencesPath $preferencesPath -ProjectDir $projectDir -ProjectName $projectName
+    $templatePath = Join-Path $Root "templates\Ghidra\preferences"
+    $result = Set-GhidraDefaultProjectPreference -PreferencesPath $preferencesPath -ProjectDir $projectDir -ProjectName $projectName -TemplatePath $templatePath
     if ($result.Changed) {
         Write-Host ("  [OK]   Ghidra default project set: {0}" -f $result.ProjectPath) -ForegroundColor Green
     }

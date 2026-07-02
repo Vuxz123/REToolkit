@@ -10,6 +10,8 @@ function Show-Usage {
     Write-Host "  .\re.ps1 scan       <GameName> <ExtractedPath>"
     Write-Host "  .\re.ps1 dump       <GameName>"
     Write-Host "  .\re.ps1 import     <GameName>                         # import only; no Ghidra analysis"
+    Write-Host "  .\re.ps1 export     <GameName> [OutFile.re]            # pack workspace into a .re archive"
+    Write-Host "  .\re.ps1 import     <Archive.re> [GameName] [--force]  # restore workspace archive"
     Write-Host "  .\re.ps1 analyze    <GameName>                         # manual/optional; not used by flow"
     Write-Host "  .\re.ps1 symbols    <GameName>                         # manual/optional; not used by flow"
     Write-Host "  .\re.ps1 flow       <GameName> <apk-or-ExtractedPath>  # dump/import/open PyGhidra; no headless analyze"

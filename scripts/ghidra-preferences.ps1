@@ -57,10 +57,17 @@ function ConvertTo-GhidraProjectDirectoryValue {
 }
 
 function Read-GhidraPreferencesLines {
-    param([Parameter(Mandatory)] [string]$PreferencesPath)
+    param(
+        [Parameter(Mandatory)] [string]$PreferencesPath,
+        [string]$TemplatePath = ""
+    )
 
     if (Test-Path -LiteralPath $PreferencesPath -PathType Leaf) {
         return @(Get-Content -LiteralPath $PreferencesPath)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
+        return @(Get-Content -LiteralPath $TemplatePath)
     }
 
     return @(
@@ -98,16 +105,18 @@ function Set-GhidraDefaultProjectPreference {
         [Parameter(Mandatory)] [string]$PreferencesPath,
         [Parameter(Mandatory)] [string]$ProjectDir,
         [Parameter(Mandatory)] [string]$ProjectName,
+        [string]$TemplatePath = "",
         [int]$MaxRecentProjects = 10
     )
 
+    $preferencesExists = Test-Path -LiteralPath $PreferencesPath -PathType Leaf
     $fullProjectDir = [System.IO.Path]::GetFullPath($ProjectDir).TrimEnd([char[]]@('\','/'))
     $projectPath = Join-Path $fullProjectDir $ProjectName
     $projectValue = ConvertTo-GhidraPreferencePathValue -Path $projectPath
     $projectDirValue = ConvertTo-GhidraPreferencePathValue -Path $fullProjectDir
     $projectDirectoryValue = ConvertTo-GhidraProjectDirectoryValue -ProjectDir $fullProjectDir
 
-    $rawLines = Read-GhidraPreferencesLines -PreferencesPath $PreferencesPath
+    $rawLines = Read-GhidraPreferencesLines -PreferencesPath $PreferencesPath -TemplatePath $TemplatePath
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($rawLine in $rawLines) {
         [void]$lines.Add([string]$rawLine)
@@ -142,7 +151,8 @@ function Set-GhidraDefaultProjectPreference {
     $changed = (Set-GhidraPreferenceLine -Lines $lines -Key "RECENT_0" -Value $projectDirValue) -or $changed
     $changed = (Set-GhidraPreferenceLine -Lines $lines -Key "RecentProjects" -Value ($recentValues -join ';')) -or $changed
 
-    if ($changed) {
+    $shouldWrite = $changed -or (-not $preferencesExists)
+    if ($shouldWrite) {
         $parent = Split-Path -Parent $PreferencesPath
         if ($parent) {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -152,8 +162,9 @@ function Set-GhidraDefaultProjectPreference {
     }
 
     return [pscustomobject]@{
-        Changed         = $changed
+        Changed         = $shouldWrite
         PreferencesPath = $PreferencesPath
+        TemplatePath    = $TemplatePath
         ProjectDir      = $fullProjectDir
         ProjectName     = $ProjectName
         ProjectPath     = $projectPath

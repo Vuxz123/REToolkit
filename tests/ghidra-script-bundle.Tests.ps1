@@ -118,6 +118,31 @@ try {
     Assert-True (-not $missing.Registered) "Missing tool config should be skipped."
     Assert-True (-not $missing.Changed) "Missing tool config should not create files."
     Assert-Equals $missing.Reason "MissingToolConfig" "Missing tool config should report a precise reason."
+
+    $templateDir = Join-Path $tempRoot "templates\Ghidra"
+    New-Item -ItemType Directory -Path $templateDir -Force | Out-Null
+    $templatePath = Join-Path $templateDir "_code_browser.tcd"
+    [System.IO.File]::WriteAllText($templatePath, $toolConfig, $utf8NoBom)
+
+    $seededPath = Join-Path $tempRoot "fresh\ghidra_12.1.2_PUBLIC\tools\_code_browser.tcd"
+    $seeded = Register-GhidraScriptBundle `
+        -ToolConfigPath $seededPath `
+        -BundleDir $bundleDir `
+        -UserHome $tempRoot `
+        -TemplatePath $templatePath `
+        -CreateBackup
+
+    Assert-True $seeded.Registered "Missing tool config should be created from template and registered when TemplatePath is provided."
+    Assert-True $seeded.Changed "Template-seeded tool config registration should report a change."
+    Assert-Equals $seeded.Reason "Added" "Template-seeded registration should add the bundle."
+    Assert-True (Test-Path -LiteralPath $seededPath -PathType Leaf) "Template-seeded registration should create _code_browser.tcd."
+    Assert-Equals $seeded.BackupPath "" "Template-seeded registration should not create a backup because there was no original file."
+
+    [xml]$afterSeeded = Get-Content -LiteralPath $seededPath -Raw
+    Assert-Equals @(Get-TestArrayValues -Document $afterSeeded -Name "BundleHost_FILE").Count 2 "Template-seeded FILE array should contain the base bundle and Il2CppDumper."
+    Assert-Equals @(Get-TestArrayValues -Document $afterSeeded -Name "BundleHost_FILE")[-1] '$USER_HOME/tools/Il2CppDumper' "Template-seeded bundle should use the stable user-home macro path."
+    Assert-Equals @(Get-TestArrayValues -Document $afterSeeded -Name "BundleHost_ENABLE")[-1] "true" "Template-seeded bundle should be enabled."
+    Assert-Equals @(Get-TestArrayValues -Document $afterSeeded -Name "BundleHost_SYSTEM")[-1] "false" "Template-seeded bundle should be a user bundle."
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {

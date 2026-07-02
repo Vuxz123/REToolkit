@@ -1,0 +1,13 @@
+#User Preferences
+#REToolkit template. Project-specific keys are injected before Ghidra launch.
+G_FILE_CHOOSER.HEIGHT.Open\ a\ Ghidra\ Project=600
+G_FILE_CHOOSER.VIEW_STYLE.Open\ a\ Ghidra\ Project=SimpleView
+G_FILE_CHOOSER.WIDTH.Open\ a\ Ghidra\ Project=800
+GhidraShowWhatsNew=false
+RecentProjects=
+SHOW.HELP.NAVIGATION.AID=true
+SHOW_TIPS=true
+TIP_INDEX=0
+Theme=Class\:generic.theme.builtin.WindowsTheme
+USER_AGREEMENT=ACCEPT
+ViewedProjects=

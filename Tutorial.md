@@ -29,18 +29,18 @@ it is missing.
 
 `-InstallIl2CppDumper` patches `tools\Il2CppDumper\ghidra.py` and
 `tools\Il2CppDumper\ghidra_with_struct.py` with toolkit-maintained Python 3
-templates. If Ghidra has already created its CodeBrowser user config, the
-installer and `re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` also register
-`tools\Il2CppDumper` as a Ghidra Script Bundle in:
+templates. The installer and `re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` also
+register `tools\Il2CppDumper` as a Ghidra Script Bundle in the CodeBrowser user
+config:
 
 ```text
 %APPDATA%\ghidra\ghidra_<version>_PUBLIC\tools\_code_browser.tcd
 ```
 
-The toolkit writes a `.bak.<timestamp>` backup before modifying that file. If
-the config does not exist yet, start and close Ghidra once, then rerun the
-installer or wrapper. Manual fallback: Script Manager > Bundle Manager, add
-`tools\Il2CppDumper`.
+The toolkit writes a `.bak.<timestamp>` backup before modifying an existing
+file. If the config does not exist yet, it creates one from
+`templates/Ghidra/_code_browser.tcd` first. Manual fallback:
+Script Manager > Bundle Manager, add `tools\Il2CppDumper`.
 
 `-InstallGhidraMcp` downloads the latest release assets from:
 
@@ -78,7 +78,8 @@ Optional:
 
 The `FoodHunt` argument is optional, but when provided the wrapper updates
 Ghidra's recent/default project preferences before launching. `flow` and `open`
-do this automatically for the project they open.
+do this automatically for the project they open. On a fresh Ghidra profile, the
+toolkit seeds `preferences` from `templates/Ghidra/preferences` first.
 
 2. Restart Ghidra if it was already open while the installer ran.
 
@@ -179,6 +180,8 @@ decompilation, strings, xrefs, symbols, comments, and type work.
 .\re.ps1 doctor
 .\re.ps1 status FoodHunt
 .\re.ps1 path FoodHunt
+.\re.ps1 export FoodHunt
+.\re.ps1 import .\exports\FoodHunt.re
 .\re.ps1 candidates FoodHunt
 .\re.ps1 context FoodHunt
 .\re.ps1 notes FoodHunt

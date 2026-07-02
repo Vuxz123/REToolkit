@@ -9,6 +9,7 @@ function New-GhidraScriptBundleResult {
         [string]$ToolConfigPath = "",
         [string]$BundleDir = "",
         [string]$BundleValue = "",
+        [string]$TemplatePath = "",
         [string]$BackupPath = "",
         [string]$Message = ""
     )
@@ -20,6 +21,7 @@ function New-GhidraScriptBundleResult {
         ToolConfigPath = $ToolConfigPath
         BundleDir      = $BundleDir
         BundleValue    = $BundleValue
+        TemplatePath    = $TemplatePath
         BackupPath     = $BackupPath
         Message        = $Message
     }
@@ -201,6 +203,29 @@ function Save-GhidraXmlDocument {
     }
 }
 
+function Initialize-GhidraToolConfigFromTemplate {
+    param(
+        [Parameter(Mandatory)] [string]$ToolConfigPath,
+        [string]$TemplatePath = ""
+    )
+
+    if (Test-Path -LiteralPath $ToolConfigPath -PathType Leaf) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TemplatePath) -or -not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
+        return $false
+    }
+
+    $parent = Split-Path -Parent $ToolConfigPath
+    if ($parent) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    Copy-Item -LiteralPath $TemplatePath -Destination $ToolConfigPath -Force
+    return $true
+}
+
 function Register-GhidraScriptBundle {
     [CmdletBinding()]
     param(
@@ -208,6 +233,7 @@ function Register-GhidraScriptBundle {
         [Parameter(Mandatory)] [string]$BundleDir,
         [string]$UserHome = "",
         [string]$GhidraRoot = "",
+        [string]$TemplatePath = "",
         [switch]$CreateBackup
     )
 
@@ -221,8 +247,10 @@ function Register-GhidraScriptBundle {
         return New-GhidraScriptBundleResult -Registered $false -Changed $false -Reason "MissingBundleDir" -ToolConfigPath $ToolConfigPath -BundleDir $BundleDir -BundleValue $bundleValue
     }
 
+    $createdFromTemplate = Initialize-GhidraToolConfigFromTemplate -ToolConfigPath $ToolConfigPath -TemplatePath $TemplatePath
+
     if (-not (Test-Path -LiteralPath $ToolConfigPath -PathType Leaf)) {
-        return New-GhidraScriptBundleResult -Registered $false -Changed $false -Reason "MissingToolConfig" -ToolConfigPath $ToolConfigPath -BundleDir $BundleDir -BundleValue $bundleValue
+        return New-GhidraScriptBundleResult -Registered $false -Changed $false -Reason "MissingToolConfig" -ToolConfigPath $ToolConfigPath -BundleDir $BundleDir -BundleValue $bundleValue -TemplatePath $TemplatePath
     }
 
     [xml]$document = Get-Content -LiteralPath $ToolConfigPath -Raw
@@ -288,7 +316,7 @@ function Register-GhidraScriptBundle {
 
     $backupPath = ""
     if ($changed) {
-        if ($CreateBackup) {
+        if ($CreateBackup -and -not $createdFromTemplate) {
             $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
             $backupPath = "{0}.bak.{1}" -f $ToolConfigPath, $timestamp
             Copy-Item -LiteralPath $ToolConfigPath -Destination $backupPath -Force
@@ -296,5 +324,5 @@ function Register-GhidraScriptBundle {
         Save-GhidraXmlDocument -Document $document -Path $ToolConfigPath
     }
 
-    return New-GhidraScriptBundleResult -Registered $true -Changed $changed -Reason $reason -ToolConfigPath $ToolConfigPath -BundleDir $BundleDir -BundleValue $bundleValue -BackupPath $backupPath
+    return New-GhidraScriptBundleResult -Registered $true -Changed $changed -Reason $reason -ToolConfigPath $ToolConfigPath -BundleDir $BundleDir -BundleValue $bundleValue -TemplatePath $TemplatePath -BackupPath $backupPath
 }

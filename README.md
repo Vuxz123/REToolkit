@@ -103,18 +103,18 @@ If the venv is deleted, the PyGhidra wrapper recreates it before launch.
 
 `-InstallIl2CppDumper` also replaces the bundled `ghidra.py` and
 `ghidra_with_struct.py` with toolkit-maintained Python 3/PyGhidra templates.
-When Ghidra has already created its CodeBrowser user config, the installer and
-`re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` also register
-`tools/Il2CppDumper` as a Ghidra Script Bundle in:
+The installer and `re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` register
+`tools/Il2CppDumper` as a Ghidra Script Bundle in the CodeBrowser user config:
 
 ```text
 %APPDATA%\ghidra\ghidra_<version>_PUBLIC\tools\_code_browser.tcd
 ```
 
 A `.bak.<timestamp>` copy is written before that file is changed. If the
-CodeBrowser config does not exist yet, start and close Ghidra once, then rerun
-the installer or wrapper. Manual fallback: open Script Manager > Bundle Manager
-and add `tools\Il2CppDumper`.
+CodeBrowser config does not exist yet, the toolkit creates it from
+`templates/Ghidra/_code_browser.tcd` before registering the Script Bundle.
+Manual fallback: open Script Manager > Bundle Manager and add
+`tools\Il2CppDumper`.
 
 Download the latest GhidraMCP release assets from
 `https://github.com/bethington/ghidra-mcp/releases/latest`:
@@ -167,7 +167,9 @@ extension:
 Passing a `GameName` updates Ghidra's user preferences before launch so the
 tool opens with that workspace project as the recent/default project. Plain
 `ghidra-gui` and `pyghidra-gui` still work when you do not want to select a
-project.
+project. If Ghidra has never created `%APPDATA%\ghidra\...\preferences`, the
+toolkit creates it from `templates/Ghidra/preferences` and then injects the
+selected workspace project.
 
 2. Restart Ghidra if it was already open while the installer ran.
 
@@ -270,6 +272,17 @@ Manual steps:
 .\re.ps1 open FoodHunt
 ```
 
+Workspace archive handoff:
+
+```powershell
+.\re.ps1 export FoodHunt
+.\re.ps1 import .\exports\FoodHunt.re
+```
+
+`export` writes a normal ZIP archive with a `.re` extension. On import, toolkit
+restores the workspace under `workspaces/` and rebases absolute paths in
+`project.re.json` to the current toolkit folder.
+
 After the GUI opens:
 
 1. Open `workspaces/FoodHunt/03_GhidraProject`.
@@ -290,6 +303,8 @@ After the GUI opens:
 | `scan <GameName> <ExtractedPath>` | Locate native binary and metadata. |
 | `dump <GameName>` | Run Il2CppDumper. |
 | `import <GameName>` | Import into Ghidra with `analyzeHeadless -import -overwrite -noanalysis`. |
+| `export <GameName> [OutFile.re]` | Package a workspace as a `.re` archive. |
+| `import <Archive.re> [GameName] [--force]` | Restore a `.re` workspace archive; optional name overrides the workspace folder. |
 | `flow <GameName> <apk-or-ExtractedPath>` | Prepare the project and open PyGhidra. |
 | `open <GameName>` | Print paths and open PyGhidra. |
 | `path <GameName>` | Print Ghidra project folder/link. |

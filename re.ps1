@@ -85,7 +85,32 @@ switch ($Command) {
     "add"        { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 add <GameName> <apk-or-xapk-or-aab-or-zip>" } Add-BuildToProject $Rest[0] $Rest[1] }
     "scan"       { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 scan <GameName> <ExtractedPath>" } Scan-UnityIl2Cpp $Rest[0] $Rest[1] }
     "dump"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 dump <GameName>" } Run-Il2CppDumper $Rest[0] }
-    "import"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 import <GameName>" } Import-GhidraProgram $Rest[0] }
+    "export"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 export <GameName> [OutFile.re]" } Export-WorkspaceArchive -GameName $Rest[0] -OutputPath $Rest[1] | Out-Null }
+    "import"     {
+        if (-not $Rest[0]) { throw "Usage: .\re.ps1 import <GameName> | .\re.ps1 import <Archive.re> [GameName] [--force]" }
+        $first = [string]$Rest[0]
+        $isWorkspaceArchive = ($first -match '\.(re|zip)$') -or (Test-Path -LiteralPath $first -PathType Leaf)
+        if ($isWorkspaceArchive) {
+            $force = $false
+            $importName = ""
+            $archiveArgs = if ($Rest.Count -gt 1) { @($Rest[1..($Rest.Count - 1)]) } else { @() }
+            foreach ($arg in $archiveArgs) {
+                if ($arg -eq "--force") {
+                    $force = $true
+                }
+                elseif ([string]::IsNullOrWhiteSpace($importName)) {
+                    $importName = $arg
+                }
+                else {
+                    throw "Usage: .\re.ps1 import <Archive.re> [GameName] [--force]"
+                }
+            }
+            Import-WorkspaceArchive -ArchivePath $first -GameName $importName -Force:$force | Out-Null
+        }
+        else {
+            Import-GhidraProgram $first
+        }
+    }
     "analyze"    { if (-not $Rest[0]) { throw "Usage: .\re.ps1 analyze <GameName>" } Analyze-GhidraProgram $Rest[0] }
     "symbols"    { if (-not $Rest[0]) { throw "Usage: .\re.ps1 symbols <GameName>" } Apply-GhidraSymbols $Rest[0] }
     "flow"       { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 flow <GameName> <apk-or-ExtractedPath>" } Run-FullFlow $Rest[0] $Rest[1] }

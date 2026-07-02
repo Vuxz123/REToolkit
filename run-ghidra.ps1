@@ -35,7 +35,8 @@ function Ensure-Il2CppDumperGhidraScriptBundle {
         return $false
     }
 
-    $result = Register-GhidraScriptBundle -ToolConfigPath $toolConfigPath -BundleDir $bundleDir -GhidraRoot $GhidraRoot -CreateBackup
+    $templatePath = Join-Path $Root "templates\Ghidra\_code_browser.tcd"
+    $result = Register-GhidraScriptBundle -ToolConfigPath $toolConfigPath -BundleDir $bundleDir -GhidraRoot $GhidraRoot -TemplatePath $templatePath -CreateBackup
     switch ($result.Reason) {
         "Added" {
             Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green

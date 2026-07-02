@@ -89,6 +89,36 @@ USER_AGREEMENT=ACCEPT
         -ProjectName "FoodHunt"
 
     Assert-True (-not $second.Changed) "Second preference update should be idempotent."
+
+    $freshSettingsDir = Join-Path $tempRoot "fresh-ghidra\ghidra_12.1.2_PUBLIC"
+    $freshPrefsPath = Join-Path $freshSettingsDir "preferences"
+    $templatePath = Join-Path $tempRoot "templates\Ghidra\preferences"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $templatePath) -Force | Out-Null
+    @"
+#User Preferences
+#Template
+GhidraShowWhatsNew=false
+SHOW.HELP.NAVIGATION.AID=true
+SHOW_TIPS=false
+Theme=Class\:generic.theme.builtin.WindowsTheme
+USER_AGREEMENT=ACCEPT
+ViewedProjects=
+"@ | Set-Content -LiteralPath $templatePath -Encoding UTF8
+
+    $freshResult = Set-GhidraDefaultProjectPreference `
+        -PreferencesPath $freshPrefsPath `
+        -ProjectDir $projectDir `
+        -ProjectName "FoodHunt" `
+        -TemplatePath $templatePath
+
+    Assert-True $freshResult.Changed "Missing preferences should be created from the template."
+    Assert-True (Test-Path -LiteralPath $freshPrefsPath -PathType Leaf) "Missing preferences file should be created."
+
+    $freshProps = Read-TestProperties -Path $freshPrefsPath
+    Assert-Equals $freshProps["USER_AGREEMENT"] "ACCEPT" "Template user agreement should be preserved."
+    Assert-Equals $freshProps["Theme"] "Class\:generic.theme.builtin.WindowsTheme" "Template theme should be preserved."
+    Assert-Equals $freshProps["LastOpenedProject"] $expectedProject "Fresh preferences should point at the selected Ghidra project."
+    Assert-Equals $freshProps["RecentProjects"] $expectedProject "Fresh preferences should contain only the selected recent project."
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
