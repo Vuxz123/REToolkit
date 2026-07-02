@@ -33,6 +33,11 @@ $ToolPaths = [ordered]@{
     Dumper           = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
 }
 
+$GhidraScriptBundleHelper = Join-Path $Root "scripts\ghidra-script-bundle.ps1"
+if (Test-Path -LiteralPath $GhidraScriptBundleHelper) {
+    . $GhidraScriptBundleHelper
+}
+
 function Assert-PathExists {
     param(
         [Parameter(Mandatory)] [string]$Path,
@@ -190,6 +195,7 @@ function Invoke-PyGhidraGui {
     $pyGhidraPython = Ensure-PyGhidraPython
     Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
     $pyGhidraVersion = Ensure-PyGhidraPackage -PythonExe $pyGhidraPython
+    Ensure-Il2CppDumperGhidraScriptBundle | Out-Null
 
     $vmArgs = Get-PyGhidraVmArgs
     $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $ToolPaths.GhidraRoot)
@@ -441,6 +447,46 @@ function Repair-Il2CppDumperGhidraTemplates {
         }
     }
     return $changed
+}
+
+function Ensure-Il2CppDumperGhidraScriptBundle {
+    if (-not (Get-Command "Register-GhidraScriptBundle" -CommandType Function -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    $bundleDir = Join-Path $Tools "Il2CppDumper"
+    if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+        return $false
+    }
+
+    $toolConfigPath = Get-GhidraCodeBrowserToolConfigPath -GhidraRoot $ToolPaths.GhidraRoot
+    if ([string]::IsNullOrWhiteSpace($toolConfigPath)) {
+        return $false
+    }
+
+    $result = Register-GhidraScriptBundle -ToolConfigPath $toolConfigPath -BundleDir $bundleDir -GhidraRoot $ToolPaths.GhidraRoot -CreateBackup
+    switch ($result.Reason) {
+        "Added" {
+            Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            return $true
+        }
+        "Updated" {
+            Write-Host ("  [OK]   Ghidra Script Bundle enabled: {0}" -f $result.BundleValue) -ForegroundColor Green
+            return $true
+        }
+        "AlreadyRegistered" {
+            Write-Host ("  [OK]   Ghidra Script Bundle already registered: {0}" -f $result.BundleValue) -ForegroundColor DarkGray
+            return $true
+        }
+        "MissingToolConfig" {
+            Write-Host "  [WARN] Ghidra Script Bundle not registered yet. Start and close Ghidra once, then rerun this command." -ForegroundColor Yellow
+            return $false
+        }
+        default {
+            Write-Host ("  [WARN] Ghidra Script Bundle not patched ({0}). Add tools\Il2CppDumper from Script Manager > Bundle Manager." -f $result.Reason) -ForegroundColor Yellow
+            return $false
+        }
+    }
 }
 
 function Join-NativeArgumentString {
@@ -1665,6 +1711,7 @@ switch ($Command) {
     "ghidra-gui" {
         Assert-PathExists $ToolPaths.GhidraGuiBat "Ghidra GUI"
         Assert-PathExists $ToolPaths.JavaExe "Toolkit JDK 21"
+        Ensure-Il2CppDumperGhidraScriptBundle | Out-Null
         Invoke-WithToolkitEnv {
             Push-Location $Root
             try { & $ToolPaths.GhidraGuiBat @Rest }

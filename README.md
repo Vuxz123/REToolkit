@@ -101,6 +101,21 @@ Install runtime and core tools:
 uses a separate `runtime/python/pyghidra-venv` created from that local Python.
 If the venv is deleted, the PyGhidra wrapper recreates it before launch.
 
+`-InstallIl2CppDumper` also replaces the bundled `ghidra.py` and
+`ghidra_with_struct.py` with toolkit-maintained Python 3/PyGhidra templates.
+When Ghidra has already created its CodeBrowser user config, the installer and
+`re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` also register
+`tools/Il2CppDumper` as a Ghidra Script Bundle in:
+
+```text
+%APPDATA%\ghidra\ghidra_<version>_PUBLIC\tools\_code_browser.tcd
+```
+
+A `.bak.<timestamp>` copy is written before that file is changed. If the
+CodeBrowser config does not exist yet, start and close Ghidra once, then rerun
+the installer or wrapper. Manual fallback: open Script Manager > Bundle Manager
+and add `tools\Il2CppDumper`.
+
 Download the latest GhidraMCP release assets from
 `https://github.com/bethington/ghidra-mcp/releases/latest`:
 
@@ -118,6 +133,14 @@ assets into `tools/ghidra-mcp`:
 It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` there.
 `re.ps1 mcp` uses that local Python environment when it exists.
 
+When a local Ghidra install is present, the installer also extracts the
+extension ZIP to `tools/ghidra-mcp/extension/GhidraMCP` and installs a copy into
+Ghidra's user extension folder:
+
+```text
+%APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
+```
+
 `bridge_mcp_ghidra.py` is not the Ghidra plugin. It is the AI-client-side MCP
 bridge: Codex/OpenCode talks to it over stdio, and it forwards requests to the
 GhidraMCP server running inside the Ghidra GUI.
@@ -130,7 +153,8 @@ Optional:
 
 ## Enable GhidraMCP In The GUI
 
-After `-InstallGhidraMcp` downloads the release assets:
+After `-InstallGhidraMcp` downloads the release assets and auto-installs the
+extension:
 
 1. Start Ghidra or PyGhidra:
 
@@ -140,14 +164,7 @@ After `-InstallGhidraMcp` downloads the release assets:
 .\re.ps1 pyghidra-gui
 ```
 
-2. Install the downloaded extension ZIP:
-
-```text
-File > Install Extensions > Add
-```
-
-Select the `tools/ghidra-mcp/GhidraMCP-<version>.zip` file and restart Ghidra
-when prompted.
+2. Restart Ghidra if it was already open while the installer ran.
 
 3. Open a CodeBrowser for the target project/program.
 4. Enable the plugin:
@@ -167,6 +184,15 @@ CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```text
 Tools > GhidraMCP > Start MCP Server
 ```
+
+If the GhidraMCP menu is still missing, install the saved ZIP manually with:
+
+```text
+File > Install Extensions > Add
+```
+
+Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, restart Ghidra, then enable
+the plugin.
 
 The default server URL is usually `http://127.0.0.1:8089/`. The Python MCP
 bridge in `tools/ghidra-mcp/bridge_mcp_ghidra.py` discovers GUI instances and
@@ -244,7 +270,8 @@ After the GUI opens:
 1. Open `workspaces/FoodHunt/03_GhidraProject`.
 2. Open `libil2cpp.so` or `GameAssembly.dll`.
 3. Run Ghidra Auto Analysis.
-4. Run `workspaces/FoodHunt/02_Il2CppDumperOutput/ghidra.py` from Script Manager.
+4. Run `ghidra.py` or `ghidra_with_struct.py` from the `tools\Il2CppDumper`
+   Script Bundle, then select the workspace `script.json` when prompted.
 5. Start GhidraMCP from `Tools > GhidraMCP > Start MCP Server`.
 6. Connect the AI client with `connect_instance FoodHunt`.
 

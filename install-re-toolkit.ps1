@@ -44,6 +44,10 @@ $PythonDir    = Join-Path $PythonRoot "python-$PythonMajorMinor"
 $PythonExe    = Join-Path $PythonDir "python.exe"
 $PyGhidraVenv = Join-Path $PythonRoot "pyghidra-venv"
 $PyGhidraPython = Join-Path $PyGhidraVenv "Scripts\python.exe"
+$GhidraScriptBundleHelper = Join-Path $InstallDir "scripts\ghidra-script-bundle.ps1"
+if (Test-Path -LiteralPath $GhidraScriptBundleHelper) {
+    . $GhidraScriptBundleHelper
+}
 
 function Write-Section {
     param([string]$Title)
@@ -551,6 +555,67 @@ function Repair-Il2CppDumperGhidraTemplates {
     return $changed
 }
 
+function Install-Il2CppDumperGhidraScriptBundle {
+    param(
+        [Parameter(Mandatory)] [string]$ToolsDir,
+        [Parameter(Mandatory)] [string]$GhidraRoot
+    )
+
+    $bundleDir = Join-Path $ToolsDir "Il2CppDumper"
+
+    if (-not (Get-Command "Register-GhidraScriptBundle" -CommandType Function -ErrorAction SilentlyContinue)) {
+        Write-Host "  [WARN] Ghidra Script Bundle helper missing; Il2CppDumper was not auto-registered in Script Manager." -ForegroundColor Yellow
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $GhidraRoot -PathType Container)) {
+        Write-Host "  [WARN] Ghidra Script Bundle skipped because Ghidra is not installed yet." -ForegroundColor Yellow
+        return $false
+    }
+
+    $toolConfigPath = Get-GhidraCodeBrowserToolConfigPath -GhidraRoot $GhidraRoot
+    if ([string]::IsNullOrWhiteSpace($toolConfigPath)) {
+        Write-Host "  [WARN] Ghidra Script Bundle skipped because Ghidra version settings could not be detected." -ForegroundColor Yellow
+        return $false
+    }
+
+    $result = Register-GhidraScriptBundle -ToolConfigPath $toolConfigPath -BundleDir $bundleDir -GhidraRoot $GhidraRoot -CreateBackup
+    switch ($result.Reason) {
+        "Added" {
+            Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            if (-not [string]::IsNullOrWhiteSpace($result.BackupPath)) {
+                Write-Host ("         Backup: {0}" -f $result.BackupPath) -ForegroundColor DarkGray
+            }
+            return $true
+        }
+        "Updated" {
+            Write-Host ("  [OK]   Ghidra Script Bundle enabled: {0}" -f $result.BundleValue) -ForegroundColor Green
+            if (-not [string]::IsNullOrWhiteSpace($result.BackupPath)) {
+                Write-Host ("         Backup: {0}" -f $result.BackupPath) -ForegroundColor DarkGray
+            }
+            return $true
+        }
+        "AlreadyRegistered" {
+            Write-Host ("  [OK]   Ghidra Script Bundle already registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            return $true
+        }
+        "MissingToolConfig" {
+            Write-Host ("  [WARN] Ghidra CodeBrowser config not found: {0}" -f $result.ToolConfigPath) -ForegroundColor Yellow
+            Write-Host "         Start Ghidra/PyGhidra once, close it, then rerun the installer." -ForegroundColor Yellow
+            Write-Host ("         Manual fallback: Script Manager > Bundle Manager, add {0}" -f $bundleDir) -ForegroundColor DarkGray
+            return $false
+        }
+        "MissingBundleDir" {
+            Write-Host ("  [WARN] Il2CppDumper folder missing; Script Bundle not registered: {0}" -f $bundleDir) -ForegroundColor Yellow
+            return $false
+        }
+        default {
+            Write-Host ("  [WARN] Ghidra Script Bundle not patched ({0}). Add manually from Script Manager > Bundle Manager." -f $result.Reason) -ForegroundColor Yellow
+            return $false
+        }
+    }
+}
+
 function Install-ToolkitPythonWithUv {
     param(
         [Parameter(Mandatory)] [string]$Version,
@@ -781,6 +846,164 @@ function Install-GhidraRuntime {
     }
 }
 
+function Get-GhidraInstallProperties {
+    param([Parameter(Mandatory)] [string]$GhidraRoot)
+
+    $propsPath = Join-Path $GhidraRoot "Ghidra\application.properties"
+    if (-not (Test-Path -LiteralPath $propsPath)) {
+        return $null
+    }
+
+    $props = @{}
+    Get-Content -LiteralPath $propsPath | ForEach-Object {
+        if ($_ -match '^([^#][^=]+)=(.*)$') {
+            $props[$Matches[1].Trim()] = $Matches[2].Trim()
+        }
+    }
+
+    return $props
+}
+
+function Get-GhidraUserExtensionsDir {
+    param([Parameter(Mandatory)] [string]$GhidraRoot)
+
+    $props = Get-GhidraInstallProperties -GhidraRoot $GhidraRoot
+    if (-not $props -or -not $props.ContainsKey("application.version")) {
+        Write-Host ("  [WARN] Could not read Ghidra version from {0}" -f (Join-Path $GhidraRoot "Ghidra\application.properties")) -ForegroundColor Yellow
+        return $null
+    }
+
+    $version = $props["application.version"]
+    $releaseName = if ($props.ContainsKey("application.release.name") -and -not [string]::IsNullOrWhiteSpace($props["application.release.name"])) {
+        $props["application.release.name"]
+    }
+    else {
+        "PUBLIC"
+    }
+
+    # Ghidra's user extension install location is under AppData\Roaming\ghidra.
+    $ghidraUserRoot = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "ghidra"
+    return (Join-Path $ghidraUserRoot ("ghidra_{0}_{1}\Extensions" -f $version, $releaseName))
+}
+
+function Find-GhidraExtensionRoot {
+    param([Parameter(Mandatory)] [string]$ExtractDir)
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ((Test-Path -LiteralPath (Join-Path $ExtractDir "extension.properties")) -and
+        (Test-Path -LiteralPath (Join-Path $ExtractDir "Module.manifest"))) {
+        [void]$candidates.Add($ExtractDir)
+    }
+
+    Get-ChildItem -LiteralPath $ExtractDir -Recurse -Filter "extension.properties" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $dir = Split-Path -Parent $_.FullName
+            if (Test-Path -LiteralPath (Join-Path $dir "Module.manifest")) {
+                [void]$candidates.Add($dir)
+            }
+        }
+
+    foreach ($dir in ($candidates | Select-Object -Unique)) {
+        $properties = Get-Content -LiteralPath (Join-Path $dir "extension.properties") -Raw
+        if ($properties -match '(?m)^name=GhidraMCP\s*$') {
+            return $dir
+        }
+    }
+
+    return $null
+}
+
+function Copy-GhidraExtensionTree {
+    param(
+        [Parameter(Mandatory)] [string]$SourceDir,
+        [Parameter(Mandatory)] [string]$TargetDir,
+        [Parameter(Mandatory)] [string]$AllowedParent
+    )
+
+    if (-not (Test-PathWithin -Path $TargetDir -Parent $AllowedParent)) {
+        throw "Refusing to install extension outside expected parent: $TargetDir"
+    }
+
+    if (Test-Path -LiteralPath $TargetDir) {
+        Remove-Item -LiteralPath $TargetDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+
+    Get-ChildItem -LiteralPath $SourceDir -Force | ForEach-Object {
+        if ($_.PSIsContainer) {
+            Copy-Item -LiteralPath $_.FullName -Destination $TargetDir -Recurse -Force
+        }
+        else {
+            Copy-Item -LiteralPath $_.FullName -Destination $TargetDir -Force
+        }
+    }
+
+    foreach ($required in @("extension.properties", "Module.manifest")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $TargetDir $required))) {
+            throw "Ghidra extension install missing $required at $TargetDir"
+        }
+    }
+}
+
+function Install-GhidraMcpExtensionZip {
+    param(
+        [Parameter(Mandatory)] [string]$ExtensionZip,
+        [Parameter(Mandatory)] [string]$GhidraRoot,
+        [Parameter(Mandatory)] [string]$McpDir
+    )
+
+    if (-not (Test-Path -LiteralPath $ExtensionZip)) {
+        Write-Host ("  [FAIL] GhidraMCP extension ZIP missing: {0}" -f $ExtensionZip) -ForegroundColor Red
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $GhidraRoot -PathType Container)) {
+        Write-Host "  [WARN] Ghidra root not found; extension ZIP saved but GUI extension was not auto-installed." -ForegroundColor Yellow
+        return $true
+    }
+
+    $userExtensionsDir = Get-GhidraUserExtensionsDir -GhidraRoot $GhidraRoot
+    if ([string]::IsNullOrWhiteSpace($userExtensionsDir)) {
+        Write-Host "  [WARN] Could not detect Ghidra user Extensions folder; install the ZIP manually from the GUI." -ForegroundColor Yellow
+        return $true
+    }
+
+    $extractDir = Join-Path $env:TEMP ("GhidraMCP_extract_" + [guid]::NewGuid().ToString("N"))
+    $localExtensionRoot = Join-Path $McpDir "extension"
+    $localExtensionDir = Join-Path $localExtensionRoot "GhidraMCP"
+    $userExtensionDir = Join-Path $userExtensionsDir "GhidraMCP"
+
+    try {
+        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+        Expand-Archive -Path $ExtensionZip -DestinationPath $extractDir -Force
+
+        $extensionRoot = Find-GhidraExtensionRoot -ExtractDir $extractDir
+        if ([string]::IsNullOrWhiteSpace($extensionRoot)) {
+            Write-Host "  [FAIL] GhidraMCP ZIP did not contain extension.properties + Module.manifest." -ForegroundColor Red
+            return $false
+        }
+
+        New-Item -ItemType Directory -Path $localExtensionRoot -Force | Out-Null
+        Copy-GhidraExtensionTree -SourceDir $extensionRoot -TargetDir $localExtensionDir -AllowedParent $localExtensionRoot
+
+        New-Item -ItemType Directory -Path $userExtensionsDir -Force | Out-Null
+        Copy-GhidraExtensionTree -SourceDir $localExtensionDir -TargetDir $userExtensionDir -AllowedParent $userExtensionsDir
+
+        Write-Host ("  [OK]   GhidraMCP extension extracted: {0}" -f $localExtensionDir) -ForegroundColor Green
+        Write-Host ("  [OK]   GhidraMCP extension installed: {0}" -f $userExtensionDir) -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host ("  [FAIL] GhidraMCP extension install failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $extractDir) {
+            Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Install-GhidraMcp {
     param(
         [Parameter(Mandatory)] [string]$ToolsDir,
@@ -837,16 +1060,21 @@ function Install-GhidraMcp {
         ("Release: {0}`nTag: {1}`nExtensionZip: {2}`nDownloadedAt: {3}`n" -f $release.name, $release.tag_name, $extensionPath, (Get-Date).ToString("s")) |
             Set-Content -LiteralPath (Join-Path $targetDir "release.txt") -Encoding UTF8
 
+        if (-not (Install-GhidraMcpExtensionZip -ExtensionZip $extensionPath -GhidraRoot $GhidraRoot -McpDir $targetDir)) {
+            return $false
+        }
+
         if (-not (Install-GhidraMcpRequirements -McpDir $targetDir)) {
             return $false
         }
 
         Write-Host ("  [OK]   GhidraMCP release assets saved to {0}" -f $targetDir) -ForegroundColor Green
         Write-Host ("         Extension ZIP: {0}" -f $extensionPath) -ForegroundColor Cyan
-        Write-Host "         In Ghidra GUI: File > Install Extensions > Add" -ForegroundColor Cyan
-        Write-Host "         Select the extension ZIP above, restart Ghidra, then enable:" -ForegroundColor Cyan
+        Write-Host "         Extension auto-installed under AppData\Roaming\ghidra when Ghidra was detected." -ForegroundColor Cyan
+        Write-Host "         Restart Ghidra, then enable:" -ForegroundColor Cyan
         Write-Host "         File > Configure > Configure All Plugins > GhidraMCP" -ForegroundColor Cyan
         Write-Host "         Then start: Tools > GhidraMCP > Start MCP Server" -ForegroundColor Cyan
+        Write-Host "         Manual fallback: File > Install Extensions > Add, select the ZIP above." -ForegroundColor DarkGray
         return $true
     }
     catch {
@@ -1200,6 +1428,7 @@ if ($InstallIl2CppDumper) {
 $il2cppOk = Test-PathExists $toolsIl2cpp "Il2CppDumper"
 if ($il2cppOk) {
     Repair-Il2CppDumperGhidraTemplates -Dir (Join-Path $Tools "Il2CppDumper") | Out-Null
+    Install-Il2CppDumperGhidraScriptBundle -ToolsDir $Tools -GhidraRoot $toolsGhidra | Out-Null
 }
 if (-not ($il2cppOk)) {
     Write-Host "         Tip: re-run with -InstallIl2CppDumper, or drop the binary at tools/Il2CppDumper/Il2CppDumper.exe" -ForegroundColor Yellow
@@ -1288,6 +1517,7 @@ Write-Host "  .\re.ps1 import  <GameName>                             # Ghidra h
 Write-Host "  .\re.ps1 flow    <GameName> <ExtractedPath>             # prepare project and open PyGhidra"
 Write-Host "  .\re.ps1 ghidra-gui                                     # full GUI"
 Write-Host "  .\re.ps1 mcp                                            # Ghidra MCP bridge"
+Write-Host "  In Ghidra: Script Manager should include tools\Il2CppDumper as a Script Bundle"
 Write-Host "  In Ghidra: File > Configure > Configure All Plugins > GhidraMCP"
 Write-Host "  In Ghidra: Tools > GhidraMCP > Start MCP Server"
 

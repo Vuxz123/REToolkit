@@ -27,6 +27,21 @@ launcher. PyGhidra is launched through `runtime/python/pyghidra-venv`, which is
 created from that local Python by the installer and recreated by the wrapper if
 it is missing.
 
+`-InstallIl2CppDumper` patches `tools\Il2CppDumper\ghidra.py` and
+`tools\Il2CppDumper\ghidra_with_struct.py` with toolkit-maintained Python 3
+templates. If Ghidra has already created its CodeBrowser user config, the
+installer and `re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` also register
+`tools\Il2CppDumper` as a Ghidra Script Bundle in:
+
+```text
+%APPDATA%\ghidra\ghidra_<version>_PUBLIC\tools\_code_browser.tcd
+```
+
+The toolkit writes a `.bak.<timestamp>` backup before modifying that file. If
+the config does not exist yet, start and close Ghidra once, then rerun the
+installer or wrapper. Manual fallback: Script Manager > Bundle Manager, add
+`tools\Il2CppDumper`.
+
 `-InstallGhidraMcp` downloads the latest release assets from:
 
 ```text
@@ -37,8 +52,15 @@ It saves the extension ZIP, Python bridge, and requirements file under
 `tools/ghidra-mcp`. It also creates `tools/ghidra-mcp/.venv` and installs
 `requirements.txt` there for the MCP bridge.
 
+When Ghidra is installed locally, it also extracts the extension into
+`tools/ghidra-mcp/extension/GhidraMCP` and installs it into:
+
+```text
+%APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
+```
+
 `bridge_mcp_ghidra.py` is the MCP bridge used by AI clients. It is separate
-from the Ghidra extension ZIP that you install into the GUI.
+from the Ghidra extension that runs inside the GUI.
 
 Optional:
 
@@ -54,13 +76,7 @@ Optional:
 .\re.ps1 pyghidra-gui
 ```
 
-2. Install the release ZIP:
-
-```text
-File > Install Extensions > Add
-```
-
-Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, then restart Ghidra.
+2. Restart Ghidra if it was already open while the installer ran.
 
 3. Open a CodeBrowser window for your project/program.
 4. Enable the plugin:
@@ -80,6 +96,10 @@ CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
 ```text
 Tools > GhidraMCP > Start MCP Server
 ```
+
+If the menu is missing, use the saved ZIP as a manual fallback:
+`File > Install Extensions > Add`, select
+`tools/ghidra-mcp/GhidraMCP-<version>.zip`, then restart Ghidra.
 
 ## 4. Prepare A Game Project
 
@@ -113,11 +133,14 @@ In the GUI:
 1. Open `workspaces/FoodHunt/03_GhidraProject`.
 2. Open the imported program, usually `libil2cpp.so` or `GameAssembly.dll`.
 3. Run Auto Analysis.
-4. Run this script from Script Manager if you need Il2CppDumper symbols:
+4. Run this script from the `tools\Il2CppDumper` Script Bundle if you need
+   Il2CppDumper symbols:
 
 ```text
-workspaces/FoodHunt/02_Il2CppDumperOutput/ghidra.py
+ghidra.py
 ```
+
+When prompted, select `workspaces/FoodHunt/02_Il2CppDumperOutput/script.json`.
 
 5. Start the MCP server:
 
