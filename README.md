@@ -1,5 +1,17 @@
 # REToolkit
 
+## Quick Install
+
+Pull this repository to your machine first. If you use an AI agent, you can drag
+the files from `prompts/` into the agent and ask it to install or configure the
+toolkit for you.
+
+Suggested agent prompt:
+
+```text
+cài đặt với prompts trên và chạy flows cho thằng apk này {path}
+```
+
 REToolkit is a portable Windows toolkit for preparing Unity IL2CPP projects for
 Ghidra-based reverse engineering. The toolkit prepares the project; interactive
 analysis and AI-assisted queries should run through GhidraMCP.
