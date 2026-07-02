@@ -3,6 +3,12 @@
 This prompt is for an AI agent or human setting up REToolkit for MCP-first
 Ghidra reverse engineering.
 
+Example user request for an agent:
+
+```text
+cài đặt với prompts trên và chạy flows cho thằng apk này {path}
+```
+
 ## Goal
 
 Use `bethington/ghidra-mcp` as the analysis/query backend. REToolkit prepares
@@ -165,6 +171,12 @@ Prepare the project with REToolkit:
 Ghidra without analysis, generates notes, sets the default Ghidra project, and
 opens PyGhidra. It intentionally does not run long headless Auto Analysis and
 does not auto-apply `ghidra.py`.
+
+Important for agents: `flow`, `open`, `ghidra-gui`, and `pyghidra-gui` can
+open the Ghidra/PyGhidra GUI as a foreground process and keep streaming logs in
+the same console. The command may not return while the GUI is open; treat the
+visible GUI window as the launch handoff instead of waiting for terminal
+completion.
 
 Finish in the GUI:
 
