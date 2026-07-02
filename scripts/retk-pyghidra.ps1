@@ -91,10 +91,11 @@ function Invoke-PyGhidraGui {
     $vmArgs = Get-PyGhidraVmArgs
     $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $ToolPaths.GhidraRoot)
     if ($vmArgs.Count -gt 0) { $launchArgs += $vmArgs }
+    $runInConsole = $false
     if ($Arguments.Count -gt 0) {
         foreach ($arg in $Arguments) {
             if ($arg -eq "--console") {
-                Write-Host "[INFO] --console is implicit; PyGhidra is launched in the foreground." -ForegroundColor DarkGray
+                $runInConsole = $true
                 continue
             }
             $launchArgs += $arg
@@ -107,8 +108,21 @@ function Invoke-PyGhidraGui {
             Write-Host ("Using PyGhidra Python: {0}" -f $pyGhidraPython) -ForegroundColor Cyan
             & $pyGhidraPython --version
             Write-Host ("Using PyGhidra package: {0}" -f $pyGhidraVersion) -ForegroundColor Cyan
-            & $pyGhidraPython @launchArgs
-            if ($LASTEXITCODE -ne 0) { throw "PyGhidra exited with code $LASTEXITCODE" }
+
+            if ($runInConsole) {
+                Write-Host "[INFO] --console requested; PyGhidra logs stay attached to this console." -ForegroundColor DarkGray
+                $foregroundArgs = @($launchArgs)
+                & $pyGhidraPython @foregroundArgs
+                if ($LASTEXITCODE -ne 0) { throw "PyGhidra exited with code $LASTEXITCODE" }
+                return
+            }
+
+            $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+            $logFile = Join-Path $Root ("logs\pyghidra-gui-{0}.out.log" -f $stamp)
+            $launch = Start-DetachedNativeProcess -FilePath $pyGhidraPython -Arguments $launchArgs -WorkingDirectory $Root -LogFile $logFile -Activity "PyGhidra GUI"
+            Write-Host ("PyGhidra GUI started in detached mode. PID: {0}" -f $launch.ProcessId) -ForegroundColor Green
+            Write-Host ("Stdout log: {0}" -f $launch.StdOutLog) -ForegroundColor DarkGray
+            Write-Host ("Stderr log: {0}" -f $launch.StdErrLog) -ForegroundColor DarkGray
         }
         finally {
             Pop-Location

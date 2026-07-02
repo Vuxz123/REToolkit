@@ -1,6 +1,6 @@
 ---
 name: retoolkit-flow
-description: Use when preparing Unity IL2CPP APK/XAPK/AAB/ZIP or extracted builds with REToolkit flow, opening Ghidra/PyGhidra GUI, handling non-returning GUI launches, or exporting/importing .re workspaces.
+description: Use when preparing Unity IL2CPP APK/XAPK/AAB/ZIP or extracted builds with REToolkit flow, opening detached Ghidra/PyGhidra GUI handoffs, or exporting/importing .re workspaces.
 ---
 
 # REToolkit Flow
@@ -28,14 +28,12 @@ PyGhidra.
 
 ## GUI Handoff
 
-`flow`, `open`, `ghidra-gui`, and `pyghidra-gui` can open the GUI as a
-foreground process and keep streaming logs in the same console. The terminal
-command may not return while the GUI is open. Treat the visible GUI window as
-the launch handoff instead of waiting for terminal completion.
+`flow`, `open`, and `pyghidra-gui` start PyGhidra detached by default. The
+wrapper returns after launch handoff while the GUI keeps running. PyGhidra
+stdout/stderr logs are written under `logs/pyghidra-gui-*`.
 
-If the agent needs its shell back, launch the command in a separate PowerShell
-process and report that logs are attached to that process. Do not kill the GUI
-just because the command has not exited.
+Use `--console` only when foreground logs are intentional. Do not kill the GUI
+just because a previous foreground console command did not exit.
 
 ## Finish In Ghidra
 
@@ -81,5 +79,6 @@ archive import.
 
 - Do not run long headless analysis before the GUI workflow unless explicitly
   requested.
-- Do not assume a non-returning GUI launch is a failure.
+- Do not use `--console` in agent automation unless the user asks for attached
+  foreground logs.
 - Do not run headless analysis while the same project is locked by the GUI.

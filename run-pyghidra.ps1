@@ -96,6 +96,25 @@ function Get-PyGhidraVmArgs {
     return @($items.ToArray())
 }
 
+function Join-NativeArgumentString {
+    param([Parameter()] [string[]]$Arguments)
+
+    if ($null -eq $Arguments) { return "" }
+
+    $quoted = New-Object System.Collections.Generic.List[string]
+    foreach ($arg in $Arguments) {
+        if ($null -eq $arg) {
+            [void]$quoted.Add('""')
+            continue
+        }
+
+        $s = ([string]$arg).Replace('"', '\"')
+        [void]$quoted.Add('"' + $s + '"')
+    }
+
+    return ($quoted -join ' ')
+}
+
 function Get-PythonPackageVersion {
     param(
         [Parameter(Mandatory)] [string]$PythonExe,
@@ -178,10 +197,11 @@ try {
     $vmArgs = Get-PyGhidraVmArgs
     $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $GhidraRoot)
     if ($vmArgs.Count -gt 0) { $launchArgs += $vmArgs }
+    $runInConsole = $false
     if ($args.Count -gt 0) {
         foreach ($arg in $args) {
             if ($arg -eq "--console") {
-                Write-Host "[INFO] --console is implicit; PyGhidra is launched in the foreground." -ForegroundColor DarkGray
+                $runInConsole = $true
                 continue
             }
             $launchArgs += $arg
@@ -190,8 +210,27 @@ try {
 
     Push-Location $Root
     try {
-        & $PyGhidraPython @launchArgs
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if ($runInConsole) {
+            Write-Host "[INFO] --console requested; PyGhidra logs stay attached to this console." -ForegroundColor DarkGray
+            $foregroundArgs = @($launchArgs)
+            & $PyGhidraPython @foregroundArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+        else {
+            $logDir = Join-Path $Root "logs"
+            New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+            $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+            $stdoutLog = Join-Path $logDir ("pyghidra-gui-{0}.out.log" -f $stamp)
+            $stderrLog = Join-Path $logDir ("pyghidra-gui-{0}.out.err.log" -f $stamp)
+
+            $argString = Join-NativeArgumentString $launchArgs
+            $proc = Start-Process -FilePath $PyGhidraPython -ArgumentList $argString -WorkingDirectory $Root -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -WindowStyle Hidden -PassThru
+            if ($null -eq $proc) { throw "Failed to start detached PyGhidra process." }
+
+            Write-Host ("PyGhidra GUI started in detached mode. PID: {0}" -f $proc.Id) -ForegroundColor Green
+            Write-Host ("Stdout log: {0}" -f $stdoutLog) -ForegroundColor DarkGray
+            Write-Host ("Stderr log: {0}" -f $stderrLog) -ForegroundColor DarkGray
+        }
     } finally {
         Pop-Location
     }

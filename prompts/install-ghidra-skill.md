@@ -183,11 +183,11 @@ Ghidra without analysis, generates notes, sets the default Ghidra project, and
 opens PyGhidra. It intentionally does not run long headless Auto Analysis and
 does not auto-apply `ghidra.py`.
 
-Important for agents: `flow`, `open`, `ghidra-gui`, and `pyghidra-gui` can
-open the Ghidra/PyGhidra GUI as a foreground process and keep streaming logs in
-the same console. The command may not return while the GUI is open; treat the
-visible GUI window as the launch handoff instead of waiting for terminal
-completion.
+Important for agents: `flow`, `open`, and `pyghidra-gui` start PyGhidra
+detached by default, so the wrapper returns after launch handoff while the GUI
+keeps running. PyGhidra stdout/stderr logs are written under
+`logs/pyghidra-gui-*`. Use `--console` only when foreground logs are
+intentional.
 
 Finish in the GUI:
 

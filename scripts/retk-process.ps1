@@ -61,6 +61,55 @@ function Invoke-NativeProcess {
     }
 }
 
+function Start-DetachedNativeProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter()] [string[]]$Arguments,
+        [Parameter()] [string]$WorkingDirectory,
+        [Parameter(Mandatory)] [string]$LogFile,
+        [string]$Activity = "Detached native process"
+    )
+
+    if ($null -eq $Arguments) { $Arguments = @() }
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Native process not found: $FilePath"
+    }
+
+    $logDir = Split-Path -Parent $LogFile
+    if ($logDir) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($LogFile)
+    $stderrLog = Join-Path $logDir ("{0}.err.log" -f $baseName)
+    $argString = Join-NativeArgumentString $Arguments
+    $commandLine = "{0} {1}" -f $FilePath, $argString
+
+    $startArgs = @{
+        FilePath               = $FilePath
+        ArgumentList           = $argString
+        RedirectStandardOutput = $LogFile
+        RedirectStandardError  = $stderrLog
+        WindowStyle            = "Hidden"
+        PassThru               = $true
+    }
+    if ($WorkingDirectory) { $startArgs.WorkingDirectory = $WorkingDirectory }
+
+    Write-Host ("[START] {0}" -f $Activity) -ForegroundColor Cyan
+    Write-Host ("        {0}" -f $commandLine) -ForegroundColor DarkGray
+
+    $proc = Start-Process @startArgs
+    if ($null -eq $proc) {
+        throw "Failed to start detached process: $FilePath"
+    }
+
+    return [pscustomobject]@{
+        ProcessId = $proc.Id
+        Command   = $commandLine
+        StdOutLog = $LogFile
+        StdErrLog = $stderrLog
+    }
+}
+
 function Invoke-AnalyzeHeadless {
     param([Parameter(Mandatory)] [string[]]$HeadlessArgs)
 

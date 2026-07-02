@@ -481,7 +481,7 @@ function Open-PyGhidraProject {
     # project dir/name args because some PyGhidra versions exit on unsupported args.
     Invoke-PyGhidraGui
 
-    Write-Host "PyGhidra closed or launcher returned." -ForegroundColor Green
+    Write-Host "PyGhidra launch handed off; this wrapper can return while the GUI keeps running." -ForegroundColor Green
 }
 
 function Run-FullFlow {
@@ -528,5 +528,5 @@ function Run-FullFlow {
 
     Open-PyGhidraProject $GameName
 
-    Write-Host "Flow completed for $GameName. PyGhidra is now responsible for analysis/symbol steps." -ForegroundColor Green
+    Write-Host "Flow completed for $GameName. PyGhidra is running separately for analysis/symbol steps." -ForegroundColor Green
 }
