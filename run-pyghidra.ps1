@@ -10,6 +10,55 @@ $PyGhidraVenv = Join-Path $Root "runtime\python\pyghidra-venv"
 $PyGhidraPython = Join-Path $PyGhidraVenv "Scripts\python.exe"
 $GhidraRoot = Join-Path $Root "tools\ghidra"
 $PyGhidraDist = Join-Path $GhidraRoot "Ghidra\Features\PyGhidra\pypkg\dist"
+$Il2CppDumperExe = Join-Path $Root "tools\Il2CppDumper\Il2CppDumper.exe"
+$GhidraScriptBundleHelper = Join-Path $Root "scripts\ghidra-script-bundle.ps1"
+if (Test-Path -LiteralPath $GhidraScriptBundleHelper) {
+    . $GhidraScriptBundleHelper
+}
+
+function Ensure-Il2CppDumperGhidraScriptBundle {
+    if (-not (Get-Command "Register-GhidraScriptBundle" -CommandType Function -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $Il2CppDumperExe -PathType Leaf)) {
+        return $false
+    }
+
+    $bundleDir = Join-Path $Root "tools\Il2CppDumper"
+    if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+        return $false
+    }
+
+    $toolConfigPath = Get-GhidraCodeBrowserToolConfigPath -GhidraRoot $GhidraRoot
+    if ([string]::IsNullOrWhiteSpace($toolConfigPath)) {
+        return $false
+    }
+
+    $result = Register-GhidraScriptBundle -ToolConfigPath $toolConfigPath -BundleDir $bundleDir -GhidraRoot $GhidraRoot -CreateBackup
+    switch ($result.Reason) {
+        "Added" {
+            Write-Host ("  [OK]   Ghidra Script Bundle registered: {0}" -f $result.BundleValue) -ForegroundColor Green
+            return $true
+        }
+        "Updated" {
+            Write-Host ("  [OK]   Ghidra Script Bundle enabled: {0}" -f $result.BundleValue) -ForegroundColor Green
+            return $true
+        }
+        "AlreadyRegistered" {
+            Write-Host ("  [OK]   Ghidra Script Bundle already registered: {0}" -f $result.BundleValue) -ForegroundColor DarkGray
+            return $true
+        }
+        "MissingToolConfig" {
+            Write-Host "  [WARN] Ghidra Script Bundle not registered yet. Start and close Ghidra once, then rerun this command." -ForegroundColor Yellow
+            return $false
+        }
+        default {
+            Write-Host ("  [WARN] Ghidra Script Bundle not patched ({0}). Add tools\Il2CppDumper from Script Manager > Bundle Manager." -f $result.Reason) -ForegroundColor Yellow
+            return $false
+        }
+    }
+}
 
 if (-not (Test-Path -LiteralPath $JdkPath)) {
     Write-Host "[FAIL] JDK 21 portable not found at: $JdkPath" -ForegroundColor Red
@@ -120,6 +169,7 @@ try {
     & $PyGhidraPython --version
     $pyGhidraVersion = Ensure-PyGhidraPackage -PythonExe $PyGhidraPython
     Write-Host ("Using PyGhidra package: {0}" -f $pyGhidraVersion) -ForegroundColor Cyan
+    Ensure-Il2CppDumperGhidraScriptBundle | Out-Null
 
     $vmArgs = Get-PyGhidraVmArgs
     $launchArgs = @("-m", "pyghidra", "-g", "--install-dir", $GhidraRoot)
