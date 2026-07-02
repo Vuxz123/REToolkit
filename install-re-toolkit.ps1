@@ -92,6 +92,19 @@ function Resolve-PythonDownloadVersion {
     }
 }
 
+function Test-PathWithin {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Parent
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\','/'))
+    $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd([char[]]@('\','/'))
+
+    return $fullPath.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($fullParent + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-ToolkitPythonDir {
     param([Parameter(Mandatory)] [string]$Version)
 
@@ -256,6 +269,27 @@ function Install-PyGhidraPythonVenv {
     }
 }
 
+function Get-PythonPackageVersion {
+    param(
+        [Parameter(Mandatory)] [string]$PythonExe,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $probe = @"
+import importlib.metadata as m
+try:
+    print(m.version('$PackageName'))
+except m.PackageNotFoundError:
+    pass
+"@
+    $lines = @(& $PythonExe -c $probe 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw "package version probe failed for $PackageName with exit code $LASTEXITCODE" }
+
+    $version = $lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($version)) { return "" }
+    return $version.Trim()
+}
+
 function Install-PyGhidraPythonPackage {
     param(
         [Parameter(Mandatory)] [string]$VenvPython,
@@ -270,9 +304,9 @@ function Install-PyGhidraPythonPackage {
     }
 
     try {
-        $current = & $VenvPython -c "import importlib.metadata as m; print(m.version('pyghidra'))" 2>$null
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($current)) {
-            Write-Host ("  [OK]   PyGhidra package: {0}" -f $current.Trim()) -ForegroundColor Green
+        $current = Get-PythonPackageVersion -PythonExe $VenvPython -PackageName "pyghidra"
+        if (-not [string]::IsNullOrWhiteSpace($current)) {
+            Write-Host ("  [OK]   PyGhidra package: {0}" -f $current) -ForegroundColor Green
             return $true
         }
 
@@ -280,8 +314,11 @@ function Install-PyGhidraPythonPackage {
         & $VenvPython -m pip install --no-index -f $distDir pyghidra
         if ($LASTEXITCODE -ne 0) { throw "pip install --no-index -f failed with exit code $LASTEXITCODE" }
 
-        $installed = & $VenvPython -c "import importlib.metadata as m; print(m.version('pyghidra'))"
-        Write-Host ("  [OK]   PyGhidra package: {0}" -f $installed.Trim()) -ForegroundColor Green
+        $installed = Get-PythonPackageVersion -PythonExe $VenvPython -PackageName "pyghidra"
+        if ([string]::IsNullOrWhiteSpace($installed)) {
+            throw "PyGhidra package install finished but importlib.metadata could not read the version."
+        }
+        Write-Host ("  [OK]   PyGhidra package: {0}" -f $installed) -ForegroundColor Green
         return $true
     }
     catch {
@@ -348,6 +385,126 @@ def as_text(value):
     return $false
 }
 
+function Install-ToolkitPythonWithUv {
+    param(
+        [Parameter(Mandatory)] [string]$Version,
+        [Parameter(Mandatory)] [string]$TargetDir,
+        [Parameter(Mandatory)] [string]$TargetExe
+    )
+
+    $uv = Get-Command "uv" -ErrorAction SilentlyContinue
+    if (-not $uv) {
+        Write-Host "  [INFO] uv not found; falling back to python.org installer." -ForegroundColor DarkGray
+        return $false
+    }
+
+    if (-not (Test-PathWithin -Path $TargetDir -Parent $PythonRoot)) {
+        throw "Refusing to install Python outside toolkit runtime: $TargetDir"
+    }
+
+    $stageDir = Join-Path $PythonRoot (".uv-python-" + [guid]::NewGuid().ToString("N"))
+    $uvCacheDir = Join-Path $Runtime "uv-cache"
+    if (-not (Test-PathWithin -Path $stageDir -Parent $PythonRoot)) {
+        throw "Refusing to stage Python outside toolkit runtime: $stageDir"
+    }
+
+    $oldUvCacheDir = $env:UV_CACHE_DIR
+    try {
+        New-Item -ItemType Directory -Path $PythonRoot -Force | Out-Null
+        New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $uvCacheDir -Force | Out-Null
+
+        $env:UV_CACHE_DIR = $uvCacheDir
+
+        Write-Host ("  Installing toolkit Python {0} with uv (portable, no registry)..." -f $Version) -ForegroundColor Cyan
+        & uv python install --install-dir $stageDir --no-registry --no-bin --cache-dir $uvCacheDir $Version
+        if ($LASTEXITCODE -ne 0) { throw "uv python install failed with exit code $LASTEXITCODE" }
+
+        $candidate = Get-ChildItem -LiteralPath $stageDir -Recurse -Filter "python.exe" -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path -LiteralPath (Join-Path (Split-Path -Parent $_.FullName) "Lib\os.py") } |
+            Sort-Object FullName |
+            Select-Object -First 1
+        if (-not $candidate) {
+            $candidate = Get-ChildItem -LiteralPath $stageDir -Recurse -Filter "python.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName |
+                Select-Object -First 1
+        }
+        if (-not $candidate) { throw "uv install completed but python.exe was not found under $stageDir" }
+
+        $sourceDir = Split-Path -Parent $candidate.FullName
+        if (-not (Test-PathWithin -Path $sourceDir -Parent $stageDir)) {
+            throw "Refusing to move Python from outside staging dir: $sourceDir"
+        }
+
+        if (Test-Path -LiteralPath $TargetDir) {
+            Remove-Item -LiteralPath $TargetDir -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $TargetDir) -Force | Out-Null
+        Move-Item -LiteralPath $sourceDir -Destination $TargetDir -Force
+
+        if (-not (Test-Path -LiteralPath $TargetExe)) {
+            throw "python.exe missing after uv install normalization: $TargetExe"
+        }
+
+        return $true
+    }
+    catch {
+        Write-Host ("  [WARN] uv Python install failed: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        return $false
+    }
+    finally {
+        if ([string]::IsNullOrEmpty($oldUvCacheDir)) {
+            Remove-Item Env:\UV_CACHE_DIR -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:UV_CACHE_DIR = $oldUvCacheDir
+        }
+
+        if ((Test-Path -LiteralPath $stageDir) -and (Test-PathWithin -Path $stageDir -Parent $PythonRoot)) {
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Install-ToolkitPythonWithPythonOrgInstaller {
+    param(
+        [Parameter(Mandatory)] [string]$Version,
+        [Parameter(Mandatory)] [string]$MajorMinor,
+        [Parameter(Mandatory)] [string]$TargetDir,
+        [Parameter(Mandatory)] [string]$TargetExe
+    )
+
+    $exe = Join-Path $env:TEMP "python-installer.exe"
+    try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $TargetDir) -Force | Out-Null
+
+        $url = "https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe"
+        Write-Host ("  Downloading python.org {0} installer for toolkit Python {1}..." -f $Version, $MajorMinor) -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -TimeoutSec 600
+        $arg = "/quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_pip=1 Include_launcher=0 Shortcuts=0 AssociateFiles=0 TargetDir=`"$TargetDir`""
+        Write-Host "  Running installer into toolkit runtime (no global PATH/launcher change)..." -ForegroundColor Cyan
+        $proc = Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru
+        if ($proc.ExitCode -ne 0) {
+            Write-Host ("  [FAIL] Installer exited {0}" -f $proc.ExitCode) -ForegroundColor Red
+            return $false
+        }
+
+        if (-not (Test-Path -LiteralPath $TargetExe)) {
+            Write-Host ("  [FAIL] python.exe missing after install: {0}" -f $TargetExe) -ForegroundColor Red
+            Write-Host "         The python.org EXE installer reused existing Windows install state instead of TargetDir." -ForegroundColor Yellow
+            Write-Host "         Install uv and rerun -InstallRuntime for a registry-free managed Python install." -ForegroundColor Yellow
+            return $false
+        }
+
+        return $true
+    } catch {
+        Write-Host "  [FAIL] $_" -ForegroundColor Red
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Install-Python {
     param([string]$Version)
 
@@ -369,38 +526,21 @@ function Install-Python {
         }
     }
 
-    $exe = Join-Path $env:TEMP "python-installer.exe"
-    try {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $targetDir) -Force | Out-Null
+    $installed = Install-ToolkitPythonWithUv -Version $downloadVersion -TargetDir $targetDir -TargetExe $targetExe
+    if (-not $installed) {
+        $installed = Install-ToolkitPythonWithPythonOrgInstaller -Version $downloadVersion -MajorMinor $majorMinor -TargetDir $targetDir -TargetExe $targetExe
+    }
 
-        $url = "https://www.python.org/ftp/python/$downloadVersion/python-$downloadVersion-amd64.exe"
-        Write-Host ("  Downloading python.org {0} installer for toolkit Python {1}..." -f $downloadVersion, $majorMinor) -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -TimeoutSec 600
-        $arg = "/quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_pip=1 Include_launcher=0 Shortcuts=0 AssociateFiles=0 TargetDir=`"$targetDir`""
-        Write-Host "  Running installer into toolkit runtime (no global PATH/launcher change)..." -ForegroundColor Cyan
-        $proc = Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru
-        if ($proc.ExitCode -ne 0) {
-            Write-Host ("  [FAIL] Installer exited {0}" -f $proc.ExitCode) -ForegroundColor Red
-            return $false
-        }
-
-        if (-not (Test-Path -LiteralPath $targetExe)) {
-            Write-Host ("  [FAIL] python.exe missing after install: {0}" -f $targetExe) -ForegroundColor Red
-            return $false
-        }
-
+    if ($installed) {
         $pyVer = & $targetExe --version 2>&1
         Write-Host ("  [OK]   Toolkit Python: {0}" -f $pyVer) -ForegroundColor Green
         Write-Host ("         Path          : {0}" -f $targetDir) -ForegroundColor Cyan
         Write-Host          "         (no global Python/PATH/py launcher change)" -ForegroundColor DarkGray
         if (-not (Install-PyGhidraPythonVenv -BasePythonExe $targetExe -VenvDir $PyGhidraVenv)) { return $false }
         return (Install-PyGhidraPythonPackage -VenvPython $PyGhidraPython -GhidraRoot $GhidraRoot)
-    } catch {
-        Write-Host "  [FAIL] $_" -ForegroundColor Red
-        return $false
-    } finally {
-        if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue }
     }
+
+    return $false
 }
 
 function Install-GhidraRuntime {

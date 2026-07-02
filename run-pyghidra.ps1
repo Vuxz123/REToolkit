@@ -43,6 +43,27 @@ function Get-PyGhidraVmArgs {
     return @($items.ToArray())
 }
 
+function Get-PythonPackageVersion {
+    param(
+        [Parameter(Mandatory)] [string]$PythonExe,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $probe = @"
+import importlib.metadata as m
+try:
+    print(m.version('$PackageName'))
+except m.PackageNotFoundError:
+    pass
+"@
+    $lines = @(& $PythonExe -c $probe 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw "package version probe failed for $PackageName with exit code $LASTEXITCODE" }
+
+    $version = $lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($version)) { return "" }
+    return $version.Trim()
+}
+
 if (-not (Test-Path -LiteralPath $PyGhidraPython)) {
     Write-Host "Creating PyGhidra venv with toolkit Python: $PyGhidraVenv" -ForegroundColor Cyan
     New-Item -ItemType Directory -Path (Split-Path -Parent $PyGhidraVenv) -Force | Out-Null
@@ -56,9 +77,9 @@ if (-not (Test-Path -LiteralPath $PyGhidraPython)) {
 function Ensure-PyGhidraPackage {
     param([Parameter(Mandatory)] [string]$PythonExe)
 
-    $current = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))" 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($current)) {
-        return $current.Trim()
+    $current = Get-PythonPackageVersion -PythonExe $PythonExe -PackageName "pyghidra"
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        return $current
     }
 
     Write-Host "Installing bundled PyGhidra into local venv from: $PyGhidraDist" -ForegroundColor Cyan
@@ -67,12 +88,12 @@ function Ensure-PyGhidraPackage {
         throw "Failed to install bundled PyGhidra into local venv. Exit code: $LASTEXITCODE"
     }
 
-    $installed = & $PythonExe -c "import importlib.metadata as m; print(m.version('pyghidra'))"
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installed)) {
+    $installed = Get-PythonPackageVersion -PythonExe $PythonExe -PackageName "pyghidra"
+    if ([string]::IsNullOrWhiteSpace($installed)) {
         throw "PyGhidra package install finished but importlib.metadata could not read the version."
     }
 
-    return $installed.Trim()
+    return $installed
 }
 
 $OldJavaHome          = $env:JAVA_HOME
