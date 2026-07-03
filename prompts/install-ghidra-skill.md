@@ -146,8 +146,13 @@ Codex TOML fragment:
 
 ```toml
 [mcp_servers.ghidra]
-command = "C:\\Users\\DPC00176\\REToolkit\\re.ps1"
-args = ["mcp"]
+command = "powershell.exe"
+args = [
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
+  "mcp"
+]
 
 [mcp_servers.ghidra.env]
 RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"
