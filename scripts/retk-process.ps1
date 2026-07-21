@@ -116,7 +116,8 @@ function Start-DetachedGuiProcess {
         [Parameter(Mandatory)] [string]$FilePath,
         [Parameter()] [string[]]$Arguments,
         [Parameter()] [string]$WorkingDirectory,
-        [string]$Activity = "Detached GUI process"
+        [string]$Activity = "Detached GUI process",
+        [int]$CrashCheckMilliseconds = 1500
     )
 
     if ($null -eq $Arguments) { $Arguments = @() }
@@ -141,6 +142,23 @@ function Start-DetachedGuiProcess {
     $proc = Start-Process @startArgs
     if ($null -eq $proc) {
         throw "Failed to start GUI process: $FilePath"
+    }
+
+    # Start-Process only confirms Windows accepted the launch; a process that
+    # crashes immediately (missing dependency, bad args) still returns a
+    # valid Process object here. Poll briefly so a fast crash is reported as
+    # a failure instead of a false "started" success.
+    $elapsedMs = 0
+    $pollMs = 150
+    while ($elapsedMs -lt $CrashCheckMilliseconds) {
+        Start-Sleep -Milliseconds $pollMs
+        $elapsedMs += $pollMs
+        $proc.Refresh()
+        if ($proc.HasExited) { break }
+    }
+
+    if ($proc.HasExited) {
+        throw ("{0} exited immediately after launch (exit code {1}): {2}" -f $Activity, $proc.ExitCode, $commandLine)
     }
 
     return [pscustomobject]@{
