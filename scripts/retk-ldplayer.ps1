@@ -178,9 +178,13 @@ function Get-LdPlayerObbPaths {
     $remoteDir = "/sdcard/Android/obb/$PackageName"
     $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "ls", $remoteDir)
 
-    if ($result.ExitCode -ne 0 -or $result.StdOut -match "No such file or directory") {
+    $isMissing = ($result.StdOut -match "No such file or directory") -or ($result.StdErr -match "No such file or directory")
+    if ($isMissing) {
         Write-Host "  [INFO] No OBB directory found for $PackageName (this is normal for many games)." -ForegroundColor DarkGray
         return @()
+    }
+    if ($result.ExitCode -ne 0) {
+        throw "adb shell ls failed with exit code $($result.ExitCode).`n$($result.StdErr)"
     }
 
     $names = @($result.Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
