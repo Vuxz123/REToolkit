@@ -20,6 +20,47 @@ skills/retoolkit-flow
 skills/retoolkit-mcp-analysis
 ```
 
+## Install REToolkit Skills
+
+These REToolkit skills are plain Markdown instruction folders. Any agent can
+use them by reading the repo-local `SKILL.md` files or importing the folders
+into its own skill/instruction mechanism.
+
+For non-Codex agents, do not use `$CODEX_HOME`; point the agent at these
+folders, paste the relevant `SKILL.md` content into its instruction context, or
+copy the folders into that agent's equivalent skill directory:
+
+```text
+skills/retoolkit-install
+skills/retoolkit-flow
+skills/retoolkit-mcp-analysis
+```
+
+For Codex, skip this step when the runtime can read repo-local skills directly.
+If the runtime requires installed Codex skills, install the REToolkit skill
+folders from the REToolkit root. Codex reads installed skills from
+`$CODEX_HOME/skills` or `~/.codex/skills` when `CODEX_HOME` is not set:
+
+```powershell
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+$skillDest = Join-Path $codexHome "skills"
+New-Item -ItemType Directory -Path $skillDest -Force | Out-Null
+
+foreach ($name in @("retoolkit-install", "retoolkit-flow", "retoolkit-mcp-analysis")) {
+    $src = Join-Path (Get-Location) "skills\$name"
+    $dst = Join-Path $skillDest $name
+    if (Test-Path -LiteralPath $dst) {
+        Write-Host "Skill already installed: $dst"
+    }
+    else {
+        Copy-Item -LiteralPath $src -Destination $dst -Recurse
+        Write-Host "Installed skill: $dst"
+    }
+}
+```
+
+Restart Codex to pick up newly installed skills.
+
 ## Goal
 
 Use `bethington/ghidra-mcp` as the analysis/query backend. REToolkit prepares
@@ -41,13 +82,14 @@ From the REToolkit root:
 .\install-re-toolkit.ps1 -All
 ```
 
-`-All` runs the recommended full install order: runtime, Ghidra,
-Il2CppDumper, GhidraMCP, then AssetRipper.
+`-All` runs the recommended full install order: runtime, .NET Runtime,
+Ghidra, Il2CppDumper, GhidraMCP, then AssetRipper.
 
 Use individual flags only when repairing or installing a specific component:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallRuntime
+.\install-re-toolkit.ps1 -InstallDotNetRuntime
 .\install-re-toolkit.ps1 -InstallGhidra
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
 .\install-re-toolkit.ps1 -InstallGhidraMcp
@@ -58,6 +100,10 @@ Use individual flags only when repairing or installing a specific component:
 `runtime/python/python-3.12`. REToolkit/PyGhidra should use this local runtime
 instead of any global Python 3.14 on the machine. It also prepares
 `runtime/python/pyghidra-venv` for PyGhidra launches.
+
+`-InstallDotNetRuntime` installs Microsoft .NET Runtime 8 for Il2CppDumper's
+`net8.0` package. If Microsoft.NETCore.App 6.x is already installed,
+`-InstallIl2CppDumper` can use Il2CppDumper's `net6.0` package instead.
 
 `-InstallIl2CppDumper` replaces `tools\Il2CppDumper\ghidra.py` and
 `tools\Il2CppDumper\ghidra_with_struct.py` with toolkit-maintained Python 3 /
@@ -255,6 +301,7 @@ Use these local commands to prepare and inspect workspace state:
 .\re.ps1 notes <GameName>
 .\re.ps1 ghidra-gui [GameName]
 .\re.ps1 pyghidra-gui [GameName]
+.\re.ps1 assetripper
 .\re.ps1 mcp
 ```
 
@@ -275,6 +322,10 @@ guidance only. Do project queries through the connected GhidraMCP tools.
   and start `Tools > GhidraMCP > Start MCP Server`.
 - Project lock error: close other Ghidra/headless processes for that project,
   or use MCP from the already-open GUI.
+- Il2CppDumper cannot find .NET: run
+  `.\install-re-toolkit.ps1 -InstallDotNetRuntime`; the installer prefers
+  Il2CppDumper `net8.0` and falls back to `net6.0` only when
+  Microsoft.NETCore.App 6.x already exists.
 
 ## Safety
 

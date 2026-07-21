@@ -110,6 +110,45 @@ function Start-DetachedNativeProcess {
     }
 }
 
+function Start-DetachedGuiProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter()] [string[]]$Arguments,
+        [Parameter()] [string]$WorkingDirectory,
+        [string]$Activity = "Detached GUI process"
+    )
+
+    if ($null -eq $Arguments) { $Arguments = @() }
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "GUI process not found: $FilePath"
+    }
+
+    $argString = Join-NativeArgumentString $Arguments
+    $commandLine = if ([string]::IsNullOrWhiteSpace($argString)) { $FilePath } else { "{0} {1}" -f $FilePath, $argString }
+
+    $startArgs = @{
+        FilePath    = $FilePath
+        WindowStyle = "Normal"
+        PassThru    = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($argString)) { $startArgs.ArgumentList = $argString }
+    if ($WorkingDirectory) { $startArgs.WorkingDirectory = $WorkingDirectory }
+
+    Write-Host ("[START] {0}" -f $Activity) -ForegroundColor Cyan
+    Write-Host ("        {0}" -f $commandLine) -ForegroundColor DarkGray
+
+    $proc = Start-Process @startArgs
+    if ($null -eq $proc) {
+        throw "Failed to start GUI process: $FilePath"
+    }
+
+    return [pscustomobject]@{
+        ProcessId = $proc.Id
+        Command   = $commandLine
+    }
+}
+
 function Invoke-AnalyzeHeadless {
     param([Parameter(Mandatory)] [string[]]$HeadlessArgs)
 

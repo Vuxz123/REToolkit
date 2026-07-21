@@ -22,6 +22,7 @@ function Assert-PathExists {
             "PyGhidra"     { "Check tools\ghidra\Ghidra\Features\PyGhidra\pypkg\dist." }
             "Headless"     { "Check tools\ghidra\support\analyzeHeadless.bat." }
             "Il2CppDumper" { "Install Il2CppDumper into tools\Il2CppDumper\Il2CppDumper.exe." }
+            "AssetRipper"  { "Run .\install-re-toolkit.ps1 -InstallAssetRipper." }
             default         { "" }
         }
         throw "[FAIL] $Name not found: $Path`n$hint"

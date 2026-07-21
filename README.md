@@ -86,7 +86,7 @@ workspaces/<GameName>/
 - Ghidra compatible with the installed GhidraMCP plugin.
 - JDK 21, preferably the toolkit portable JDK at `runtime/java/jdk-21`.
 - Toolkit-local Python 3.12 at `runtime/python/python-3.12`.
-- .NET Desktop Runtime for Il2CppDumper.
+- .NET Runtime 8 for Il2CppDumper's `net8.0` package.
 - `uv` for running the Python MCP bridge from `re.ps1 mcp`.
 
 ## Install
@@ -112,15 +112,18 @@ Install runtime and core tools:
 .\install-re-toolkit.ps1 -All
 ```
 
-`-All` runs the recommended full install order: runtime, Ghidra,
-Il2CppDumper, GhidraMCP, then AssetRipper.
+`-All` runs the recommended full install order: runtime, .NET Runtime,
+Ghidra, Il2CppDumper, GhidraMCP, then AssetRipper.
 
 Install pieces individually:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallRuntime
+.\install-re-toolkit.ps1 -InstallDotNetRuntime
 .\install-re-toolkit.ps1 -InstallGhidra
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
+.\install-re-toolkit.ps1 -InstallGhidraMcp
+.\install-re-toolkit.ps1 -InstallAssetRipper
 ```
 
 `-InstallRuntime` installs JDK 21 and a toolkit-local Python 3.12 under
@@ -128,6 +131,11 @@ Install pieces individually:
 `py.exe` launcher, so a system Python 3.14 can stay installed. `pyghidra-gui`
 uses a separate `runtime/python/pyghidra-venv` created from that local Python.
 If the venv is deleted, the PyGhidra wrapper recreates it before launch.
+
+`-InstallDotNetRuntime` installs Microsoft .NET Runtime 8 with `winget`.
+Il2CppDumper v6.7.48 publishes `net8.0` and `net6.0` zips; the installer uses
+`net8.0` when Microsoft.NETCore.App 8.x is present and falls back to `net6.0`
+only when a 6.x runtime is already installed.
 
 `-InstallIl2CppDumper` also replaces the bundled `ghidra.py` and
 `ghidra_with_struct.py` with toolkit-maintained Python 3/PyGhidra templates.
@@ -354,6 +362,7 @@ After the GUI opens:
 | `ghidra-gui [GameName]` | Start Ghidra GUI with toolkit env; optional game name sets the default/recent project first. |
 | `pyghidra-gui [GameName]` | Start PyGhidra GUI with toolkit env; optional game name sets the default/recent project first. |
 | `il2cppdumper <args...>` | Raw Il2CppDumper passthrough. |
+| `assetripper [args...]` | Open the installed AssetRipper GUI; alias: `asset-ripper`. |
 | `mcp` | Start the GhidraMCP Python bridge for AI clients. |
 
 Legacy query aliases `summary`, `strings`, `functions`, and `stats` no longer
@@ -409,3 +418,15 @@ from the already-open GUI instead of starting another headless process.
 
 That warning can appear on IL2CPP binaries. If `dump.cs`, `DummyDll`, and
 `ghidra.py` are generated, the pipeline can usually continue.
+
+### Il2CppDumper cannot find .NET
+
+Run:
+
+```powershell
+.\install-re-toolkit.ps1 -InstallDotNetRuntime
+```
+
+The installer uses Il2CppDumper's `net8.0` package when Microsoft.NETCore.App
+8.x is installed. It can use the `net6.0` package only when Microsoft.NETCore.App
+6.x is already present.

@@ -31,6 +31,7 @@ $ToolPaths = [ordered]@{
     PyGhidraDist     = Join-Path $Tools "ghidra\Ghidra\Features\PyGhidra\pypkg\dist"
     AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
     Dumper           = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
+    AssetRipper      = Join-Path $Tools "AssetRipper\AssetRipper.exe"
 }
 
 $GhidraScriptBundleHelper = Join-Path $Root "scripts\ghidra-script-bundle.ps1"
@@ -170,6 +171,13 @@ switch ($Command) {
         if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 il2cppdumper <native_binary> <global_metadata> [output_dir]" }
         & $ToolPaths.Dumper @Rest
         if ($LASTEXITCODE -ne 0) { throw "Il2CppDumper exited with code $LASTEXITCODE" }
+    }
+
+    { $_ -in @("assetripper", "asset-ripper") } {
+        Assert-PathExists $ToolPaths.AssetRipper "AssetRipper"
+        $assetRipperDir = Split-Path -Parent $ToolPaths.AssetRipper
+        $result = Start-DetachedGuiProcess -FilePath $ToolPaths.AssetRipper -Arguments @($Rest) -WorkingDirectory $assetRipperDir -Activity "AssetRipper GUI"
+        Write-Host ("AssetRipper GUI started (PID {0})." -f $result.ProcessId) -ForegroundColor Green
     }
 
     "mcp" {

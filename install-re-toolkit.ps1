@@ -6,8 +6,10 @@ param(
     [switch]$InstallIl2CppDumper,
     [switch]$InstallAssetRipper,
     [switch]$InstallRuntime,
+    [switch]$InstallDotNetRuntime,
     [switch]$All,
     [int]$JdkVersion = 21,
+    [int]$DotNetRuntimeMajor = 8,
     [string]$PythonVersion = "3.12.10",
     [string]$GhidraVersion = "",
     [string]$Il2CppDumperVersion = "6.7.48",
@@ -34,6 +36,7 @@ Set-Location -LiteralPath $InstallDir
 
 if ($All) {
     $InstallRuntime = $true
+    $InstallDotNetRuntime = $true
     $InstallGhidra = $true
     $InstallIl2CppDumper = $true
     $InstallGhidraMcp = $true
@@ -136,6 +139,64 @@ function Refresh-Path {
     $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $parts = @($user, $machine, $env:Path) | Where-Object { $_ }
     $env:Path = ($parts -split ";" | Where-Object { $_ -and $_ -notmatch '^\s*$' } | Select-Object -Unique) -join ";"
+}
+
+function Get-DotNetRuntimeLine {
+    param([int]$Major)
+
+    $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
+    if (-not $dotnetCmd) { return "" }
+
+    try {
+        $pattern = "^Microsoft\.NETCore\.App\s+$Major\."
+        $runtimes = & $dotnetCmd.Source --list-runtimes 2>&1
+        if ($LASTEXITCODE -ne 0) { return "" }
+
+        $line = $runtimes | Where-Object { $_ -match $pattern } | Select-Object -First 1
+        if ($line) { return [string]$line }
+    }
+    catch { }
+
+    return ""
+}
+
+function Install-DotNetRuntime {
+    param([int]$Major)
+
+    $runtimeLine = Get-DotNetRuntimeLine -Major $Major
+    if (-not [string]::IsNullOrWhiteSpace($runtimeLine)) {
+        Write-Host ("  [SKIP] .NET Runtime {0} already installed: {1}" -f $Major, $runtimeLine) -ForegroundColor Yellow
+        return $true
+    }
+
+    $winget = Get-Command "winget" -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        Write-Host "  [FAIL] winget not found. Install .NET Runtime manually, then re-run setup:" -ForegroundColor Red
+        Write-Host ("           winget install --id Microsoft.DotNet.Runtime.{0} -e --accept-source-agreements --accept-package-agreements" -f $Major) -ForegroundColor Yellow
+        return $false
+    }
+
+    $packageId = "Microsoft.DotNet.Runtime.$Major"
+
+    try {
+        Write-Host ("  Installing .NET Runtime {0} for Il2CppDumper ({1})..." -f $Major, $packageId) -ForegroundColor Cyan
+        & winget install --id $packageId -e --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) { throw "winget install failed with exit code $LASTEXITCODE" }
+
+        Refresh-Path
+        $runtimeLine = Get-DotNetRuntimeLine -Major $Major
+        if (-not [string]::IsNullOrWhiteSpace($runtimeLine)) {
+            Write-Host ("  [OK]   .NET Runtime: {0}" -f $runtimeLine) -ForegroundColor Green
+            return $true
+        }
+
+        Write-Host ("  [WARN] winget finished but Microsoft.NETCore.App {0}.x was not detected yet. Open a new terminal and re-run setup if needed." -f $Major) -ForegroundColor Yellow
+        return $false
+    }
+    catch {
+        Write-Host ("  [FAIL] {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
 }
 
 function Clear-RetkTemp {
@@ -1240,7 +1301,7 @@ function Install-Il2CppDumper {
     }
 
     if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
-        Write-Host "  [FAIL] dotnet not on PATH. Run with -InstallRuntime for JDK/Python; .NET runtime is separate: winget install Microsoft.DotNet.Runtime.6" -ForegroundColor Red
+        Write-Host "  [FAIL] dotnet not on PATH. Run with -InstallDotNetRuntime, then re-run -InstallIl2CppDumper." -ForegroundColor Red
         return $false
     }
 
@@ -1258,11 +1319,9 @@ function Install-Il2CppDumper {
     } elseif ($hasNet6) {
         $tfm = "net6.0"
     } else {
-        $tfm = "net6.0"
-        Write-Host "  [WARN] Microsoft.NETCore.App 6.x/8.x was not detected." -ForegroundColor Yellow
-        Write-Host "         Il2CppDumper will be downloaded as net6.0; install runtime if it fails:" -ForegroundColor Yellow
-        Write-Host "           winget install Microsoft.DotNet.Runtime.6" -ForegroundColor Yellow
-        Write-Host "           winget install Microsoft.DotNet.DesktopRuntime.6" -ForegroundColor Yellow
+        Write-Host "  [FAIL] Microsoft.NETCore.App 8.x/6.x was not detected. Run with -InstallDotNetRuntime, then re-run -InstallIl2CppDumper." -ForegroundColor Red
+        Write-Host "         Il2CppDumper v6.7.48 ships net8.0 and net6.0 packages; this installer prefers net8.0 when available." -ForegroundColor Yellow
+        return $false
     }
 
     $url = "https://github.com/wklin8607/Il2CppDumper/releases/download/Il2CppDumper/Il2CppDumper-v$Version-$tfm.zip"
@@ -1321,6 +1380,12 @@ if ($InstallRuntime) {
     New-Item -ItemType Directory -Path $Runtime -Force | Out-Null
     Invoke-Install "Java"   { Install-Java   -Major     $JdkVersion    | Out-Null }
     Invoke-Install "Python" { Install-Python -Version   $PythonVersion | Out-Null }
+    Refresh-Path
+}
+
+if ($InstallDotNetRuntime) {
+    Write-Section ".NET runtime install (Il2CppDumper)"
+    Invoke-Install ".NET Runtime" { Install-DotNetRuntime -Major $DotNetRuntimeMajor | Out-Null }
     Refresh-Path
 }
 
@@ -1395,19 +1460,27 @@ elseif ($pythonOk) {
 }
 
 $dotnet = Test-Command "dotnet"
+$dotnetRuntimeOk = $false
 if ($dotnet.Found) {
     $runtimes = & dotnet --list-runtimes 2>&1
-    $desktop = $runtimes | Where-Object { $_ -match "WindowsDesktop" } | Select-Object -First 1
-    $core    = $runtimes | Where-Object { $_ -match "App" }        | Select-Object -First 1
-    Write-Host ("  [OK]   dotnet                {0}" -f $core) -ForegroundColor Green
-    if (-not $desktop) {
-        Write-Host "         Missing WindowsDesktop runtime (needed by Il2CppDumper). Install with:" -ForegroundColor Yellow
-        Write-Host "           winget install Microsoft.DotNet.DesktopRuntime.8" -ForegroundColor Yellow
+    $core8 = $runtimes | Where-Object { $_ -match "^Microsoft\.NETCore\.App\s+8\." } | Select-Object -First 1
+    $core6 = $runtimes | Where-Object { $_ -match "^Microsoft\.NETCore\.App\s+6\." } | Select-Object -First 1
+    $coreAny = $runtimes | Where-Object { $_ -match "^Microsoft\.NETCore\.App\s+" } | Select-Object -First 1
+    if ($core8) {
+        Write-Host ("  [OK]   dotnet                {0}" -f $core8) -ForegroundColor Green
+        $dotnetRuntimeOk = $true
+    } elseif ($core6) {
+        Write-Host ("  [OK]   dotnet                {0}" -f $core6) -ForegroundColor Green
+        Write-Host "         Il2CppDumper will use its net6.0 package. Run -InstallDotNetRuntime to install .NET 8 and use net8.0." -ForegroundColor Yellow
+        $dotnetRuntimeOk = $true
+    } elseif ($coreAny) {
+        Write-Host ("  [WARN] dotnet                {0}" -f $coreAny) -ForegroundColor Yellow
+        Write-Host "         Missing Microsoft.NETCore.App 8.x/6.x required by Il2CppDumper. Run with -InstallDotNetRuntime." -ForegroundColor Yellow
     } else {
-        Write-Host ("         Desktop runtime: {0}" -f $desktop) -ForegroundColor Green
+        Write-Host "  [WARN] dotnet                found, but no Microsoft.NETCore.App runtime was listed. Run with -InstallDotNetRuntime." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  [WARN] dotnet                NOT FOUND. Install .NET Desktop Runtime matching Il2CppDumper." -ForegroundColor Yellow
+    Write-Host "  [WARN] dotnet                NOT FOUND. Run with -InstallDotNetRuntime for Il2CppDumper." -ForegroundColor Yellow
 }
 
 $uv = Test-Command "uv"
@@ -1500,7 +1573,7 @@ Write-Section "Summary"
 $missing = @()
 if (-not $javaOk)        { $missing += "java (run -InstallRuntime)" }
 if (-not $pythonOk)      { $missing += "python (run -InstallRuntime)" }
-if (-not $dotnet.Found)  { $missing += ".NET" }
+if (-not $dotnetRuntimeOk) { $missing += ".NET Runtime $DotNetRuntimeMajor (run -InstallDotNetRuntime)" }
 if (-not $uv.Found)      { $missing += "uv" }
 if (-not (Test-Path -LiteralPath $toolsGhidra)) { $missing += "Ghidra (run -InstallGhidra)" }
 if (-not $il2cppOk)      { $missing += "Il2CppDumper (run -InstallIl2CppDumper)" }
@@ -1519,6 +1592,7 @@ Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  .\install-re-toolkit.ps1 -All                           # recommended full install in order"
 Write-Host "  .\install-re-toolkit.ps1 -InstallRuntime                # portable JDK + toolkit-local Python 3.12"
+Write-Host "  .\install-re-toolkit.ps1 -InstallDotNetRuntime          # .NET Runtime 8 for Il2CppDumper net8.0"
 Write-Host "  .\install-re-toolkit.ps1 -InstallGhidra                 # Ghidra"
 Write-Host "  .\install-re-toolkit.ps1 -InstallIl2CppDumper           # wklin8607/Il2CppDumper v6.7.48"
 Write-Host "  .\install-re-toolkit.ps1 -InstallGhidraMcp              # bethington/ghidra-mcp plugin + bridge"

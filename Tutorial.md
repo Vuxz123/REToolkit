@@ -18,13 +18,14 @@ Unblock-File .\install-re-toolkit.ps1
 .\install-re-toolkit.ps1 -All
 ```
 
-`-All` runs the recommended full install order: runtime, Ghidra,
-Il2CppDumper, GhidraMCP, then AssetRipper.
+`-All` runs the recommended full install order: runtime, .NET Runtime,
+Ghidra, Il2CppDumper, GhidraMCP, then AssetRipper.
 
 Or install individual parts:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallRuntime
+.\install-re-toolkit.ps1 -InstallDotNetRuntime
 .\install-re-toolkit.ps1 -InstallGhidra
 .\install-re-toolkit.ps1 -InstallIl2CppDumper
 .\install-re-toolkit.ps1 -InstallGhidraMcp
@@ -35,6 +36,10 @@ Or install individual parts:
 launcher. PyGhidra is launched through `runtime/python/pyghidra-venv`, which is
 created from that local Python by the installer and recreated by the wrapper if
 it is missing.
+
+`-InstallDotNetRuntime` installs Microsoft .NET Runtime 8 for Il2CppDumper's
+`net8.0` package. The installer can still use Il2CppDumper's `net6.0` package
+when Microsoft.NETCore.App 6.x is already installed.
 
 `-InstallIl2CppDumper` patches `tools\Il2CppDumper\ghidra.py` and
 `tools\Il2CppDumper\ghidra_with_struct.py` with toolkit-maintained Python 3
@@ -78,6 +83,7 @@ Optional:
 
 ```powershell
 .\install-re-toolkit.ps1 -InstallAssetRipper
+.\re.ps1 assetripper
 ```
 
 ## 3. Enable GhidraMCP In The GUI
@@ -211,4 +217,5 @@ only print MCP guidance now. Query the live Ghidra program through MCP instead.
 - `Unable to lock project`: close other Ghidra/headless processes for that project, or use MCP from the already-open GUI.
 - PyGhidra does not open from `open`: run `.\re.ps1 pyghidra-gui FoodHunt`; it preselects the matching workspace project before launch.
 - PyGhidra picks Python 3.14/global Python: run `.\install-re-toolkit.ps1 -InstallRuntime`; `.\re.ps1 pyghidra-gui` should report `runtime\python\pyghidra-venv\Scripts\python.exe`.
+- Il2CppDumper cannot find .NET: run `.\install-re-toolkit.ps1 -InstallDotNetRuntime`; the installer prefers Il2CppDumper `net8.0` and falls back to `net6.0` only when Microsoft.NETCore.App 6.x already exists.
 - Il2CppDumper says `This file may be protected`: check whether `dump.cs`, `DummyDll`, and `ghidra.py` were still generated.
