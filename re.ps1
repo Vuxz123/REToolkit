@@ -18,9 +18,31 @@ if ($Rest.Count -gt 0 -and $Rest[0] -eq "--%") {
     if ($Rest.Count -gt 1) { $Rest = $Rest[1..($Rest.Count - 1)] } else { $Rest = @() }
 }
 
+function Resolve-ToolkitJdkRoot {
+    param([Parameter(Mandatory)] [string]$JavaRuntimeDir)
+
+    # install-re-toolkit.ps1 -JdkVersion controls which jdk-<N> folder gets
+    # installed; auto-detect it instead of hardcoding jdk-21 so a non-default
+    # -JdkVersion install is actually found.
+    $preferred = Join-Path $JavaRuntimeDir "jdk-21"
+    if (Test-Path -LiteralPath (Join-Path $preferred "bin\java.exe")) {
+        return $preferred
+    }
+
+    $candidate = Get-ChildItem -LiteralPath $JavaRuntimeDir -Directory -Filter "jdk-*" -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "bin\java.exe") } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($candidate) { return $candidate.FullName }
+
+    return $preferred
+}
+
+$JdkRoot = Resolve-ToolkitJdkRoot -JavaRuntimeDir (Join-Path $Root "runtime\java")
+
 $ToolPaths = [ordered]@{
-    JdkRoot          = Join-Path $Root  "runtime\java\jdk-21"
-    JavaExe          = Join-Path $Root  "runtime\java\jdk-21\bin\java.exe"
+    JdkRoot          = $JdkRoot
+    JavaExe          = Join-Path $JdkRoot "bin\java.exe"
     PythonRoot       = Join-Path $Root  "runtime\python\python-3.12"
     PythonExe        = Join-Path $Root  "runtime\python\python-3.12\python.exe"
     PyGhidraVenv     = Join-Path $Root  "runtime\python\pyghidra-venv"

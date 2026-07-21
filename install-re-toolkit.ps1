@@ -44,7 +44,7 @@ if ($All) {
 }
 
 $Runtime      = Join-Path $InstallDir "runtime"
-$PortableJava = Join-Path $Runtime "java\jdk-21"
+$PortableJava = Join-Path $Runtime "java\jdk-$JdkVersion"
 $GhidraRoot   = Join-Path $InstallDir "tools\ghidra"
 $PythonRoot   = Join-Path $Runtime "python"
 if ($PythonVersion -match '^(\d+\.\d+)') {
@@ -853,8 +853,20 @@ function Install-GhidraRuntime {
 
     $ghidraDir = Join-Path $ToolsDir "ghidra"
     if (Test-Path -LiteralPath $ghidraDir) {
-        Write-Host "  [SKIP] Ghidra already at $ghidraDir" -ForegroundColor Yellow
-        return $true
+        if ([string]::IsNullOrWhiteSpace($Version)) {
+            Write-Host "  [SKIP] Ghidra already at $ghidraDir" -ForegroundColor Yellow
+            return $true
+        }
+
+        $installedProps = Get-GhidraInstallProperties -GhidraRoot $ghidraDir
+        $installedVersion = if ($installedProps -and $installedProps.ContainsKey("application.version")) { $installedProps["application.version"] } else { $null }
+        if ($installedVersion -eq $Version) {
+            Write-Host ("  [SKIP] Ghidra {0} already at {1}" -f $installedVersion, $ghidraDir) -ForegroundColor Yellow
+            return $true
+        }
+
+        Write-Host ("  Installed Ghidra ({0}) does not match requested version {1}; reinstalling..." -f $(if ($installedVersion) { $installedVersion } else { "unknown" }), $Version) -ForegroundColor Cyan
+        Remove-Item -LiteralPath $ghidraDir -Recurse -Force
     }
 
     $tmpZip = $null
@@ -1225,11 +1237,7 @@ function Install-AssetRipper {
 
     $targetDir = Join-Path $ToolsDir "AssetRipper"
     $targetExe = Join-Path $targetDir "AssetRipper.exe"
-
-    if (Test-Path -LiteralPath $targetExe) {
-        Write-Host "  [SKIP] AssetRipper already at $targetExe" -ForegroundColor Yellow
-        return $true
-    }
+    $versionMarker = Join-Path $targetDir ".retk-version"
 
     $zipPath    = Join-Path $env:TEMP "AssetRipper_win_x64.zip"
     $extractDir = Join-Path $env:TEMP ("AssetRipper_" + [guid]::NewGuid().ToString("N"))
@@ -1237,6 +1245,15 @@ function Install-AssetRipper {
     try {
         Write-Host "  Querying $Repo latest Windows release..." -ForegroundColor Cyan
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing -TimeoutSec 30 -Headers @{"User-Agent"="re-toolkit"}
+
+        if (Test-Path -LiteralPath $targetExe) {
+            $installedTag = if (Test-Path -LiteralPath $versionMarker) { (Get-Content -LiteralPath $versionMarker -Raw).Trim() } else { $null }
+            if ($installedTag -eq $release.tag_name) {
+                Write-Host ("  [SKIP] AssetRipper {0} already at {1}" -f $release.tag_name, $targetExe) -ForegroundColor Yellow
+                return $true
+            }
+            Write-Host ("  Installed AssetRipper ({0}) does not match latest release {1}; updating..." -f $(if ($installedTag) { $installedTag } else { "unknown" }), $release.tag_name) -ForegroundColor Cyan
+        }
 
         $asset = $release.assets | Where-Object { $_.name -eq "AssetRipper_win_x64.zip" } | Select-Object -First 1
         if (-not $asset) {
@@ -1270,6 +1287,7 @@ function Install-AssetRipper {
         }
 
         if (Test-Path -LiteralPath $targetExe) {
+            Set-Content -LiteralPath $versionMarker -Value $release.tag_name -Encoding UTF8
             Write-Host ("  [OK]   AssetRipper installed at {0}" -f $targetDir) -ForegroundColor Green
             if ($guiFree) {
                 $relSrc = $guiFree.FullName.Substring($targetDir.Length).TrimStart('\','/')
@@ -1294,10 +1312,15 @@ function Install-Il2CppDumper {
 
     $il2cppDir = Join-Path $ToolsDir "Il2CppDumper"
     $il2cppExe = Join-Path $il2cppDir "Il2CppDumper.exe"
+    $versionMarker = Join-Path $il2cppDir ".retk-version"
     if (Test-Path -LiteralPath $il2cppExe) {
-        Repair-Il2CppDumperGhidraTemplates -Dir $il2cppDir | Out-Null
-        Write-Host "  [SKIP] Il2CppDumper already at $il2cppExe" -ForegroundColor Yellow
-        return $true
+        $installedVersion = if (Test-Path -LiteralPath $versionMarker) { (Get-Content -LiteralPath $versionMarker -Raw).Trim() } else { $null }
+        if ($installedVersion -eq $Version) {
+            Repair-Il2CppDumperGhidraTemplates -Dir $il2cppDir | Out-Null
+            Write-Host "  [SKIP] Il2CppDumper v$Version already at $il2cppExe" -ForegroundColor Yellow
+            return $true
+        }
+        Write-Host ("  Installed Il2CppDumper ({0}) does not match requested version {1}; reinstalling..." -f $(if ($installedVersion) { $installedVersion } else { "unknown" }), $Version) -ForegroundColor Cyan
     }
 
     if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
@@ -1350,6 +1373,7 @@ function Install-Il2CppDumper {
         }
 
         if (Test-Path -LiteralPath $il2cppExe) {
+            Set-Content -LiteralPath $versionMarker -Value $Version -Encoding UTF8
             Repair-Il2CppDumperGhidraTemplates -Dir $il2cppDir | Out-Null
             Write-Host ("  [OK]   Il2CppDumper v{0} ({1}) installed at {2}" -f $Version, $tfm, $il2cppDir) -ForegroundColor Green
             return $true

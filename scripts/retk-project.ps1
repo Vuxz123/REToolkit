@@ -2,6 +2,7 @@
 
 function Get-WorkspacePath {
     param([Parameter(Mandatory)] [string]$GameName)
+    Assert-WorkspaceName $GameName
     return Join-Path $Workspaces $GameName
 }
 
@@ -29,7 +30,35 @@ function Save-Project {
     $path = Get-ProjectJsonPath $GameName
     $dir = Split-Path -Parent $path
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $Project | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $path -Encoding UTF8
+
+    # Serialize concurrent writers so two re.ps1 processes touching the same
+    # workspace never interleave writes to project.re.json.
+    $mutexName = "RETK-Save-" + ($path -replace '[\\/:]', '_')
+    $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+    $acquired = $false
+    try {
+        $acquired = $mutex.WaitOne(30000)
+        if (-not $acquired) {
+            throw "Timed out waiting for another REToolkit process to finish updating: $path"
+        }
+
+        # Atomic write: write to a temp file in the same directory, then rename
+        # over the target. A same-volume rename is atomic, so a reader (or a
+        # process that gets killed) never observes a partially written or
+        # truncated project.re.json.
+        $tmpPath = "$path.tmp-$([guid]::NewGuid().ToString('N'))"
+        try {
+            $Project | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $tmpPath -Encoding UTF8
+            Move-Item -LiteralPath $tmpPath -Destination $path -Force
+        }
+        finally {
+            if (Test-Path -LiteralPath $tmpPath) { Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    finally {
+        if ($acquired) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
 }
 
 function Set-ProjectStatusValue {
@@ -121,9 +150,7 @@ Note:
 function New-Workspace {
     param([Parameter(Mandatory)] [string]$GameName)
 
-    if (-not ($GameName -match '^[A-Za-z0-9_\-.]{1,64}$')) {
-        throw "Invalid project name. Use letters, digits, '_', '-', '.' only, max 64 chars."
-    }
+    Assert-WorkspaceName $GameName
 
     $workspace = Get-WorkspacePath $GameName
     $projectJson = Get-ProjectJsonPath $GameName
@@ -186,6 +213,17 @@ function Assert-WorkspaceName {
 
     if (-not ($GameName -match '^[A-Za-z0-9_\-.]{1,64}$')) {
         throw "Invalid workspace name. Use letters, digits, '_', '-', '.' only, max 64 chars."
+    }
+    if ($GameName -eq '.' -or $GameName -eq '..') {
+        throw "Invalid workspace name: '$GameName' is reserved by the filesystem."
+    }
+
+    # Defense in depth: the regex above already excludes path separators, but
+    # confirm the resolved path still lands inside $Workspaces before any
+    # caller uses it to build a filesystem path.
+    $resolved = Join-Path $Workspaces $GameName
+    if (-not (Test-RetkPathWithin -Path $resolved -Parent $Workspaces)) {
+        throw "Invalid workspace name: '$GameName' resolves outside the workspaces directory."
     }
 }
 
