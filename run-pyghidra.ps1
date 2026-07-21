@@ -240,6 +240,13 @@ try {
         else {
             $logDir = Join-Path $Root "logs"
             New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+            # Prune old detached-launch logs so logs\ does not grow unbounded.
+            Get-ChildItem -LiteralPath $logDir -Filter "pyghidra-gui-*" -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -Skip 20 |
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+
             $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
             $stdoutLog = Join-Path $logDir ("pyghidra-gui-{0}.out.log" -f $stamp)
             $stderrLog = Join-Path $logDir ("pyghidra-gui-{0}.out.err.log" -f $stamp)

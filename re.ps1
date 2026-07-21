@@ -190,7 +190,7 @@ switch ($Command) {
 
     "il2cppdumper" {
         Assert-PathExists $ToolPaths.Dumper "Il2CppDumper"
-        if ($Rest.Count -eq 0) { throw "Usage: .\re.ps1 il2cppdumper <native_binary> <global_metadata> [output_dir]" }
+        if ($Rest.Count -lt 2) { throw "Usage: .\re.ps1 il2cppdumper <native_binary> <global_metadata> [output_dir]" }
         & $ToolPaths.Dumper @Rest
         if ($LASTEXITCODE -ne 0) { throw "Il2CppDumper exited with code $LASTEXITCODE" }
     }

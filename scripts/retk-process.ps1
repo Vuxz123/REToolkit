@@ -61,6 +61,21 @@ function Invoke-NativeProcess {
     }
 }
 
+function Invoke-LogRetention {
+    param(
+        [Parameter(Mandatory)] [string]$LogDir,
+        [Parameter(Mandatory)] [string]$Filter,
+        [int]$KeepCount = 20
+    )
+
+    if (-not (Test-Path -LiteralPath $LogDir -PathType Container)) { return }
+
+    Get-ChildItem -LiteralPath $LogDir -Filter $Filter -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip $KeepCount |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
 function Start-DetachedNativeProcess {
     [CmdletBinding()]
     param(
@@ -68,7 +83,9 @@ function Start-DetachedNativeProcess {
         [Parameter()] [string[]]$Arguments,
         [Parameter()] [string]$WorkingDirectory,
         [Parameter(Mandatory)] [string]$LogFile,
-        [string]$Activity = "Detached native process"
+        [string]$Activity = "Detached native process",
+        [string]$LogRetentionFilter = "",
+        [int]$LogRetentionCount = 20
     )
 
     if ($null -eq $Arguments) { $Arguments = @() }
@@ -78,6 +95,10 @@ function Start-DetachedNativeProcess {
 
     $logDir = Split-Path -Parent $LogFile
     if ($logDir) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+
+    if ($logDir -and -not [string]::IsNullOrWhiteSpace($LogRetentionFilter)) {
+        Invoke-LogRetention -LogDir $logDir -Filter $LogRetentionFilter -KeepCount $LogRetentionCount
+    }
 
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($LogFile)
     $stderrLog = Join-Path $logDir ("{0}.err.log" -f $baseName)

@@ -119,7 +119,7 @@ function Invoke-PyGhidraGui {
 
             $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
             $logFile = Join-Path $Root ("logs\pyghidra-gui-{0}.out.log" -f $stamp)
-            $launch = Start-DetachedNativeProcess -FilePath $pyGhidraPython -Arguments $launchArgs -WorkingDirectory $Root -LogFile $logFile -Activity "PyGhidra GUI"
+            $launch = Start-DetachedNativeProcess -FilePath $pyGhidraPython -Arguments $launchArgs -WorkingDirectory $Root -LogFile $logFile -Activity "PyGhidra GUI" -LogRetentionFilter "pyghidra-gui-*"
             Write-Host ("PyGhidra GUI started in detached mode. PID: {0}" -f $launch.ProcessId) -ForegroundColor Green
             Write-Host ("Stdout log: {0}" -f $launch.StdOutLog) -ForegroundColor DarkGray
             Write-Host ("Stderr log: {0}" -f $launch.StdErrLog) -ForegroundColor DarkGray
