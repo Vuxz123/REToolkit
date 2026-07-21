@@ -190,3 +190,71 @@ function Get-LdPlayerObbPaths {
     $names = @($result.Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     return @($names | ForEach-Object { "$remoteDir/$_" })
 }
+
+function Invoke-LdPlayerAppLaunch {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [Parameter(Mandatory)] [string]$DeviceSerial,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "monkey", "-p", $PackageName, "-c", "android.intent.category.LAUNCHER", "1")
+    if ($result.ExitCode -ne 0) {
+        throw "Failed to launch $PackageName via adb shell monkey.`n$($result.StdErr)"
+    }
+
+    Write-Host ""
+    Write-Host "Launched $PackageName in LDPlayer." -ForegroundColor Cyan
+    Write-Host "Play/wait long enough for any OBB or feature-module downloads to finish, then come back here." -ForegroundColor Cyan
+    Read-Host "Press Enter when ready to pull"
+}
+
+function Save-LdPlayerBundle {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [Parameter(Mandatory)] [string]$DeviceSerial,
+        [Parameter(Mandatory)] [string]$PackageName,
+        [Parameter(Mandatory)] [string[]]$ApkPaths,
+        [Parameter(Mandatory)] [string[]]$ObbPaths
+    )
+
+    $stagingDir = Join-Path $env:TEMP ("retk-ldplayer-" + [guid]::NewGuid().ToString("N"))
+    $obbStagingDir = Join-Path $stagingDir ("Android\obb\" + $PackageName)
+    $zipPath = Join-Path $env:TEMP ("retk-ldplayer-bundle-" + [guid]::NewGuid().ToString("N") + ".zip")
+
+    try {
+        New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+
+        foreach ($remotePath in $ApkPaths) {
+            $localName = Split-Path -Leaf $remotePath
+            $localPath = Join-Path $stagingDir $localName
+            $pullResult = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "pull", $remotePath, $localPath)
+            if ($pullResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $localPath)) {
+                throw "adb pull failed for ${remotePath}:`n$($pullResult.StdErr)"
+            }
+        }
+
+        if ($ObbPaths.Count -gt 0) {
+            New-Item -ItemType Directory -Path $obbStagingDir -Force | Out-Null
+            foreach ($remotePath in $ObbPaths) {
+                $localName = Split-Path -Leaf $remotePath
+                $localPath = Join-Path $obbStagingDir $localName
+                $pullResult = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "pull", $remotePath, $localPath)
+                if ($pullResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $localPath)) {
+                    throw "adb pull failed for ${remotePath}:`n$($pullResult.StdErr)"
+                }
+            }
+        }
+
+        if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($stagingDir, $zipPath)
+
+        return $zipPath
+    }
+    finally {
+        if (Test-Path -LiteralPath $stagingDir) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

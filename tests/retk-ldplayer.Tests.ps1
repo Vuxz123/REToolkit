@@ -105,4 +105,10 @@ Assert-Contains $moduleSource 'function Get-LdPlayerObbPaths' "Module should exp
 Assert-Contains $moduleSource 'Similarly named installed packages' "Assert-LdPlayerPackageInstalled should suggest similarly named packages on a miss."
 Assert-Contains $moduleSource 'No OBB directory found' "Get-LdPlayerObbPaths should treat a missing OBB directory as informational, not an error."
 
+Assert-Contains $moduleSource 'function Invoke-LdPlayerAppLaunch' "Module should expose Invoke-LdPlayerAppLaunch."
+Assert-Contains $moduleSource 'function Save-LdPlayerBundle' "Module should expose Save-LdPlayerBundle."
+Assert-Contains $moduleSource 'Read-Host "Press Enter when ready to pull"' "Invoke-LdPlayerAppLaunch should pause for user confirmation before the caller pulls files."
+Assert-Contains $moduleSource '[guid]::NewGuid().ToString("N")' "Save-LdPlayerBundle temp paths should include a GUID to avoid collisions across overlapping runs."
+Assert-Contains $moduleSource '[System.IO.Compression.ZipFile]::CreateFromDirectory($stagingDir, $zipPath)' "Save-LdPlayerBundle should zip the staged APK/OBB files."
+
 Write-Host "retk-ldplayer checks passed"
