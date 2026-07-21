@@ -99,4 +99,10 @@ Assert-Contains $moduleSource 'function Resolve-LdPlayerDevice' "Module should e
 Assert-Contains $moduleSource 'throw "adb.exe not found on PATH or in common LDPlayer install locations. Pass -AdbPath <path-to-adb.exe>."' "Resolve-LdPlayerAdb should give actionable guidance when adb.exe cannot be found."
 Assert-Contains $moduleSource 'throw "No LDPlayer device connected.' "Resolve-LdPlayerDevice should give actionable guidance when no device is connected."
 
+Assert-Contains $moduleSource 'function Assert-LdPlayerPackageInstalled' "Module should expose Assert-LdPlayerPackageInstalled."
+Assert-Contains $moduleSource 'function Get-LdPlayerApkPaths' "Module should expose Get-LdPlayerApkPaths."
+Assert-Contains $moduleSource 'function Get-LdPlayerObbPaths' "Module should expose Get-LdPlayerObbPaths."
+Assert-Contains $moduleSource 'Similarly named installed packages' "Assert-LdPlayerPackageInstalled should suggest similarly named packages on a miss."
+Assert-Contains $moduleSource 'No OBB directory found' "Get-LdPlayerObbPaths should treat a missing OBB directory as informational, not an error."
+
 Write-Host "retk-ldplayer checks passed"

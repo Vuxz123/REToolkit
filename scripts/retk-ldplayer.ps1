@@ -118,3 +118,71 @@ function Resolve-LdPlayerDevice {
     }
     return $devices[$index].Serial
 }
+
+function Assert-LdPlayerPackageInstalled {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [Parameter(Mandatory)] [string]$DeviceSerial,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "pm", "list", "packages", $PackageName)
+    if ($result.ExitCode -ne 0) {
+        throw "adb shell pm list packages failed with exit code $($result.ExitCode).`n$($result.StdErr)"
+    }
+
+    $exactMatches = @(ConvertFrom-PmListPackagesOutput -RawOutput $result.StdOut)
+    if ($exactMatches -contains $PackageName) {
+        return
+    }
+
+    $allResult = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "pm", "list", "packages")
+    $allPackages = @(ConvertFrom-PmListPackagesOutput -RawOutput $allResult.StdOut)
+    $needle = $PackageName.ToLowerInvariant()
+    $suggestions = @($allPackages | Where-Object { $_.ToLowerInvariant().Contains($needle) })
+
+    $message = "Package not installed: $PackageName"
+    if ($suggestions.Count -gt 0) {
+        $message += "`nSimilarly named installed packages:`n  " + ($suggestions -join "`n  ")
+    }
+    throw $message
+}
+
+function Get-LdPlayerApkPaths {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [Parameter(Mandatory)] [string]$DeviceSerial,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "pm", "path", $PackageName)
+    if ($result.ExitCode -ne 0) {
+        throw "adb shell pm path failed with exit code $($result.ExitCode).`n$($result.StdErr)"
+    }
+
+    $paths = @(ConvertFrom-PmPathOutput -RawOutput $result.StdOut)
+    if ($paths.Count -eq 0) {
+        throw "pm path returned no APK paths for $PackageName even though the package is installed."
+    }
+
+    return $paths
+}
+
+function Get-LdPlayerObbPaths {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [Parameter(Mandatory)] [string]$DeviceSerial,
+        [Parameter(Mandatory)] [string]$PackageName
+    )
+
+    $remoteDir = "/sdcard/Android/obb/$PackageName"
+    $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "shell", "ls", $remoteDir)
+
+    if ($result.ExitCode -ne 0 -or $result.StdOut -match "No such file or directory") {
+        Write-Host "  [INFO] No OBB directory found for $PackageName (this is normal for many games)." -ForegroundColor DarkGray
+        return @()
+    }
+
+    $names = @($result.Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    return @($names | ForEach-Object { "$remoteDir/$_" })
+}
