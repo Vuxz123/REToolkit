@@ -51,3 +51,70 @@ function ConvertFrom-AdbDevicesOutput {
 
     return @($devices)
 }
+
+function Resolve-LdPlayerAdb {
+    param([string]$AdbPath = "")
+
+    if (-not [string]::IsNullOrWhiteSpace($AdbPath)) {
+        if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
+            throw "adb.exe not found at -AdbPath: $AdbPath"
+        }
+        return (Resolve-Path -LiteralPath $AdbPath).Path
+    }
+
+    $onPath = Get-Command "adb" -ErrorAction SilentlyContinue
+    if ($onPath) {
+        return $onPath.Source
+    }
+
+    $candidates = @(
+        "C:\LDPlayer\LDPlayer9\adb.exe",
+        "C:\LDPlayer\LDPlayer4\adb.exe",
+        "C:\Program Files\LDPlayer\LDPlayer9\adb.exe",
+        "C:\Program Files\LDPlayer\LDPlayer4\adb.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+
+    throw "adb.exe not found on PATH or in common LDPlayer install locations. Pass -AdbPath <path-to-adb.exe>."
+}
+
+function Resolve-LdPlayerDevice {
+    param(
+        [Parameter(Mandatory)] [string]$AdbPath,
+        [string]$DeviceSerial = ""
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($DeviceSerial)) {
+        return $DeviceSerial
+    }
+
+    $result = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("devices")
+    if ($result.ExitCode -ne 0) {
+        throw "adb devices failed with exit code $($result.ExitCode).`n$($result.StdErr)"
+    }
+
+    $devices = @(ConvertFrom-AdbDevicesOutput -RawOutput $result.StdOut | Where-Object { $_.State -eq "device" })
+
+    if ($devices.Count -eq 0) {
+        throw "No LDPlayer device connected. Start LDPlayer and wait for it to finish booting, then retry."
+    }
+
+    if ($devices.Count -eq 1) {
+        return $devices[0].Serial
+    }
+
+    Write-Host "Multiple devices connected:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $devices.Count; $i++) {
+        Write-Host ("  [{0}] {1}" -f $i, $devices[$i].Serial)
+    }
+    $choice = Read-Host "Select a device by index"
+    $index = 0
+    if (-not [int]::TryParse($choice, [ref]$index) -or $index -lt 0 -or $index -ge $devices.Count) {
+        throw "Invalid device selection: $choice"
+    }
+    return $devices[$index].Serial
+}

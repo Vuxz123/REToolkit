@@ -78,4 +78,25 @@ Assert-Equals $readyOnly.Count 2 "Filtering ConvertFrom-AdbDevicesOutput results
 $emptyDevices = @(ConvertFrom-AdbDevicesOutput -RawOutput "List of devices attached`r`n")
 Assert-Equals $emptyDevices.Count 0 "ConvertFrom-AdbDevicesOutput should return an empty array when no devices are listed."
 
+# --- source-text regression guards (adb-calling functions can't run without a device) ---
+
+$moduleSource = Get-Content -LiteralPath (Join-Path $Root "scripts\retk-ldplayer.ps1") -Raw
+
+function Assert-Contains {
+    param(
+        [Parameter(Mandatory)] [string]$Text,
+        [Parameter(Mandatory)] [string]$Needle,
+        [Parameter(Mandatory)] [string]$Message
+    )
+
+    if (-not $Text.Contains($Needle)) {
+        throw "ASSERT CONTAINS failed: $Message`nMissing: $Needle"
+    }
+}
+
+Assert-Contains $moduleSource 'function Resolve-LdPlayerAdb' "Module should expose Resolve-LdPlayerAdb."
+Assert-Contains $moduleSource 'function Resolve-LdPlayerDevice' "Module should expose Resolve-LdPlayerDevice."
+Assert-Contains $moduleSource 'throw "adb.exe not found on PATH or in common LDPlayer install locations. Pass -AdbPath <path-to-adb.exe>."' "Resolve-LdPlayerAdb should give actionable guidance when adb.exe cannot be found."
+Assert-Contains $moduleSource 'throw "No LDPlayer device connected.' "Resolve-LdPlayerDevice should give actionable guidance when no device is connected."
+
 Write-Host "retk-ldplayer checks passed"
