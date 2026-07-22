@@ -230,7 +230,7 @@ function Save-LdPlayerBundle {
             $localPath = Join-Path $stagingDir $localName
             $pullResult = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "pull", $remotePath, $localPath)
             if ($pullResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $localPath)) {
-                throw "adb pull failed for ${remotePath}:`n$($pullResult.StdErr)"
+                throw "adb pull failed for ${remotePath} (exit code $($pullResult.ExitCode)):`n$($pullResult.StdErr)"
             }
         }
 
@@ -241,7 +241,7 @@ function Save-LdPlayerBundle {
                 $localPath = Join-Path $obbStagingDir $localName
                 $pullResult = Invoke-NativeProcess -FilePath $AdbPath -Arguments @("-s", $DeviceSerial, "pull", $remotePath, $localPath)
                 if ($pullResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $localPath)) {
-                    throw "adb pull failed for ${remotePath}:`n$($pullResult.StdErr)"
+                    throw "adb pull failed for ${remotePath} (exit code $($pullResult.ExitCode)):`n$($pullResult.StdErr)"
                 }
             }
         }
