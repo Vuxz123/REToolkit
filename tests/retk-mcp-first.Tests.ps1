@@ -115,6 +115,10 @@ Assert-Contains $il2cppModule 'Test-Path -LiteralPath $ToolPaths.Dumper -PathTyp
 Assert-NotContains $re '$ToolPaths.PyGhidraLauncher $ToolPaths.GhidraRoot' "re.ps1 should not launch through pyghidra_launcher.py because it hides child-process errors."
 Assert-NotContains $re 'Write-Host "  .\re.ps1 ghidra-cli <args...>"' "help should not advertise ghidra-cli."
 Assert-NotContains $re 'Ghidra CLI doctor:' "doctor should not call ghidra-cli."
+Assert-Contains $re 'scripts\retk-ldplayer.ps1' "re.ps1 should load the LDPlayer pull module."
+Assert-Contains $re '"pull-ldplayer"' "re.ps1 should expose a pull-ldplayer command."
+Assert-Contains $re 'Invoke-LdPlayerPull -GameName $gameName -PackageName $packageName' "re.ps1 pull-ldplayer should call Invoke-LdPlayerPull with parsed arguments."
+Assert-Contains $uiModule 'pull-ldplayer <GameName> <PackageName>' "UI module should document the pull-ldplayer command."
 
 Assert-Contains $installer '[switch]$InstallGhidraMcp' "installer should expose -InstallGhidraMcp."
 Assert-Contains $installer '[switch]$InstallDotNetRuntime' "installer should expose -InstallDotNetRuntime for Il2CppDumper."

@@ -73,6 +73,7 @@ $RetkScriptModules = @(
     "scripts\retk-pyghidra.ps1",
     "scripts\retk-project.ps1",
     "scripts\retk-pipeline.ps1",
+    "scripts\retk-ldplayer.ps1",
     "scripts\retk-ui.ps1"
 )
 foreach ($module in $RetkScriptModules) {
@@ -106,6 +107,33 @@ switch ($Command) {
 
     "init"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 init <GameName>" } New-Workspace $Rest[0] }
     "add"        { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 add <GameName> <apk-or-xapk-or-aab-or-zip>" } Add-BuildToProject $Rest[0] $Rest[1] }
+    "pull-ldplayer" {
+        if ($Rest.Count -lt 2) { throw "Usage: .\re.ps1 pull-ldplayer <GameName> <PackageName> [-DeviceSerial <serial>] [-AdbPath <path>] [-SkipLaunch]" }
+        $gameName = $Rest[0]
+        $packageName = $Rest[1]
+        $deviceSerial = ""
+        $adbPath = ""
+        $skipLaunch = $false
+        $i = 2
+        while ($i -lt $Rest.Count) {
+            switch ($Rest[$i]) {
+                "-DeviceSerial" {
+                    $i++
+                    if ($i -ge $Rest.Count) { throw "-DeviceSerial requires a value." }
+                    $deviceSerial = $Rest[$i]
+                }
+                "-AdbPath" {
+                    $i++
+                    if ($i -ge $Rest.Count) { throw "-AdbPath requires a value." }
+                    $adbPath = $Rest[$i]
+                }
+                "-SkipLaunch" { $skipLaunch = $true }
+                default { throw "Unknown pull-ldplayer option: $($Rest[$i])" }
+            }
+            $i++
+        }
+        Invoke-LdPlayerPull -GameName $gameName -PackageName $packageName -DeviceSerial $deviceSerial -AdbPath $adbPath -SkipLaunch:$skipLaunch
+    }
     "scan"       { if (-not $Rest[0] -or -not $Rest[1]) { throw "Usage: .\re.ps1 scan <GameName> <ExtractedPath>" } Scan-UnityIl2Cpp $Rest[0] $Rest[1] }
     "dump"       { if (-not $Rest[0]) { throw "Usage: .\re.ps1 dump <GameName>" } Run-Il2CppDumper $Rest[0] }
     "export"     { if (-not $Rest[0]) { throw "Usage: .\re.ps1 export <GameName> [OutFile.re]" } Export-WorkspaceArchive -GameName $Rest[0] -OutputPath $Rest[1] | Out-Null }

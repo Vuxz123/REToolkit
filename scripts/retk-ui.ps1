@@ -7,6 +7,7 @@ function Show-Usage {
     Write-Host "  .\re.ps1 doctor"
     Write-Host "  .\re.ps1 init       <GameName>"
     Write-Host "  .\re.ps1 add        <GameName> <apk-or-xapk-or-aab-or-zip>"
+    Write-Host "  .\re.ps1 pull-ldplayer <GameName> <PackageName>        # pull APK/OBB from a running LDPlayer instance"
     Write-Host "  .\re.ps1 scan       <GameName> <ExtractedPath>"
     Write-Host "  .\re.ps1 dump       <GameName>"
     Write-Host "  .\re.ps1 import     <GameName>                         # import only; no Ghidra analysis"
