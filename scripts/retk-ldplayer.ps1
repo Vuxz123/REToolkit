@@ -258,3 +258,47 @@ function Save-LdPlayerBundle {
         }
     }
 }
+
+function Invoke-LdPlayerPull {
+    param(
+        [Parameter(Mandatory)] [string]$GameName,
+        [Parameter(Mandatory)] [string]$PackageName,
+        [string]$DeviceSerial = "",
+        [string]$AdbPath = "",
+        [switch]$SkipLaunch
+    )
+
+    if (-not (Test-Path -LiteralPath (Get-ProjectJsonPath $GameName))) {
+        Write-Host "[INFO] Workspace not found; running init first." -ForegroundColor Cyan
+        New-Workspace $GameName
+    }
+
+    $adb = Resolve-LdPlayerAdb -AdbPath $AdbPath
+    $serial = Resolve-LdPlayerDevice -AdbPath $adb -DeviceSerial $DeviceSerial
+    Assert-LdPlayerPackageInstalled -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName
+
+    $apksBefore = @(Get-LdPlayerApkPaths -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName)
+
+    if (-not $SkipLaunch) {
+        Invoke-LdPlayerAppLaunch -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName
+    }
+
+    $apksAfter = @(Get-LdPlayerApkPaths -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName)
+    $allApks = @(@($apksBefore) + @($apksAfter) | Select-Object -Unique)
+
+    $obbPaths = @(Get-LdPlayerObbPaths -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName)
+
+    Write-Host ("Pulling {0} APK(s) and {1} OBB file(s)..." -f $allApks.Count, $obbPaths.Count) -ForegroundColor Cyan
+    $tempZip = Save-LdPlayerBundle -AdbPath $adb -DeviceSerial $serial -PackageName $PackageName -ApkPaths $allApks -ObbPaths $obbPaths
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $originalBuildDir = Join-Path (Get-WorkspacePath $GameName) "00_OriginalBuild"
+    New-Item -ItemType Directory -Force -Path $originalBuildDir | Out-Null
+    $bundlePath = Join-Path $originalBuildDir ("{0}-{1}.xapk" -f $PackageName, $stamp)
+    Move-Item -LiteralPath $tempZip -Destination $bundlePath -Force
+
+    Write-Host ("  [OK]   Bundle saved: {0}" -f $bundlePath) -ForegroundColor Green
+    Write-Host ("         {0} APK(s), {1} OBB file(s)" -f $allApks.Count, $obbPaths.Count) -ForegroundColor Cyan
+
+    Add-BuildToProject $GameName $bundlePath
+}

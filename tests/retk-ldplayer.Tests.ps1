@@ -111,4 +111,9 @@ Assert-Contains $moduleSource 'Read-Host "Press Enter when ready to pull"' "Invo
 Assert-Contains $moduleSource '[guid]::NewGuid().ToString("N")' "Save-LdPlayerBundle temp paths should include a GUID to avoid collisions across overlapping runs."
 Assert-Contains $moduleSource '[System.IO.Compression.ZipFile]::CreateFromDirectory($stagingDir, $zipPath)' "Save-LdPlayerBundle should zip the staged APK/OBB files."
 
+Assert-Contains $moduleSource 'function Invoke-LdPlayerPull' "Module should expose Invoke-LdPlayerPull."
+Assert-Contains $moduleSource 'New-Workspace $GameName' "Invoke-LdPlayerPull should auto-init the workspace if missing, matching Add-BuildToProject's convention."
+Assert-Contains $moduleSource '"00_OriginalBuild"' "Invoke-LdPlayerPull should save the pulled bundle under 00_OriginalBuild."
+Assert-Contains $moduleSource 'Add-BuildToProject $GameName $bundlePath' "Invoke-LdPlayerPull should hand off to the existing extract/flatten/scan pipeline."
+
 Write-Host "retk-ldplayer checks passed"
