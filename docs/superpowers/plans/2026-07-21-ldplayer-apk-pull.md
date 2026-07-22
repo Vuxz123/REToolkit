@@ -37,7 +37,7 @@ Create `scripts\retk-ldplayer.ps1`:
 # Dot-sourced by re.ps1. Uses shared REToolkit variables from the entrypoint.
 
 function ConvertFrom-PmPathOutput {
-    param([Parameter(Mandatory)] [string]$RawOutput)
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string]$RawOutput)
 
     $values = New-Object System.Collections.Generic.List[string]
     if ([string]::IsNullOrWhiteSpace($RawOutput)) {
@@ -55,7 +55,7 @@ function ConvertFrom-PmPathOutput {
 }
 
 function ConvertFrom-PmListPackagesOutput {
-    param([Parameter(Mandatory)] [string]$RawOutput)
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string]$RawOutput)
 
     # `pm list packages` and `pm path` both emit "package:<value>" lines;
     # the parsing is identical, only the meaning of <value> differs.
@@ -63,7 +63,7 @@ function ConvertFrom-PmListPackagesOutput {
 }
 
 function ConvertFrom-AdbDevicesOutput {
-    param([Parameter(Mandatory)] [string]$RawOutput)
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string]$RawOutput)
 
     $devices = New-Object System.Collections.Generic.List[pscustomobject]
     if ([string]::IsNullOrWhiteSpace($RawOutput)) {
@@ -101,17 +101,6 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . (Join-Path $Root "scripts\retk-ldplayer.ps1")
-
-function Assert-True {
-    param(
-        [Parameter(Mandatory)] [bool]$Condition,
-        [Parameter(Mandatory)] [string]$Message
-    )
-
-    if (-not $Condition) {
-        throw "ASSERT TRUE failed: $Message"
-    }
-}
 
 function Assert-Equals {
     param(

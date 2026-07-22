@@ -6,17 +6,6 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . (Join-Path $Root "scripts\retk-ldplayer.ps1")
 
-function Assert-True {
-    param(
-        [Parameter(Mandatory)] [bool]$Condition,
-        [Parameter(Mandatory)] [string]$Message
-    )
-
-    if (-not $Condition) {
-        throw "ASSERT TRUE failed: $Message"
-    }
-}
-
 function Assert-Equals {
     param(
         [AllowNull()] $Actual,
