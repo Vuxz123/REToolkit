@@ -281,6 +281,9 @@ Assert-Contains $tutorial '.\re.ps1 export FoodHunt' "Tutorial should show works
 Assert-Contains $tutorial '.\re.ps1 import .\exports\FoodHunt.re' "Tutorial should show workspace archive import."
 Assert-Contains $tutorial 'connect_instance <GameName>' "Tutorial should explain agent MCP connection."
 Assert-NotContains $tutorial 'Bridge not responding to ping' "Tutorial should not troubleshoot ghidra-cli bridge issues."
+Assert-Contains $readme 'pull-ldplayer <GameName> <PackageName>' "README should document the pull-ldplayer command."
+Assert-Contains $readme '## Pull An APK From LDPlayer' "README should have a dedicated LDPlayer pull section."
+Assert-Contains $tutorial '.\re.ps1 pull-ldplayer FoodHunt com.example.foodhunt' "Tutorial should show how to pull a build from LDPlayer."
 
 Assert-Contains $promptInstallGhidraSkill '-InstallGhidraMcp' "Prompt should document GhidraMCP installation."
 Assert-Contains $promptInstallGhidraSkill '-InstallDotNetRuntime' "Prompt should document .NET runtime installation for Il2CppDumper."

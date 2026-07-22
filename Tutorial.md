@@ -138,6 +138,16 @@ For an already extracted folder:
 .\re.ps1 flow FoodHunt "D:\Path\To\FoodHunt_Extracted"
 ```
 
+If you do not have a build file and the game is only installed through the
+Play Store inside LDPlayer, pull it from a running instance first:
+
+```powershell
+.\re.ps1 pull-ldplayer FoodHunt com.example.foodhunt
+```
+
+This pulls the base APK, split APKs, and OBB files, then runs the same
+extract/scan step `flow` does — run `flow`/`dump`/`open` normally afterward.
+
 The flow does this:
 
 1. Create or reuse `workspaces/FoodHunt`.

@@ -338,6 +338,33 @@ After the GUI opens:
 5. Start GhidraMCP from `Tools > GhidraMCP > Start MCP Server`.
 6. Connect the AI client with `connect_instance FoodHunt`.
 
+## Pull An APK From LDPlayer
+
+If a game is only installed through the Play Store inside LDPlayer, pull it
+directly from a running instance instead of finding an APK file by hand:
+
+```powershell
+.\re.ps1 pull-ldplayer FoodHunt com.example.foodhunt
+```
+
+This auto-detects `adb.exe` and the running LDPlayer device, opens the app so
+any OBB or dynamic-feature-module downloads can trigger, waits for
+confirmation, then pulls the base APK, all split APKs, and any OBB files into
+`workspaces\FoodHunt\00_OriginalBuild\` and runs the same extract/scan `add`
+does. The workspace is ready for `dump` when the command returns.
+
+Options:
+
+```text
+-DeviceSerial <serial>   # target a specific device when multiple are connected
+-AdbPath <path>          # use a specific adb.exe instead of auto-detecting
+-SkipLaunch              # skip opening the app (use when OBB/modules are already downloaded)
+```
+
+This command is interactive: it needs LDPlayer open with the game installed
+and a human to actually play long enough for background downloads to finish.
+It does not pull app-private data under `/data/data/<package>/`.
+
 ## re.ps1 Commands
 
 | Command | Purpose |
@@ -345,6 +372,7 @@ After the GUI opens:
 | `doctor` | Check local toolkit paths and runtime basics. |
 | `init <GameName>` | Create workspace and `project.re.json`. |
 | `add <GameName> <apk/xapk/aab/zip>` | Extract a build into `01_Extracted`, then scan. |
+| `pull-ldplayer <GameName> <PackageName>` | Pull base+split APKs and OBB files from a running LDPlayer instance, then extract/scan like `add`. |
 | `scan <GameName> <ExtractedPath>` | Locate native binary and metadata. |
 | `dump <GameName>` | Run Il2CppDumper. |
 | `import <GameName>` | Import into Ghidra with `analyzeHeadless -import -overwrite -noanalysis`. |
