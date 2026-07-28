@@ -56,9 +56,11 @@ Use individual flags only for repair or a targeted install:
 ```
 
 `-InstallRuntime` creates toolkit-local JDK/Python paths under `runtime/`.
-`-InstallGhidraMcp` downloads the Ghidra extension ZIP, the Python bridge, and
-requirements into `tools/ghidra-mcp`; `bridge_mcp_ghidra.py` is the AI-client
-bridge, not the GUI plugin.
+`-InstallGhidraMcp` downloads the Ghidra extension ZIP and the
+`ghidra_mcp_bridge-*.whl` Python bridge into `tools/ghidra-mcp`, then `pip
+install`s the wheel into `tools/ghidra-mcp/.venv`; the resulting
+`bridge-mcp-ghidra` console script is the AI-client bridge, not the GUI
+plugin.
 
 ## AI Client MCP
 

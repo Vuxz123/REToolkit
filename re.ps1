@@ -48,7 +48,7 @@ $ToolPaths = [ordered]@{
     PyGhidraVenv     = Join-Path $Root  "runtime\python\pyghidra-venv"
     PyGhidraPython   = Join-Path $Root  "runtime\python\pyghidra-venv\Scripts\python.exe"
     GhidraRoot       = Join-Path $Tools "ghidra"
-    GhidraMcpBridge  = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
+    GhidraMcpBridge  = Join-Path $Tools "ghidra-mcp\.venv\Scripts\bridge-mcp-ghidra.exe"
     GhidraGuiBat     = Join-Path $Tools "ghidra\ghidraRun.bat"
     PyGhidraDist     = Join-Path $Tools "ghidra\Ghidra\Features\PyGhidra\pypkg\dist"
     AnalyzeHeadless  = Join-Path $Tools "ghidra\support\analyzeHeadless.bat"
@@ -231,26 +231,23 @@ switch ($Command) {
     }
 
     "mcp" {
-        $bridge = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
-        if (Test-Path -LiteralPath $bridge) {
-            $venvPython = Join-Path $Tools "ghidra-mcp\.venv\Scripts\python.exe"
-            if (Test-Path -LiteralPath $venvPython) {
-                & $venvPython $bridge --transport stdio
-            }
-            else {
-                & uv run --script $bridge --transport stdio
-            }
+        $venvBridge = Join-Path $Tools "ghidra-mcp\.venv\Scripts\bridge-mcp-ghidra.exe"
+        $venvPython = Join-Path $Tools "ghidra-mcp\.venv\Scripts\python.exe"
+        if (Test-Path -LiteralPath $venvBridge) {
+            & $venvBridge --transport stdio
+            if ($LASTEXITCODE -ne 0) { throw "MCP bridge exited with code $LASTEXITCODE" }
+        }
+        elseif (Test-Path -LiteralPath $venvPython) {
+            & $venvPython -m bridge_mcp_ghidra --transport stdio
             if ($LASTEXITCODE -ne 0) { throw "MCP bridge exited with code $LASTEXITCODE" }
         }
         else {
-            foreach ($candidate in @("ghidra-mcp-bridge", "bridge_mcp_ghidra")) {
-                $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-                if ($cmd) {
-                    & $cmd
-                    return
-                }
+            $cmd = Get-Command "bridge-mcp-ghidra" -ErrorAction SilentlyContinue
+            if ($cmd) {
+                & $cmd --transport stdio
+                return
             }
-            throw "No MCP bridge entrypoint found. Put bridge_mcp_ghidra.py in tools\ghidra-mcp or install a bridge command."
+            throw "No MCP bridge entrypoint found. Run '.\install-re-toolkit.ps1 -InstallGhidraMcp' to install the bridge wheel into tools\ghidra-mcp\.venv."
         }
     }
 

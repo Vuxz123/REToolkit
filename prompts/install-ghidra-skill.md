@@ -128,12 +128,11 @@ https://github.com/bethington/ghidra-mcp
 It saves these files under `tools/ghidra-mcp`:
 
 - `GhidraMCP-<version>.zip`
-- `bridge_mcp_ghidra.py`
-- `requirements.txt`
+- `ghidra_mcp_bridge-<version>-py3-none-any.whl` (ships its own dependencies)
 
-It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` into
-that local environment. `bridge_mcp_ghidra.py` is the AI-client-side bridge,
-not the GUI plugin.
+It also creates `tools/ghidra-mcp/.venv` and `pip install`s the wheel into
+that local environment. The resulting `bridge-mcp-ghidra` console script is
+the AI-client-side bridge, not the GUI plugin.
 
 When a local Ghidra install is present, the installer extracts and installs the
 extension under:

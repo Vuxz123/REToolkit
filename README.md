@@ -167,10 +167,10 @@ That installer path uses the GitHub Releases API and downloads these release
 assets into `tools/ghidra-mcp`:
 
 - `GhidraMCP-<version>.zip`, the Ghidra extension ZIP.
-- `bridge_mcp_ghidra.py`, the Python MCP bridge.
-- `requirements.txt`, the Python bridge dependencies.
+- `ghidra_mcp_bridge-<version>-py3-none-any.whl`, the Python MCP bridge
+  (ships its own dependencies).
 
-It also creates `tools/ghidra-mcp/.venv` and installs `requirements.txt` there.
+It also creates `tools/ghidra-mcp/.venv` and `pip install`s the wheel there.
 `re.ps1 mcp` uses that local Python environment when it exists.
 
 When a local Ghidra install is present, the installer also extracts the
@@ -181,9 +181,10 @@ Ghidra's user extension folder:
 %APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
 ```
 
-`bridge_mcp_ghidra.py` is not the Ghidra plugin. It is the AI-client-side MCP
-bridge: Codex/OpenCode talks to it over stdio, and it forwards requests to the
-GhidraMCP server running inside the Ghidra GUI.
+The `bridge_mcp_ghidra` wheel is not the Ghidra plugin. It is the AI-client-side
+MCP bridge: Codex/OpenCode talks to it over stdio (via the `bridge-mcp-ghidra`
+console script installed into `tools/ghidra-mcp/.venv`), and it forwards
+requests to the GhidraMCP server running inside the Ghidra GUI.
 
 Optional:
 
@@ -242,8 +243,8 @@ Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, restart Ghidra, then enable
 the plugin.
 
 The default server URL is usually `http://127.0.0.1:8089/`. The Python MCP
-bridge in `tools/ghidra-mcp/bridge_mcp_ghidra.py` discovers GUI instances and
-exposes them to AI clients.
+bridge installed at `tools/ghidra-mcp/.venv/Scripts/bridge-mcp-ghidra.exe`
+discovers GUI instances and exposes them to AI clients.
 
 ## Configure An AI Client
 

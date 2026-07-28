@@ -65,9 +65,11 @@ reloads its Script Bundle config.
 https://github.com/bethington/ghidra-mcp
 ```
 
-It saves the extension ZIP, Python bridge, and requirements file under
-`tools/ghidra-mcp`. It also creates `tools/ghidra-mcp/.venv` and installs
-`requirements.txt` there for the MCP bridge.
+It saves the extension ZIP and the Python bridge wheel
+(`ghidra_mcp_bridge-<version>-py3-none-any.whl`, which ships its own
+dependencies) under `tools/ghidra-mcp`. It also creates
+`tools/ghidra-mcp/.venv` and `pip install`s the wheel there for the MCP
+bridge.
 
 When Ghidra is installed locally, it also extracts the extension into
 `tools/ghidra-mcp/extension/GhidraMCP` and installs it into:
@@ -76,7 +78,8 @@ When Ghidra is installed locally, it also extracts the extension into
 %APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
 ```
 
-`bridge_mcp_ghidra.py` is the MCP bridge used by AI clients. It is separate
+The `bridge-mcp-ghidra` console script (installed into
+`tools/ghidra-mcp/.venv`) is the MCP bridge used by AI clients. It is separate
 from the Ghidra extension that runs inside the GUI.
 
 Optional:

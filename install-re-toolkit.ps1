@@ -936,45 +936,36 @@ function Install-GhidraMcp {
         }
 
         $extensionAsset = $release.assets | Where-Object { $_.name -match '^GhidraMCP-.+\.zip$' } | Select-Object -First 1
-        $bridgeAsset = $release.assets | Where-Object { $_.name -eq "bridge_mcp_ghidra.py" } | Select-Object -First 1
-        $requirementsAsset = $release.assets | Where-Object { $_.name -eq "requirements.txt" } | Select-Object -First 1
+        $wheelAsset = $release.assets | Where-Object { $_.name -match '^ghidra_mcp_bridge-.+\.whl$' } | Select-Object -First 1
 
         if (-not $extensionAsset) {
             Write-Host "  [FAIL] No GhidraMCP release extension asset matched ^GhidraMCP-.+\.zip$." -ForegroundColor Red
             return $false
         }
-        if (-not $bridgeAsset) {
-            Write-Host "  [FAIL] No bridge_mcp_ghidra.py release asset found." -ForegroundColor Red
-            return $false
-        }
-        if (-not $requirementsAsset) {
-            Write-Host "  [FAIL] No requirements.txt release asset found." -ForegroundColor Red
+        if (-not $wheelAsset) {
+            Write-Host "  [FAIL] No release asset matched ^ghidra_mcp_bridge-.+\.whl$." -ForegroundColor Red
             return $false
         }
 
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 
         $extensionPath = Join-Path $targetDir $extensionAsset.name
-        $bridgePath = Join-Path $targetDir "bridge_mcp_ghidra.py"
-        $requirementsPath = Join-Path $targetDir "requirements.txt"
+        $wheelPath = Join-Path $targetDir $wheelAsset.name
 
         Write-Host ("  Downloading {0} ..." -f $extensionAsset.name) -ForegroundColor Cyan
         Invoke-WebRequest -Uri $extensionAsset.browser_download_url -OutFile $extensionPath -UseBasicParsing -TimeoutSec 600
 
-        Write-Host "  Downloading bridge_mcp_ghidra.py ..." -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $bridgeAsset.browser_download_url -OutFile $bridgePath -UseBasicParsing -TimeoutSec 600
+        Write-Host ("  Downloading {0} ..." -f $wheelAsset.name) -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $wheelAsset.browser_download_url -OutFile $wheelPath -UseBasicParsing -TimeoutSec 600
 
-        Write-Host "  Downloading requirements.txt ..." -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $requirementsAsset.browser_download_url -OutFile $requirementsPath -UseBasicParsing -TimeoutSec 600
-
-        ("Release: {0}`nTag: {1}`nExtensionZip: {2}`nDownloadedAt: {3}`n" -f $release.name, $release.tag_name, $extensionPath, (Get-Date).ToString("s")) |
+        ("Release: {0}`nTag: {1}`nExtensionZip: {2}`nBridgeWheel: {3}`nDownloadedAt: {4}`n" -f $release.name, $release.tag_name, $extensionPath, $wheelPath, (Get-Date).ToString("s")) |
             Set-Content -LiteralPath (Join-Path $targetDir "release.txt") -Encoding UTF8
 
         if (-not (Install-GhidraMcpExtensionZip -ExtensionZip $extensionPath -GhidraRoot $GhidraRoot -McpDir $targetDir)) {
             return $false
         }
 
-        if (-not (Install-GhidraMcpRequirements -McpDir $targetDir)) {
+        if (-not (Install-GhidraMcpBridgeWheel -McpDir $targetDir -WheelPath $wheelPath)) {
             return $false
         }
 
@@ -993,12 +984,14 @@ function Install-GhidraMcp {
     }
 }
 
-function Install-GhidraMcpRequirements {
-    param([Parameter(Mandatory)] [string]$McpDir)
+function Install-GhidraMcpBridgeWheel {
+    param(
+        [Parameter(Mandatory)] [string]$McpDir,
+        [Parameter(Mandatory)] [string]$WheelPath
+    )
 
-    $requirementsPath = Join-Path $McpDir "requirements.txt"
-    if (-not (Test-Path -LiteralPath $requirementsPath)) {
-        Write-Host "  [FAIL] requirements.txt not found: $requirementsPath" -ForegroundColor Red
+    if (-not (Test-Path -LiteralPath $WheelPath)) {
+        Write-Host "  [FAIL] GhidraMCP bridge wheel not found: $WheelPath" -ForegroundColor Red
         return $false
     }
 
@@ -1020,8 +1013,8 @@ function Install-GhidraMcpRequirements {
                 if ($LASTEXITCODE -ne 0) { throw "uv venv failed with exit code $LASTEXITCODE" }
             }
 
-            Write-Host "  Installing MCP bridge requirements with uv..." -ForegroundColor Cyan
-            & uv pip install --python $venvPython -r $requirementsPath
+            Write-Host "  Installing MCP bridge wheel with uv..." -ForegroundColor Cyan
+            & uv pip install --python $venvPython $WheelPath
             if ($LASTEXITCODE -ne 0) { throw "uv pip install --python failed with exit code $LASTEXITCODE" }
         }
         else {
@@ -1042,8 +1035,8 @@ function Install-GhidraMcpRequirements {
                 if ($LASTEXITCODE -ne 0) { throw "python -m venv failed with exit code $LASTEXITCODE" }
             }
 
-            Write-Host "  Installing MCP bridge requirements with pip..." -ForegroundColor Cyan
-            & $venvPython -m pip install -r $requirementsPath
+            Write-Host "  Installing MCP bridge wheel with pip..." -ForegroundColor Cyan
+            & $venvPython -m pip install $WheelPath
             if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
         }
 
@@ -1343,7 +1336,7 @@ Write-Section "Tool folders"
 $Tools = Join-Path $InstallDir "tools"
 $toolsGhidra   = Join-Path $Tools "ghidra"
 $toolsIl2cpp   = Join-Path $Tools "Il2CppDumper\Il2CppDumper.exe"
-$toolsMcp      = Join-Path $Tools "ghidra-mcp\bridge_mcp_ghidra.py"
+$toolsMcp      = Join-Path $Tools "ghidra-mcp\.venv\Scripts\bridge-mcp-ghidra.exe"
 $toolsRipper   = Join-Path $Tools "AssetRipper\AssetRipper.exe"
 
 if ($InstallGhidra) {
