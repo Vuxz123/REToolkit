@@ -530,3 +530,142 @@ function Run-FullFlow {
 
     Write-Host "Flow completed for $GameName. PyGhidra is running separately for analysis/symbol steps." -ForegroundColor Green
 }
+
+function Find-AvailablePort {
+    param(
+        [int]$StartPort = 44399,
+        [int]$MaxAttempts = 5
+    )
+
+    for ($i = 0; $i -lt $MaxAttempts; $i++) {
+        $candidate = $StartPort + $i
+        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $candidate)
+        try {
+            $listener.Start()
+            $listener.Stop()
+            return $candidate
+        }
+        catch [System.Net.Sockets.SocketException] {
+            continue
+        }
+    }
+
+    throw "No available port found in range $StartPort-$($StartPort + $MaxAttempts - 1) for AssetRipper headless server."
+}
+
+function Wait-AssetRipperHttpReady {
+    param(
+        [Parameter(Mandatory)] [int]$Port,
+        [Parameter(Mandatory)] [int]$ProcessId,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $baseUri = "http://127.0.0.1:$Port/"
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    while ((Get-Date) -lt $deadline) {
+        $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($null -eq $proc) {
+            throw "AssetRipper headless process (PID $ProcessId) exited before its web server became ready. Check the log file for details."
+        }
+
+        try {
+            $response = Invoke-WebRequest -Uri $baseUri -Method Get -TimeoutSec 2 -UseBasicParsing
+            if ($response.StatusCode -eq 200) {
+                return
+            }
+        }
+        catch {
+            # Not ready yet; keep polling until the timeout.
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "AssetRipper headless web server did not become ready on port $Port within $TimeoutSeconds seconds."
+}
+
+function Invoke-AssetRipperCommand {
+    param(
+        [Parameter(Mandatory)] [int]$Port,
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [hashtable]$Body
+    )
+
+    $uri = "http://127.0.0.1:$Port$Path"
+    try {
+        return Invoke-WebRequest -Uri $uri -Method Post -Body $Body -ContentType "application/x-www-form-urlencoded" -TimeoutSec 0 -UseBasicParsing
+    }
+    catch {
+        throw "AssetRipper command $Path failed: $($_.Exception.Message)"
+    }
+}
+
+function Export-AssetRipperUnityProject {
+    param(
+        [Parameter(Mandatory)] [string]$InputPath,
+        [Parameter(Mandatory)] [string]$OutputPath
+    )
+
+    Assert-PathExists $ToolPaths.AssetRipper "AssetRipper"
+
+    $port = Find-AvailablePort -StartPort 44399 -MaxAttempts 5
+    $assetRipperDir = Split-Path -Parent $ToolPaths.AssetRipper
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $logFile = Join-Path $Root ("logs\assetripper-cli-{0}.out.log" -f $stamp)
+
+    $launch = Start-DetachedNativeProcess -FilePath $ToolPaths.AssetRipper -Arguments @("--headless", "--port", "$port") -WorkingDirectory $assetRipperDir -LogFile $logFile -Activity "AssetRipper headless server" -LogRetentionFilter "assetripper-cli-*"
+
+    try {
+        Wait-AssetRipperHttpReady -Port $port -ProcessId $launch.ProcessId -TimeoutSeconds 30
+
+        Invoke-AssetRipperCommand -Port $port -Path "/Reset" -Body @{} | Out-Null
+        Invoke-AssetRipperCommand -Port $port -Path "/LoadFolder" -Body @{ Path = $InputPath } | Out-Null
+        Invoke-AssetRipperCommand -Port $port -Path "/Export/UnityProject" -Body @{ Path = $OutputPath; CreateSubfolder = "false" } | Out-Null
+
+        $exportedFiles = if (Test-Path -LiteralPath $OutputPath -PathType Container) {
+            Get-ChildItem -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+        } else { $null }
+
+        if (-not $exportedFiles) {
+            throw "AssetRipper export finished but $OutputPath is empty. Check the log file for details: $logFile"
+        }
+    }
+    finally {
+        $proc = Get-Process -Id $launch.ProcessId -ErrorAction SilentlyContinue
+        if ($proc) { Stop-Process -Id $launch.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+
+    return [pscustomobject]@{
+        OutputPath = $OutputPath
+        LogFile    = $logFile
+    }
+}
+
+function Invoke-AssetRipperCliPipeline {
+    param([Parameter(Mandatory)] [string]$GameName)
+
+    $project = Read-Project $GameName
+    if (-not $project.status.scanned) {
+        throw "Project not scanned. Run: .\re.ps1 scan $GameName <ExtractedPath>"
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$project.extractedPath)) {
+        throw "Project has no extractedPath. Run: .\re.ps1 scan $GameName <ExtractedPath>"
+    }
+
+    $workspace = Get-WorkspacePath $GameName
+    Set-ObjectNoteProperty -Object $project -Name "reconstructedSourceDir" -Value (Join-Path $workspace "05_ReconstructedSource")
+    $outputPath = [string]$project.reconstructedSourceDir
+
+    Write-Host "== AssetRipper CLI (headless): $GameName ==" -ForegroundColor Magenta
+    Write-Host "Input : $($project.extractedPath)" -ForegroundColor DarkGray
+    Write-Host "Output: $outputPath" -ForegroundColor DarkGray
+
+    $result = Export-AssetRipperUnityProject -InputPath $project.extractedPath -OutputPath $outputPath
+
+    Set-ObjectNoteProperty -Object $project.status -Name "assetRipperExported" -Value $true
+    Set-ObjectNoteProperty -Object $project.status -Name "assetRipperExportedAt" -Value ((Get-Date).ToString("s"))
+    Save-Project $GameName $project
+
+    Write-Host ("AssetRipper export complete: {0}" -f $result.OutputPath) -ForegroundColor Green
+}
