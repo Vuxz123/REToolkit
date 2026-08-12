@@ -557,7 +557,8 @@ function Wait-AssetRipperHttpReady {
     param(
         [Parameter(Mandatory)] [int]$Port,
         [Parameter(Mandatory)] [int]$ProcessId,
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 30,
+        [string]$LogFile
     )
 
     $baseUri = "http://127.0.0.1:$Port/"
@@ -566,7 +567,7 @@ function Wait-AssetRipperHttpReady {
     while ((Get-Date) -lt $deadline) {
         $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
         if ($null -eq $proc) {
-            throw "AssetRipper headless process (PID $ProcessId) exited before its web server became ready. Check the log file for details."
+            throw "AssetRipper headless process (PID $ProcessId) exited before its web server became ready. Check the log file for details: $LogFile"
         }
 
         try {
@@ -582,7 +583,7 @@ function Wait-AssetRipperHttpReady {
         Start-Sleep -Milliseconds 500
     }
 
-    throw "AssetRipper headless web server did not become ready on port $Port within $TimeoutSeconds seconds."
+    throw "AssetRipper headless web server did not become ready on port $Port within $TimeoutSeconds seconds. Check the log file for details: $LogFile"
 }
 
 function Invoke-AssetRipperCommand {
@@ -597,7 +598,15 @@ function Invoke-AssetRipperCommand {
         return Invoke-WebRequest -Uri $uri -Method Post -Body $Body -ContentType "application/x-www-form-urlencoded" -TimeoutSec 0 -UseBasicParsing
     }
     catch {
-        throw "AssetRipper command $Path failed: $($_.Exception.Message)"
+        $detail = ""
+        if ($_.Exception.Response) {
+            try {
+                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $detail = $reader.ReadToEnd()
+            } catch { }
+        }
+        $suffix = if ($detail) { " -- $detail" } else { "" }
+        throw ("AssetRipper command {0} failed: {1}{2}" -f $Path, $_.Exception.Message, $suffix)
     }
 }
 
@@ -617,18 +626,21 @@ function Export-AssetRipperUnityProject {
     $launch = Start-DetachedNativeProcess -FilePath $ToolPaths.AssetRipper -Arguments @("--headless", "--port", "$port") -WorkingDirectory $assetRipperDir -LogFile $logFile -Activity "AssetRipper headless server" -LogRetentionFilter "assetripper-cli-*"
 
     try {
-        Wait-AssetRipperHttpReady -Port $port -ProcessId $launch.ProcessId -TimeoutSeconds 30
+        Wait-AssetRipperHttpReady -Port $port -ProcessId $launch.ProcessId -TimeoutSeconds 30 -LogFile $logFile
 
         Invoke-AssetRipperCommand -Port $port -Path "/Reset" -Body @{} | Out-Null
         Invoke-AssetRipperCommand -Port $port -Path "/LoadFolder" -Body @{ Path = $InputPath } | Out-Null
+
+        $exportStart = Get-Date
         Invoke-AssetRipperCommand -Port $port -Path "/Export/UnityProject" -Body @{ Path = $OutputPath; CreateSubfolder = "false" } | Out-Null
 
         $exportedFiles = if (Test-Path -LiteralPath $OutputPath -PathType Container) {
-            Get-ChildItem -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -LiteralPath $OutputPath -Force -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $exportStart }
         } else { $null }
 
         if (-not $exportedFiles) {
-            throw "AssetRipper export finished but $OutputPath is empty. Check the log file for details: $logFile"
+            throw "AssetRipper export finished but $OutputPath has no files newer than the export start. Check the log file for details: $logFile"
         }
     }
     finally {

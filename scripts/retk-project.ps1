@@ -396,6 +396,7 @@ function Update-ImportedWorkspaceProject {
     Set-ObjectNoteProperty -Object $project -Name "name" -Value $GameName
     Set-ObjectNoteProperty -Object $project -Name "il2cppDumperOutput" -Value (Join-Path $WorkspacePath "02_Il2CppDumperOutput")
     Set-ObjectNoteProperty -Object $project -Name "ghidraProjectDir" -Value (Join-Path $WorkspacePath "03_GhidraProject")
+    Set-ObjectNoteProperty -Object $project -Name "reconstructedSourceDir" -Value (Join-Path $WorkspacePath "05_ReconstructedSource")
     if ([string]::IsNullOrWhiteSpace([string]$project.ghidraProjectName)) {
         Set-ObjectNoteProperty -Object $project -Name "ghidraProjectName" -Value $GameName
     }

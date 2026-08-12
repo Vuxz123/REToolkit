@@ -88,6 +88,7 @@ try {
     Assert-Equals $importedProject.name "FoodHunt" "Imported project should keep the workspace name."
     Assert-Equals $importedProject.il2cppDumperOutput (Join-Path $importedWorkspace "02_Il2CppDumperOutput") "Import should rebase il2cpp output path."
     Assert-Equals $importedProject.ghidraProjectDir (Join-Path $importedWorkspace "03_GhidraProject") "Import should rebase Ghidra project dir."
+    Assert-Equals $importedProject.reconstructedSourceDir (Join-Path $importedWorkspace "05_ReconstructedSource") "Import should rebase reconstructedSourceDir."
     Assert-True ([string]$importedProject.nativeBinary).StartsWith($importedWorkspace, [System.StringComparison]::OrdinalIgnoreCase) "Import should rebase native binary path."
     Assert-True ([string]$importedProject.metadata).StartsWith($importedWorkspace, [System.StringComparison]::OrdinalIgnoreCase) "Import should rebase metadata path."
 }
