@@ -37,6 +37,12 @@ try {
 
     New-Workspace "FoodHunt" | Out-Null
     $sourceWorkspace = Join-Path $script:Workspaces "FoodHunt"
+
+    $freshProject = Read-Project "FoodHunt"
+    Assert-Equals $freshProject.reconstructedSourceDir (Join-Path $sourceWorkspace "05_ReconstructedSource") "New-Workspace should pre-populate reconstructedSourceDir like il2cppDumperOutput/ghidraProjectDir."
+    Assert-Equals $freshProject.status.assetRipperExported $false "New-Workspace should initialize assetRipperExported to false."
+    Assert-Equals $freshProject.status.assetRipperExportedAt $null "New-Workspace should initialize assetRipperExportedAt to null."
+
     $binaryPath = Join-Path $sourceWorkspace "01_Extracted\lib\arm64-v8a\libil2cpp.so"
     $metadataPath = Join-Path $sourceWorkspace "01_Extracted\assets\bin\Data\Managed\Metadata\global-metadata.dat"
     $notePath = Join-Path $sourceWorkspace "04_Notes\note.txt"

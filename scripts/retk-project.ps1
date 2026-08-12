@@ -170,24 +170,27 @@ function New-Workspace {
     }
 
     $project = [ordered]@{
-        name               = $GameName
-        platform           = $null
-        extractedPath      = $null
-        nativeBinary       = $null
-        metadata           = $null
-        il2cppDumperOutput = (Join-Path $workspace "02_Il2CppDumperOutput")
-        ghidraProjectDir   = (Join-Path $workspace "03_GhidraProject")
-        ghidraProjectName  = $GameName
-        ghidraProgramName  = $null
+        name                    = $GameName
+        platform                = $null
+        extractedPath           = $null
+        nativeBinary            = $null
+        metadata                = $null
+        il2cppDumperOutput      = (Join-Path $workspace "02_Il2CppDumperOutput")
+        ghidraProjectDir        = (Join-Path $workspace "03_GhidraProject")
+        ghidraProjectName       = $GameName
+        ghidraProgramName       = $null
+        reconstructedSourceDir  = (Join-Path $workspace "05_ReconstructedSource")
         status = [ordered]@{
-            scanned            = $false
-            dumped             = $false
-            imported           = $false
-            analyzing          = $false
-            analyzed           = $false
-            symbolsApplied     = $false
-            analyzeStartedAt   = $null
-            analyzeCompletedAt = $null
+            scanned                = $false
+            dumped                 = $false
+            imported               = $false
+            analyzing              = $false
+            analyzed               = $false
+            symbolsApplied         = $false
+            assetRipperExported    = $false
+            assetRipperExportedAt  = $null
+            analyzeStartedAt       = $null
+            analyzeCompletedAt     = $null
         }
     }
 
