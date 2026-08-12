@@ -300,6 +300,8 @@ Assert-NotContains $tutorial 'Bridge not responding to ping' "Tutorial should no
 Assert-Contains $readme 'pull-ldplayer <GameName> <PackageName>' "README should document the pull-ldplayer command."
 Assert-Contains $readme '## Pull An APK From LDPlayer' "README should have a dedicated LDPlayer pull section."
 Assert-Contains $tutorial '.\re.ps1 pull-ldplayer FoodHunt com.example.foodhunt' "Tutorial should show how to pull a build from LDPlayer."
+Assert-Contains $readme 'assetripper-cli <GameName>' "README should document the headless assetripper-cli command."
+Assert-Contains $tutorial '.\re.ps1 assetripper-cli FoodHunt' "Tutorial should show how to run the headless AssetRipper export."
 
 Assert-Contains $promptInstallGhidraSkill '-InstallGhidraMcp' "Prompt should document GhidraMCP installation."
 Assert-Contains $promptInstallGhidraSkill '-InstallDotNetRuntime' "Prompt should document .NET runtime installation for Il2CppDumper."

@@ -87,6 +87,7 @@ Optional:
 ```powershell
 .\install-re-toolkit.ps1 -InstallAssetRipper
 .\re.ps1 assetripper
+.\re.ps1 assetripper-cli FoodHunt
 ```
 
 ## 3. Enable GhidraMCP In The GUI

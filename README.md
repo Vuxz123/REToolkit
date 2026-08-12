@@ -392,6 +392,7 @@ It does not pull app-private data under `/data/data/<package>/`.
 | `pyghidra-gui [GameName]` | Start PyGhidra GUI with toolkit env; optional game name sets the default/recent project first. |
 | `il2cppdumper <args...>` | Raw Il2CppDumper passthrough. |
 | `assetripper [args...]` | Open the installed AssetRipper GUI; alias: `asset-ripper`. |
+| `assetripper-cli <GameName>` | Headlessly export the workspace's extracted build into `05_ReconstructedSource` via AssetRipper's `--headless` HTTP command API; no browser. |
 | `mcp` | Start the GhidraMCP Python bridge for AI clients. |
 
 Legacy query aliases `summary`, `strings`, `functions`, and `stats` no longer
