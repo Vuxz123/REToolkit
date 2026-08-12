@@ -230,6 +230,11 @@ switch ($Command) {
         Write-Host ("AssetRipper GUI started (PID {0})." -f $result.ProcessId) -ForegroundColor Green
     }
 
+    "assetripper-cli" {
+        if (-not $Rest[0]) { throw "Usage: .\re.ps1 assetripper-cli <GameName>" }
+        Invoke-AssetRipperCliPipeline -GameName $Rest[0]
+    }
+
     "mcp" {
         $venvBridge = Join-Path $Tools "ghidra-mcp\.venv\Scripts\bridge-mcp-ghidra.exe"
         $venvPython = Join-Path $Tools "ghidra-mcp\.venv\Scripts\python.exe"

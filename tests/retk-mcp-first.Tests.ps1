@@ -119,6 +119,9 @@ Assert-Contains $re 'scripts\retk-ldplayer.ps1' "re.ps1 should load the LDPlayer
 Assert-Contains $re '"pull-ldplayer"' "re.ps1 should expose a pull-ldplayer command."
 Assert-Contains $re 'Invoke-LdPlayerPull -GameName $gameName -PackageName $packageName' "re.ps1 pull-ldplayer should call Invoke-LdPlayerPull with parsed arguments."
 Assert-Contains $uiModule 'pull-ldplayer <GameName> <PackageName>' "UI module should document the pull-ldplayer command."
+Assert-Contains $re '"assetripper-cli"' "re.ps1 should expose an assetripper-cli command."
+Assert-Contains $re 'Invoke-AssetRipperCliPipeline -GameName $Rest[0]' "re.ps1 assetripper-cli should call Invoke-AssetRipperCliPipeline with the parsed game name."
+Assert-Contains $uiModule 'assetripper-cli <GameName>' "UI module should document the headless AssetRipper CLI command."
 
 Assert-Contains $installer '[switch]$InstallGhidraMcp' "installer should expose -InstallGhidraMcp."
 Assert-Contains $installer '[switch]$InstallDotNetRuntime' "installer should expose -InstallDotNetRuntime for Il2CppDumper."

@@ -28,6 +28,7 @@ function Show-Usage {
     Write-Host "  .\re.ps1 pyghidra-gui [GameName]"
     Write-Host "  .\re.ps1 il2cppdumper <args...>"
     Write-Host "  .\re.ps1 assetripper [args...]        # open AssetRipper GUI"
+    Write-Host "  .\re.ps1 assetripper-cli <GameName>   # headless AssetRipper export into 05_ReconstructedSource"
     Write-Host "  .\re.ps1 mcp                         # MCP bridge for AI clients"
     Write-Host ""
     Write-Host "MCP query workflow:"
