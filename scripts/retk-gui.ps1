@@ -272,18 +272,10 @@ function Start-RetkGui {
     $rightPanel.Controls.Add($logButtonsPanel)
 
     # --- Left panel: action groups ---
-    # Plain Panel (not FlowLayoutPanel) with manually-stacked children: a
-    # FlowLayoutPanel here reproducibly mispaints whichever GroupBox lands in
-    # its first flowed slot (its border+caption never paint, only the
-    # child button does) when this panel is Dock=Fill directly below a
-    # Dock=Top sibling -- verified via PrintWindow captures across many
-    # variations (Dock order, AutoSize on/off, Invalidate/Refresh/resize
-    # nudges, AutoScrollPosition reset, EnableVisualStyles). Swapping which
-    # group holds index 0 moves the corruption with it, so it is not about
-    # "Setup" specifically. A plain Panel with each group's Top computed
-    # explicitly does not exhibit the bug.
-    $leftPanel = New-Object System.Windows.Forms.Panel
+    $leftPanel = New-Object System.Windows.Forms.FlowLayoutPanel
     $leftPanel.Dock = "Fill"
+    $leftPanel.FlowDirection = "TopDown"
+    $leftPanel.WrapContents = $false
     $leftPanel.AutoScroll = $true
 
     function New-RetkGuiGroup {
@@ -415,6 +407,14 @@ function Start-RetkGui {
                 return
             }
             if ($global:CurrentProcess.HasExited) {
+                # HasExited can flip to true before the async
+                # OutputDataReceived/ErrorDataReceived readers have delivered
+                # all queued lines. WaitForExit() (no-arg) returns almost
+                # immediately here (the process has already exited) but also
+                # forces the redirected stream readers to finish draining
+                # first, so [EXIT CODE] never logs ahead of the process's own
+                # tail output.
+                $global:CurrentProcess.WaitForExit()
                 $code = $global:CurrentProcess.ExitCode
                 $pollTimer.Stop()
                 $pollTimer.Dispose()
@@ -526,16 +526,7 @@ function Start-RetkGui {
         Invoke-GuiCommand -Arguments @('pull-ldplayer', $gameName, $packageName)
     }.GetNewClosure() | Out-Null
 
-    # Stack manually rather than via FlowLayoutPanel (see note above). The
-    # first group's Top must clear $topPanel.Height or its top edge paints
-    # underneath/behind the top bar.
-    $groupY = $topPanel.Height + 6
-    foreach ($grp in @($setupGroup, $pipelineGroup, $ghidraGroup, $workspaceGroup, $extrasGroup)) {
-        $grp.Left = 6
-        $grp.Top = $groupY
-        $groupY += $grp.Height + 8
-        $leftPanel.Controls.Add($grp)
-    }
+    $leftPanel.Controls.AddRange(@($setupGroup, $pipelineGroup, $ghidraGroup, $workspaceGroup, $extrasGroup))
 
     # --- Top bar handlers ---
     $refreshButton.Add_Click({ Refresh-Workspaces }.GetNewClosure())
@@ -582,10 +573,10 @@ function Start-RetkGui {
         Invoke-GuiCommand -Arguments $parsedArgs
     }.GetNewClosure())
 
+    $form.Controls.Add($leftPanel)
     $form.Controls.Add($rightPanel)
     $form.Controls.Add($topPanel)
     $form.Controls.Add($bottomPanel)
-    $form.Controls.Add($leftPanel)
 
     $form.Add_Shown({ Refresh-Workspaces }.GetNewClosure())
 
