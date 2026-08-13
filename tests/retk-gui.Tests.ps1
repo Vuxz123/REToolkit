@@ -72,4 +72,41 @@ finally {
     }
 }
 
+$tempRoot2 = Join-Path $env:TEMP ("retk-gui-test2-" + [guid]::NewGuid().ToString("N"))
+try {
+    # Split-RetkGuiCommandLine
+    Assert-Equals (Split-RetkGuiCommandLine -Text "").Count 0 "Empty text should split to zero arguments."
+    Assert-Equals (Split-RetkGuiCommandLine -Text "   ").Count 0 "Whitespace-only text should split to zero arguments."
+
+    $simple = Split-RetkGuiCommandLine -Text "status FoodHunt"
+    Assert-Equals $simple.Count 2 "status FoodHunt should split into 2 tokens."
+    Assert-Equals $simple[0] "status" "First token should be status."
+    Assert-Equals $simple[1] "FoodHunt" "Second token should be FoodHunt."
+
+    $quoted = Split-RetkGuiCommandLine -Text 'add MyGame "C:\path with spaces\build.apk"'
+    Assert-Equals $quoted.Count 3 "Quoted path should count as a single token."
+    Assert-Equals $quoted[2] 'C:\path with spaces\build.apk' "Quoted token should have quotes stripped."
+
+    # Get-RetkGuiWorkspaceNames
+    $workspacesDir = Join-Path $tempRoot2 "workspaces"
+    New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "GameA") | Out-Null
+    Set-Content -LiteralPath (Join-Path $workspacesDir "GameA\project.re.json") -Value "{}" -Encoding ASCII
+    New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "GameB") | Out-Null
+    Set-Content -LiteralPath (Join-Path $workspacesDir "GameB\project.re.json") -Value "{}" -Encoding ASCII
+    New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "NotAWorkspace") | Out-Null
+
+    $names = Get-RetkGuiWorkspaceNames -WorkspacesDir $workspacesDir
+    Assert-Equals $names.Count 2 "Only folders with project.re.json should be listed."
+    Assert-Equals $names[0] "GameA" "Names should be sorted alphabetically."
+    Assert-Equals $names[1] "GameB" "Names should be sorted alphabetically."
+
+    $missing = Get-RetkGuiWorkspaceNames -WorkspacesDir (Join-Path $tempRoot2 "does-not-exist")
+    Assert-Equals $missing.Count 0 "A missing workspaces directory should return zero names."
+}
+finally {
+    if (Test-Path -LiteralPath $tempRoot2) {
+        Remove-Item -LiteralPath $tempRoot2 -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "retk-gui checks passed"
