@@ -109,4 +109,34 @@ finally {
     }
 }
 
+. (Join-Path $RepoRoot "scripts\retk-core.ps1")
+
+$collectedLines = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+$exitCodeBox = [hashtable]::Synchronized(@{ Code = $null })
+
+$onOutput = {
+    param($line)
+    $collectedLines.Add($line)
+}.GetNewClosure()
+
+$onExit = {
+    param($code)
+    $exitCodeBox.Code = $code
+}.GetNewClosure()
+
+$proc = Invoke-RetkGuiCommand -Root $RepoRoot -Arguments @() -OnOutput $onOutput -OnExit $onExit
+
+$waited = 0
+while ($null -eq $exitCodeBox.Code -and $waited -lt 15000) {
+    Start-Sleep -Milliseconds 100
+    $waited += 100
+}
+
+Get-EventSubscriber | Where-Object { $_.SourceObject -eq $proc } | Unregister-Event
+
+Assert-True ($null -ne $exitCodeBox.Code) "Invoke-RetkGuiCommand should report an exit code within 15 seconds."
+Assert-Equals $exitCodeBox.Code 0 "re.ps1 with no command should exit 0 (prints usage)."
+Assert-True ($collectedLines.Count -gt 0) "Invoke-RetkGuiCommand should stream at least one output line."
+Assert-True (($collectedLines -join "`n").Contains("RE Toolkit")) "Output should include the re.ps1 usage banner."
+
 Write-Host "retk-gui checks passed"
