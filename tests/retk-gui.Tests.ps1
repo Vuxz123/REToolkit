@@ -139,4 +139,24 @@ Assert-Equals $exitCodeBox.Code 0 "re.ps1 with no command should exit 0 (prints 
 Assert-True ($collectedLines.Count -gt 0) "Invoke-RetkGuiCommand should stream at least one output line."
 Assert-True (($collectedLines -join "`n").Contains("RE Toolkit")) "Output should include the re.ps1 usage banner."
 
+$guiSource = Get-Content -LiteralPath (Join-Path $RepoRoot "scripts\retk-gui.ps1") -Raw
+
+foreach ($verb in @(
+    "doctor", "init", "add", "scan", "dump", "flow", "open", "ghidra-gui",
+    "analyze", "symbols", "status", "notes", "candidates", "context",
+    "summary", "export", "import", "assetripper-cli", "pull-ldplayer"
+)) {
+    Assert-Contains $guiSource "'$verb'" "GUI should wire a button/handler for the '$verb' re.ps1 command."
+}
+
+Assert-Contains $guiSource "OpenFileDialog" "GUI should use a file picker for Add build / Import / Flow."
+Assert-Contains $guiSource "FolderBrowserDialog" "GUI should use a folder picker for Scan / Flow."
+Assert-Contains $guiSource "SaveFileDialog" "GUI should use a save dialog for Export."
+Assert-Contains $guiSource "InputBox" "GUI should prompt for GameName/PackageName via InputBox."
+Assert-Contains $guiSource ".Kill(" "Cancel should kill the process tree, not just the top-level process."
+Assert-Contains $guiSource "IsRunning" "GUI should track a single-command-at-a-time running state."
+Assert-Contains $guiSource "GetNewClosure" "Event-bound scriptblocks must capture outer scope with GetNewClosure per Invoke-RetkGuiCommand's contract."
+Assert-Contains $guiSource "Application]::Run" "GUI must start a WinForms message loop."
+Assert-Contains $guiSource "MessageBox" "GUI should show a MessageBox if re.ps1 cannot be located, since -noConsole hides console errors otherwise."
+
 Write-Host "retk-gui checks passed"
