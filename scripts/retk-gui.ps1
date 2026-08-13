@@ -103,12 +103,36 @@ function Invoke-RetkGuiCommand {
     $proc.StartInfo = $psi
     $proc.EnableRaisingEvents = $true
 
-    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $OnOutput -Action {
-        if ($null -ne $EventArgs.Data) { & $Event.MessageData $EventArgs.Data }
+    # OutputDataReceived/ErrorDataReceived fire once per line, then exactly
+    # once more with $EventArgs.Data -eq $null as the documented EOF sentinel
+    # for that stream -- the actual "this stream is fully drained" signal,
+    # decoupled from Process.HasExited/ExitCode (a child can exit while the
+    # OS pipe still has buffered lines waiting to be delivered async). Track
+    # both streams' closed state on a shared object and expose it on the
+    # returned Process via a NoteProperty so callers can wait for real
+    # stream completion, not just process-exit timing.
+    $streamState = [pscustomobject]@{
+        OnOutput      = $OnOutput
+        StdoutClosed  = $false
+        StderrClosed  = $false
+    }
+
+    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $streamState -Action {
+        if ($null -ne $EventArgs.Data) {
+            & $Event.MessageData.OnOutput $EventArgs.Data
+        }
+        else {
+            $Event.MessageData.StdoutClosed = $true
+        }
     } | Out-Null
 
-    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $OnOutput -Action {
-        if ($null -ne $EventArgs.Data) { & $Event.MessageData $EventArgs.Data }
+    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $streamState -Action {
+        if ($null -ne $EventArgs.Data) {
+            & $Event.MessageData.OnOutput $EventArgs.Data
+        }
+        else {
+            $Event.MessageData.StderrClosed = $true
+        }
     } | Out-Null
 
     Register-ObjectEvent -InputObject $proc -EventName Exited -MessageData $OnExit -Action {
@@ -118,6 +142,8 @@ function Invoke-RetkGuiCommand {
     [void]$proc.Start()
     $proc.BeginOutputReadLine()
     $proc.BeginErrorReadLine()
+
+    $proc | Add-Member -NotePropertyName RetkStreamsClosed -NotePropertyValue $streamState
 
     return $proc
 }
@@ -406,14 +432,20 @@ function Start-RetkGui {
                 $pollTimer.Dispose()
                 return
             }
-            if ($global:CurrentProcess.HasExited) {
-                # HasExited can flip to true before the async
-                # OutputDataReceived/ErrorDataReceived readers have delivered
-                # all queued lines. WaitForExit() (no-arg) returns almost
-                # immediately here (the process has already exited) but also
-                # forces the redirected stream readers to finish draining
-                # first, so [EXIT CODE] never logs ahead of the process's own
-                # tail output.
+            # HasExited can flip to true before the async
+            # OutputDataReceived/ErrorDataReceived readers have delivered all
+            # queued lines -- that's a different, unrelated signal from
+            # "this stream is fully drained". WaitForExit() only guarantees
+            # the .NET-level stream reads are complete, not that PowerShell's
+            # own Register-ObjectEvent action-dispatch queue has finished
+            # processing the backlog. The actual documented EOF signal is the
+            # OutputDataReceived/ErrorDataReceived event firing once more with
+            # Data -eq $null; Invoke-RetkGuiCommand tracks that on
+            # RetkStreamsClosed. Gate finalization on HasExited AND both
+            # streams closed so [EXIT CODE] is genuinely the last line.
+            if ($global:CurrentProcess.HasExited -and
+                $global:CurrentProcess.RetkStreamsClosed.StdoutClosed -and
+                $global:CurrentProcess.RetkStreamsClosed.StderrClosed) {
                 $global:CurrentProcess.WaitForExit()
                 $code = $global:CurrentProcess.ExitCode
                 $pollTimer.Stop()
