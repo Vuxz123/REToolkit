@@ -398,6 +398,28 @@ It does not pull app-private data under `/data/data/<package>/`.
 Legacy query aliases `summary`, `strings`, `functions`, and `stats` no longer
 run a CLI backend. They print MCP setup guidance.
 
+## GUI
+
+Optional desktop GUI, a thin launcher over `re.ps1` — it does not duplicate
+any pipeline logic, it just runs `re.ps1 <command>` as a child process and
+streams the output into a log pane.
+
+Build it once per machine:
+
+```powershell
+.\scripts\build-gui.ps1
+```
+
+This installs the `ps2exe` PowerShell module (CurrentUser scope) if needed,
+then compiles `scripts\retk-gui.ps1` into `REToolkit-GUI.exe` at the repo
+root. `REToolkit-GUI.exe` is a build artifact and is never committed to git
+— rebuild it after pulling changes to `scripts\retk-gui.ps1`.
+
+Run `.\REToolkit-GUI.exe` (or `powershell.exe -File scripts\retk-gui.ps1` in
+dev mode) to pick a workspace, run Doctor/Add build/Flow/Open/Status/etc.
+from buttons, and fall back to the raw command box at the bottom for
+anything else `re.ps1` supports.
+
 ## Troubleshooting
 
 ### GhidraMCP menu is missing

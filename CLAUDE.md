@@ -28,6 +28,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\retk-mcp-first.Tes
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ghidra-script-bundle.Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ghidra-preferences.Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\workspace-archive.Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\retk-gui.Tests.ps1
 ```
 Despite the `.Tests.ps1` naming, these are **not** real Pester tests — they are
 hand-rolled scripts using local `Assert-Contains`/`Assert-NotContains`/
@@ -39,8 +40,13 @@ public interface and documented behavior, not an execution test.
 `workspace-archive.Tests.ps1` is the exception: it dot-sources
 `scripts\retk-project.ps1` and actually exercises `New-Workspace` /
 `Export-WorkspaceArchive` / `Import-WorkspaceArchive` end-to-end against a temp
-directory. When adding a function whose presence/behavior other code depends
-on, add or extend an `Assert-*` line for it in the matching test file.
+directory. `retk-gui.Tests.ps1` mixes both styles: real execution tests for
+the pure helpers (`Resolve-RetkGuiRoot`, `Split-RetkGuiCommandLine`,
+`Get-RetkGuiWorkspaceNames`, `Invoke-RetkGuiCommand`) and static string
+assertions for the WinForms wiring in `Start-RetkGui`, since there is no
+WinForms test harness in this repo. When adding a function whose
+presence/behavior other code depends on, add or extend an `Assert-*` line for
+it in the matching test file.
 
 **Run the toolkit itself:**
 ```powershell

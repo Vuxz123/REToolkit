@@ -223,7 +223,18 @@ decompilation, strings, xrefs, symbols, comments, and type work.
 Legacy query aliases such as `summary`, `strings`, `functions`, and `stats`
 only print MCP guidance now. Query the live Ghidra program through MCP instead.
 
-## 8. Common Problems
+## 8. Optional: Desktop GUI
+
+```powershell
+.\scripts\build-gui.ps1
+.\REToolkit-GUI.exe
+```
+
+The GUI is a thin launcher over `re.ps1` — pick a workspace from the
+dropdown, click Doctor/Add build/Flow/Open/Status, or type any other
+`re.ps1` command into the raw command box at the bottom.
+
+## 9. Common Problems
 
 - `re.ps1 is not digitally signed`: run `Unblock-File .\re.ps1` and use process-scope execution policy bypass.
 - `GhidraMCP` menu is missing: install `tools/ghidra-mcp/GhidraMCP-<version>.zip` with `File > Install Extensions > Add`, restart Ghidra, then enable the plugin from `File > Configure > Configure All Plugins > GhidraMCP`.

@@ -168,4 +168,17 @@ Assert-Contains $buildGuiSource "Install-Module" "build-gui.ps1 should install p
 Assert-Contains $buildGuiSource "-Scope CurrentUser" "build-gui.ps1 should install ps2exe to CurrentUser scope, not machine-wide."
 Assert-Contains $buildGuiSource "REToolkit-GUI.exe" "build-gui.ps1 should name the output REToolkit-GUI.exe."
 
+$gitignoreText = Get-Content -LiteralPath (Join-Path $RepoRoot ".gitignore") -Raw
+Assert-Contains $gitignoreText "REToolkit-GUI.exe" ".gitignore should exclude the compiled GUI exe from commits."
+
+$readmeText = Get-Content -LiteralPath (Join-Path $RepoRoot "README.md") -Raw
+Assert-Contains $readmeText "scripts\build-gui.ps1" "README should document how to build the GUI."
+Assert-Contains $readmeText "REToolkit-GUI.exe" "README should mention the compiled GUI exe."
+
+$tutorialText = Get-Content -LiteralPath (Join-Path $RepoRoot "Tutorial.md") -Raw
+Assert-Contains $tutorialText ".\scripts\build-gui.ps1" "Tutorial should show how to build the GUI."
+
+$claudeMdText = Get-Content -LiteralPath (Join-Path $RepoRoot "CLAUDE.md") -Raw
+Assert-Contains $claudeMdText "retk-gui.Tests.ps1" "CLAUDE.md's test suite list should include retk-gui.Tests.ps1."
+
 Write-Host "retk-gui checks passed"
