@@ -105,34 +105,23 @@ function Invoke-RetkGuiCommand {
 
     # OutputDataReceived/ErrorDataReceived fire once per line, then exactly
     # once more with $EventArgs.Data -eq $null as the documented EOF sentinel
-    # for that stream -- the actual "this stream is fully drained" signal,
-    # decoupled from Process.HasExited/ExitCode (a child can exit while the
-    # OS pipe still has buffered lines waiting to be delivered async). Track
-    # both streams' closed state on a shared object and expose it on the
-    # returned Process via a NoteProperty so callers can wait for real
-    # stream completion, not just process-exit timing.
-    $streamState = [pscustomobject]@{
-        OnOutput      = $OnOutput
-        StdoutClosed  = $false
-        StderrClosed  = $false
-    }
-
-    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $streamState -Action {
-        if ($null -ne $EventArgs.Data) {
-            & $Event.MessageData.OnOutput $EventArgs.Data
-        }
-        else {
-            $Event.MessageData.StdoutClosed = $true
-        }
+    # for that stream. Pass that straight through to OnOutput instead of
+    # filtering it out: OnOutput is called with a [string] for each real
+    # line, and with $null exactly once per stream (stdout, then stderr)
+    # when that stream closes -- callers that only care about lines should
+    # check if ($null -ne $line). This is simpler
+    # and more reliable than trying to track stream-closed state on a shared
+    # object read back later from a different execution context: confirmed
+    # by direct testing that such cross-boundary reads of a Register-ObjectEvent
+    # -MessageData object's mutated properties are NOT reliably visible from
+    # outside the action that mutated them, even when GetHashCode() confirms
+    # it's the same object instance and a Synchronized wrapper is used.
+    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $OnOutput -Action {
+        & $Event.MessageData $EventArgs.Data
     } | Out-Null
 
-    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $streamState -Action {
-        if ($null -ne $EventArgs.Data) {
-            & $Event.MessageData.OnOutput $EventArgs.Data
-        }
-        else {
-            $Event.MessageData.StderrClosed = $true
-        }
+    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $OnOutput -Action {
+        & $Event.MessageData $EventArgs.Data
     } | Out-Null
 
     Register-ObjectEvent -InputObject $proc -EventName Exited -MessageData $OnExit -Action {
@@ -142,8 +131,6 @@ function Invoke-RetkGuiCommand {
     [void]$proc.Start()
     $proc.BeginOutputReadLine()
     $proc.BeginErrorReadLine()
-
-    $proc | Add-Member -NotePropertyName RetkStreamsClosed -NotePropertyValue $streamState
 
     return $proc
 }
@@ -394,6 +381,7 @@ function Start-RetkGui {
         $logBox.AppendText("`r`n> re.ps1 $($Arguments -join ' ')`r`n")
 
         $global:ExitHandled = $false
+        $global:StreamEofCount = 0
         $finalizeExit = {
             param($code)
             if ($global:ExitHandled) { return }
@@ -407,7 +395,14 @@ function Start-RetkGui {
 
         $onOutput = {
             param($line)
-            $global:GuiLogBox.Invoke([Action]{ $global:GuiLogBox.AppendText("$line`r`n") }) | Out-Null
+            $global:GuiForm.Invoke([Action]{
+                if ($null -eq $line) {
+                    $global:StreamEofCount++
+                }
+                else {
+                    $global:GuiLogBox.AppendText("$line`r`n")
+                }
+            }) | Out-Null
         }.GetNewClosure()
 
         # Register-ObjectEvent's "Exited" action reliably does NOT fire while
@@ -435,17 +430,19 @@ function Start-RetkGui {
             # HasExited can flip to true before the async
             # OutputDataReceived/ErrorDataReceived readers have delivered all
             # queued lines -- that's a different, unrelated signal from
-            # "this stream is fully drained". WaitForExit() only guarantees
-            # the .NET-level stream reads are complete, not that PowerShell's
-            # own Register-ObjectEvent action-dispatch queue has finished
-            # processing the backlog. The actual documented EOF signal is the
-            # OutputDataReceived/ErrorDataReceived event firing once more with
-            # Data -eq $null; Invoke-RetkGuiCommand tracks that on
-            # RetkStreamsClosed. Gate finalization on HasExited AND both
-            # streams closed so [EXIT CODE] is genuinely the last line.
-            if ($global:CurrentProcess.HasExited -and
-                $global:CurrentProcess.RetkStreamsClosed.StdoutClosed -and
-                $global:CurrentProcess.RetkStreamsClosed.StderrClosed) {
+            # "this stream is fully drained". The actual documented EOF
+            # signal is OutputDataReceived/ErrorDataReceived firing once more
+            # with Data -eq $null per stream; $onOutput passes that straight
+            # through and bumps $global:StreamEofCount from inside the same
+            # $global:GuiForm.Invoke() callback that already reliably
+            # delivers real output lines to the log (a shared-object
+            # -MessageData approach was tried first and confirmed NOT to
+            # work: mutations made inside a Register-ObjectEvent action are
+            # not reliably visible from a read of the same object elsewhere).
+            # Gate finalization on HasExited AND both streams' EOF signals
+            # having arrived (stdout, then stderr) so [EXIT CODE] is
+            # genuinely the last line.
+            if ($global:CurrentProcess.HasExited -and $global:StreamEofCount -ge 2) {
                 $global:CurrentProcess.WaitForExit()
                 $code = $global:CurrentProcess.ExitCode
                 $pollTimer.Stop()
