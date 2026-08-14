@@ -381,9 +381,16 @@ function Start-RetkGui {
         $logBox.AppendText("`r`n> re.ps1 $($Arguments -join ' ')`r`n")
 
         $global:ExitHandled = $false
-        $global:StreamEofCount = 0
+        # Register-ObjectEvent actions run through a separate PowerShell
+        # event-subscriber session state. A scalar $global: assignment made
+        # there is not the same variable later read by this UI Timer, even
+        # when the callback is marshaled through Control.Invoke(). Use a
+        # shared .NET synchronization object instead: its Signal()/IsSet
+        # calls operate on the same object from both execution contexts.
+        $eofSignal = New-Object System.Threading.CountdownEvent -ArgumentList 2
         $finalizeExit = {
             param($code)
+            if (-not $eofSignal.IsSet) { return }
             if ($global:ExitHandled) { return }
             $global:ExitHandled = $true
             $global:GuiLogBox.AppendText("[EXIT CODE $code]`r`n")
@@ -395,26 +402,26 @@ function Start-RetkGui {
 
         $onOutput = {
             param($line)
+            if ($null -eq $line) {
+                [void]$eofSignal.Signal()
+                return
+            }
             $global:GuiForm.Invoke([Action]{
-                if ($null -eq $line) {
-                    $global:StreamEofCount++
-                }
-                else {
-                    $global:GuiLogBox.AppendText("$line`r`n")
-                }
+                $global:GuiLogBox.AppendText("$line`r`n")
             }) | Out-Null
         }.GetNewClosure()
 
         # Register-ObjectEvent's "Exited" action reliably does NOT fire while
         # this thread is blocked inside [System.Windows.Forms.Application]::Run()
         # (verified in isolation: OutputDataReceived fires fine there, Exited
-        # never does). Keep OnExit wired to Invoke-RetkGuiCommand's contract in
-        # case it ever does fire, but treat a Timer polling HasExited as the
-        # real completion signal; $finalizeExit's $global:ExitHandled guard
-        # makes it safe for either path to win the race.
+        # never does). Keep OnExit wired to Invoke-RetkGuiCommand's contract,
+        # but let the Timer own finalization so an early Exited notification
+        # cannot append [EXIT CODE] before the two stream EOF signals.
         $onExit = {
             param($code)
-            $global:GuiForm.Invoke([Action]{ & $finalizeExit $code }) | Out-Null
+            # The polling Timer is the only finalizer. The callback is kept as
+            # a no-op because Process.HasExited plus both EOF signals is the
+            # reliable completion condition in this WinForms message loop.
         }.GetNewClosure()
 
         $global:CurrentProcess = Invoke-RetkGuiCommand -Root $root -Arguments $Arguments -OnOutput $onOutput -OnExit $onExit
@@ -427,22 +434,21 @@ function Start-RetkGui {
                 $pollTimer.Dispose()
                 return
             }
+            # Application.Run() pumps WinForms messages but does not pump
+            # PowerShell's Register-ObjectEvent queue. Dispatch the queued
+            # stream callbacks here before checking the completion latch.
+            Get-Event -ErrorAction SilentlyContinue | Out-Null
             # HasExited can flip to true before the async
             # OutputDataReceived/ErrorDataReceived readers have delivered all
             # queued lines -- that's a different, unrelated signal from
             # "this stream is fully drained". The actual documented EOF
             # signal is OutputDataReceived/ErrorDataReceived firing once more
-            # with Data -eq $null per stream; $onOutput passes that straight
-            # through and bumps $global:StreamEofCount from inside the same
-            # $global:GuiForm.Invoke() callback that already reliably
-            # delivers real output lines to the log (a shared-object
-            # -MessageData approach was tried first and confirmed NOT to
-            # work: mutations made inside a Register-ObjectEvent action are
-            # not reliably visible from a read of the same object elsewhere).
+            # with Data -eq $null per stream; $onOutput signals the shared .NET
+            # CountdownEvent when each sentinel arrives.
             # Gate finalization on HasExited AND both streams' EOF signals
             # having arrived (stdout, then stderr) so [EXIT CODE] is
             # genuinely the last line.
-            if ($global:CurrentProcess.HasExited -and $global:StreamEofCount -ge 2) {
+            if ($global:CurrentProcess.HasExited -and $eofSignal.IsSet) {
                 $global:CurrentProcess.WaitForExit()
                 $code = $global:CurrentProcess.ExitCode
                 $pollTimer.Stop()
