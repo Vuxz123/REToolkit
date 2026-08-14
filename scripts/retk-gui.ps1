@@ -381,6 +381,7 @@ function Start-RetkGui {
         $logBox.AppendText("`r`n> re.ps1 $($Arguments -join ' ')`r`n")
 
         $global:ExitHandled = $false
+        $global:HasExitedSeenAt = $null
         # Register-ObjectEvent actions run through a separate PowerShell
         # event-subscriber session state. A scalar $global: assignment made
         # there is not the same variable later read by this UI Timer, even
@@ -396,6 +397,7 @@ function Start-RetkGui {
             $global:GuiLogBox.AppendText("[EXIT CODE $code]`r`n")
             $global:IsRunning = $false
             $global:CurrentProcess = $null
+            $global:HasExitedSeenAt = $null
             Set-RunningState $false
             Refresh-Workspaces
         }.GetNewClosure()
@@ -440,7 +442,6 @@ function Start-RetkGui {
         # branch has already spent 5 rounds fixing a permanent hang from exactly
         # this failure mode) fall back to finalizing a fixed grace period after
         # HasExited is first observed true, even without both EOF signals.
-        $hasExitedSeenAt = $null
         $pollTimer = New-Object System.Windows.Forms.Timer
         $pollTimer.Interval = 250
         $pollTimer.Add_Tick({
@@ -464,8 +465,8 @@ function Start-RetkGui {
             # having arrived (stdout, then stderr) so [EXIT CODE] is
             # genuinely the last line.
             if ($global:CurrentProcess.HasExited) {
-                if ($null -eq $hasExitedSeenAt) { $hasExitedSeenAt = [DateTime]::UtcNow }
-                $graceExpired = ([DateTime]::UtcNow - $hasExitedSeenAt).TotalSeconds -ge 5
+                if ($null -eq $global:HasExitedSeenAt) { $global:HasExitedSeenAt = [DateTime]::UtcNow }
+                $graceExpired = ([DateTime]::UtcNow - $global:HasExitedSeenAt).TotalSeconds -ge 5
                 if ($eofSignal.IsSet -or $graceExpired) {
                     $code = $global:CurrentProcess.ExitCode
                     $pollTimer.Stop()
