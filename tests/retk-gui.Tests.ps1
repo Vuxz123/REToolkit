@@ -159,4 +159,13 @@ Assert-Contains $guiSource "GetNewClosure" "Event-bound scriptblocks must captur
 Assert-Contains $guiSource "Application]::Run" "GUI must start a WinForms message loop."
 Assert-Contains $guiSource "MessageBox" "GUI should show a MessageBox if re.ps1 cannot be located, since -noConsole hides console errors otherwise."
 
+$buildGuiPath = Join-Path $RepoRoot "scripts\build-gui.ps1"
+Assert-True (Test-Path -LiteralPath $buildGuiPath) "scripts\build-gui.ps1 should exist."
+$buildGuiSource = Get-Content -LiteralPath $buildGuiPath -Raw
+Assert-Contains $buildGuiSource "Invoke-ps2exe" "build-gui.ps1 should compile the GUI with Invoke-ps2exe."
+Assert-Contains $buildGuiSource "-noConsole" "build-gui.ps1 should compile without a background console window."
+Assert-Contains $buildGuiSource "Install-Module" "build-gui.ps1 should install ps2exe if missing."
+Assert-Contains $buildGuiSource "-Scope CurrentUser" "build-gui.ps1 should install ps2exe to CurrentUser scope, not machine-wide."
+Assert-Contains $buildGuiSource "REToolkit-GUI.exe" "build-gui.ps1 should name the output REToolkit-GUI.exe."
+
 Write-Host "retk-gui checks passed"
