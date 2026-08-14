@@ -131,6 +131,10 @@ while ($null -eq $exitCodeBox.Code -and $waited -lt 15000) {
     Start-Sleep -Milliseconds 100
     $waited += 100
 }
+# The Exited event can fire marginally before the second stream's EOF
+# sentinel ($null passed to OnOutput) is actually delivered -- give it a
+# short grace window so the sentinel count below is deterministic.
+Start-Sleep -Milliseconds 500
 
 Get-EventSubscriber | Where-Object { $_.SourceObject -eq $proc } | Unregister-Event
 
@@ -138,6 +142,10 @@ Assert-True ($null -ne $exitCodeBox.Code) "Invoke-RetkGuiCommand should report a
 Assert-Equals $exitCodeBox.Code 0 "re.ps1 with no command should exit 0 (prints usage)."
 Assert-True ($collectedLines.Count -gt 0) "Invoke-RetkGuiCommand should stream at least one output line."
 Assert-True (($collectedLines -join "`n").Contains("RE Toolkit")) "Output should include the re.ps1 usage banner."
+
+$eofSentinels = 0
+foreach ($l in $collectedLines) { if ($null -eq $l) { $eofSentinels++ } }
+Assert-Equals $eofSentinels 2 "Invoke-RetkGuiCommand must pass each stream's EOF sentinel (`$null) through to OnOutput; filtering it out reintroduces a permanent GUI hang."
 
 $guiSource = Get-Content -LiteralPath (Join-Path $RepoRoot "scripts\retk-gui.ps1") -Raw
 

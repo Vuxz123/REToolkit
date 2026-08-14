@@ -82,6 +82,15 @@ not reliable there). Do not introduce PS7-only syntax/cmdlets without checking.
   `retk-core.ps1` rather than dot-sourcing them, so a fix in one place does not
   automatically propagate to the others — check both when touching JDK/Python
   path resolution or `Invoke-WithToolkitEnv`-style logic.
+- **`scripts\retk-gui.ps1`** — a standalone WinForms GUI, not dot-sourced by
+  `re.ps1`. It dot-sources only `scripts\retk-core.ps1` on its own (for
+  `Join-NativeArgumentString`) and shells out to `powershell.exe -File re.ps1
+  <args>` per button click rather than reusing `re.ps1`'s in-process dispatch.
+  `Resolve-RetkGuiRoot` lets it find the repo root either way it can run: from
+  `scripts\` in dev (falls back to the parent directory), or as the compiled
+  `REToolkit-GUI.exe` sitting at the repo root (checks its own directory
+  first). `scripts\build-gui.ps1` (via `ps2exe`) is the only build step in this
+  otherwise build-free repo, producing that `.exe`.
 
 ### Workspace model
 

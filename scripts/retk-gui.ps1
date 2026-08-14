@@ -390,9 +390,9 @@ function Start-RetkGui {
         $eofSignal = New-Object System.Threading.CountdownEvent -ArgumentList 2
         $finalizeExit = {
             param($code)
-            if (-not $eofSignal.IsSet) { return }
             if ($global:ExitHandled) { return }
             $global:ExitHandled = $true
+            Get-EventSubscriber | Where-Object { $_.SourceObject -eq $global:CurrentProcess } | Unregister-Event -ErrorAction SilentlyContinue
             $global:GuiLogBox.AppendText("[EXIT CODE $code]`r`n")
             $global:IsRunning = $false
             $global:CurrentProcess = $null
@@ -424,8 +424,23 @@ function Start-RetkGui {
             # reliable completion condition in this WinForms message loop.
         }.GetNewClosure()
 
-        $global:CurrentProcess = Invoke-RetkGuiCommand -Root $root -Arguments $Arguments -OnOutput $onOutput -OnExit $onExit
+        try {
+            $global:CurrentProcess = Invoke-RetkGuiCommand -Root $root -Arguments $Arguments -OnOutput $onOutput -OnExit $onExit
+        }
+        catch {
+            $logBox.AppendText("[FAIL] $($_.Exception.Message)`r`n")
+            $global:IsRunning = $false
+            $global:CurrentProcess = $null
+            Set-RunningState $false
+            return
+        }
 
+        # If a stream's EOF sentinel never arrives (should be unreachable given
+        # the documented OutputDataReceived/ErrorDataReceived contract, but this
+        # branch has already spent 5 rounds fixing a permanent hang from exactly
+        # this failure mode) fall back to finalizing a fixed grace period after
+        # HasExited is first observed true, even without both EOF signals.
+        $hasExitedSeenAt = $null
         $pollTimer = New-Object System.Windows.Forms.Timer
         $pollTimer.Interval = 250
         $pollTimer.Add_Tick({
@@ -448,12 +463,15 @@ function Start-RetkGui {
             # Gate finalization on HasExited AND both streams' EOF signals
             # having arrived (stdout, then stderr) so [EXIT CODE] is
             # genuinely the last line.
-            if ($global:CurrentProcess.HasExited -and $eofSignal.IsSet) {
-                $global:CurrentProcess.WaitForExit()
-                $code = $global:CurrentProcess.ExitCode
-                $pollTimer.Stop()
-                $pollTimer.Dispose()
-                & $finalizeExit $code
+            if ($global:CurrentProcess.HasExited) {
+                if ($null -eq $hasExitedSeenAt) { $hasExitedSeenAt = [DateTime]::UtcNow }
+                $graceExpired = ([DateTime]::UtcNow - $hasExitedSeenAt).TotalSeconds -ge 5
+                if ($eofSignal.IsSet -or $graceExpired) {
+                    $code = $global:CurrentProcess.ExitCode
+                    $pollTimer.Stop()
+                    $pollTimer.Dispose()
+                    & $finalizeExit $code
+                }
             }
         }.GetNewClosure())
         $pollTimer.Start()
