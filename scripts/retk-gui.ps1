@@ -27,7 +27,18 @@ function Resolve-RetkGuiRoot {
     throw "Could not find re.ps1 next to '$OwnDirectory' or its parent. REToolkit-GUI.exe must sit in the REToolkit repo root, or retk-gui.ps1 must run from the repo's scripts\ folder."
 }
 
-$RetkGuiScriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$RetkGuiScriptDirectory = if ($PSScriptRoot) {
+    $PSScriptRoot
+}
+else {
+    # A ps2exe-compiled exe leaves $PSScriptRoot empty AND
+    # $MyInvocation.MyCommand.Path $null (confirmed via a standalone ps2exe
+    # diagnostic build) -- Split-Path -Parent $null throws "Cannot bind
+    # argument to parameter 'Path' because it is null." The running process's
+    # own module path is the only reliable way to find the exe's directory
+    # in that case.
+    Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
 try {
     $RetkGuiRepoRoot = Resolve-RetkGuiRoot -OwnDirectory $RetkGuiScriptDirectory
     . (Join-Path $RetkGuiRepoRoot "scripts\retk-core.ps1")
@@ -62,6 +73,52 @@ function Split-RetkGuiCommandLine {
         }
     }
     return @($tokens)
+}
+
+function Format-RetkGuiElapsed {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [TimeSpan]$Elapsed)
+
+    return $Elapsed.ToString("hh\:mm\:ss")
+}
+
+function Test-RetkGuiDoctorHasIssues {
+    [CmdletBinding()]
+    param(
+        # A Mandatory string[] parameter rejects any empty-string ELEMENT
+        # (not just an overall empty value) unless AllowEmptyString is also
+        # present -- confirmed by direct testing: 're.ps1 doctor' prints a
+        # blank line between the tool list and the "Toolkit JDK:" header,
+        # which threw "Cannot bind argument ... because it is an empty
+        # string" without this attribute, even though the array itself had
+        # 19 non-empty-overall elements.
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [AllowEmptyString()] [string[]]$Lines
+    )
+
+    return ($Lines | Where-Object { $_ -and $_.Contains('[MISS]') }).Count -gt 0
+}
+
+function Get-RetkGuiHarnessInfo {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$HomeDir,
+        [Parameter()] [AllowNull()] [AllowEmptyString()] [string]$CodexHome
+    )
+
+    # [System.IO.Path]::Combine, not Join-Path: Join-Path's FileSystem
+    # provider validates that a rooted second/later segment's drive actually
+    # exists ("Cannot find drive") -- fatal for a CODEX_HOME override or a
+    # HomeDir pointing at a drive that isn't mounted, even though this
+    # function only needs to compute a path string, not touch disk.
+    $codexRoot = if ([string]::IsNullOrWhiteSpace($CodexHome)) { [System.IO.Path]::Combine($HomeDir, ".codex") } else { $CodexHome }
+    $openCodeRoot = [System.IO.Path]::Combine($HomeDir, ".config", "opencode")
+    $claudeRoot = [System.IO.Path]::Combine($HomeDir, ".claude")
+
+    return @(
+        [pscustomobject]@{ Name = "Claude Code"; RootDir = $claudeRoot; SkillsDir = [System.IO.Path]::Combine($claudeRoot, "skills") }
+        [pscustomobject]@{ Name = "Codex"; RootDir = $codexRoot; SkillsDir = [System.IO.Path]::Combine($codexRoot, "skills") }
+        [pscustomobject]@{ Name = "OpenCode"; RootDir = $openCodeRoot; SkillsDir = [System.IO.Path]::Combine($openCodeRoot, "skills") }
+    )
 }
 
 function Get-RetkGuiWorkspaceNames {
@@ -195,6 +252,8 @@ function Start-RetkGui {
 
     $global:IsRunning = $false
     $global:CurrentProcess = $null
+    $global:CommandStartedAt = $null
+    $global:WasCancelled = $false
     $global:AllActionButtons = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
     $global:WorkspaceButtons = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
 
@@ -245,10 +304,38 @@ function Start-RetkGui {
 
     $bottomPanel.Controls.AddRange(@($rawCommandBox, $runRawButton))
 
+    # --- Status bar: command state / elapsed time / busy indicator ---
+    $statusStrip = New-Object System.Windows.Forms.StatusStrip
+
+    $healthLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+    $healthLabel.Text = "Checking tools..."
+    $healthLabel.ForeColor = [System.Drawing.Color]::Gray
+    $healthLabel.AutoToolTip = $true
+    $healthLabel.ToolTipText = "Running doctor..."
+    $global:GuiHealthLabel = $healthLabel
+
+    $statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+    $statusLabel.Text = "Idle"
+    $statusLabel.Spring = $true
+    $statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $global:GuiStatusLabel = $statusLabel
+
+    $elapsedLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+    $elapsedLabel.Text = ""
+    $elapsedLabel.AutoSize = $true
+    $global:GuiElapsedLabel = $elapsedLabel
+
+    $statusProgressBar = New-Object System.Windows.Forms.ToolStripProgressBar
+    $statusProgressBar.Style = "Marquee"
+    $statusProgressBar.MarqueeAnimationSpeed = 30
+    $statusProgressBar.Visible = $false
+    $global:GuiStatusProgressBar = $statusProgressBar
+
+    $statusStrip.Items.AddRange(@($healthLabel, (New-Object System.Windows.Forms.ToolStripSeparator), $statusLabel, $elapsedLabel, $statusProgressBar))
+
     # --- Right panel: log + controls ---
     $rightPanel = New-Object System.Windows.Forms.Panel
-    $rightPanel.Dock = "Right"
-    $rightPanel.Width = 560
+    $rightPanel.Dock = "Fill"
 
     $logBox = New-Object System.Windows.Forms.TextBox
     # Also reachable as $global:GuiLogBox: .GetNewClosure() called from
@@ -295,7 +382,7 @@ function Start-RetkGui {
         param([Parameter(Mandatory)] [string]$Title)
         $group = New-Object System.Windows.Forms.GroupBox
         $group.Text = $Title
-        $group.Width = 500
+        $group.Width = 520
         $group.Height = 80
         return $group
     }
@@ -319,15 +406,18 @@ function Start-RetkGui {
             $flow.AutoSize = $true
             $flow.AutoSizeMode = "GrowAndShrink"
             $flow.WrapContents = $true
-            $flow.MaximumSize = New-Object System.Drawing.Size(480, 0)
-            $flow.Width = 480
+            $flow.MaximumSize = New-Object System.Drawing.Size(500, 0)
+            $flow.Width = 500
             $flow.Left = 6
             $flow.Top = 18
             $Group.Controls.Add($flow)
         }
         $button = New-Object System.Windows.Forms.Button
         $button.Text = $Text
-        $button.AutoSize = $true
+        $button.AutoSize = $false
+        $button.Width = 160
+        $button.Height = 28
+        $button.Margin = New-Object System.Windows.Forms.Padding(3, 3, 3, 3)
         $button.Add_Click($OnClick)
         $flow.Controls.Add($button)
         $flow.PerformLayout()
@@ -369,6 +459,7 @@ function Start-RetkGui {
         $runRawButton.Enabled = -not $Running
         $cancelButton.Enabled = $Running
         Update-WorkspaceButtonsEnabled
+        Update-RetkGuiSkillsStatus
     }
 
     function script:Invoke-GuiCommand {
@@ -377,6 +468,11 @@ function Start-RetkGui {
         if ($global:IsRunning) { return }
         $global:IsRunning = $true
         Set-RunningState $true
+        $global:CommandStartedAt = [DateTime]::UtcNow
+        $global:WasCancelled = $false
+        $global:GuiStatusLabel.Text = "Running: $($Arguments -join ' ')"
+        $global:GuiElapsedLabel.Text = "00:00:00"
+        $global:GuiStatusProgressBar.Visible = $true
 
         $logBox.AppendText("`r`n> re.ps1 $($Arguments -join ' ')`r`n")
 
@@ -395,6 +491,9 @@ function Start-RetkGui {
             $global:ExitHandled = $true
             Get-EventSubscriber | Where-Object { $_.SourceObject -eq $global:CurrentProcess } | Unregister-Event -ErrorAction SilentlyContinue
             $global:GuiLogBox.AppendText("[EXIT CODE $code]`r`n")
+            $global:GuiStatusProgressBar.Visible = $false
+            $global:GuiStatusLabel.Text = if ($global:WasCancelled) { "Cancelled" } else { "Done (exit $code)" }
+            $global:CommandStartedAt = $null
             $global:IsRunning = $false
             $global:CurrentProcess = $null
             $global:HasExitedSeenAt = $null
@@ -431,6 +530,9 @@ function Start-RetkGui {
         }
         catch {
             $logBox.AppendText("[FAIL] $($_.Exception.Message)`r`n")
+            $global:GuiStatusProgressBar.Visible = $false
+            $global:GuiStatusLabel.Text = "Failed to start"
+            $global:CommandStartedAt = $null
             $global:IsRunning = $false
             $global:CurrentProcess = $null
             Set-RunningState $false
@@ -454,6 +556,11 @@ function Start-RetkGui {
             # PowerShell's Register-ObjectEvent queue. Dispatch the queued
             # stream callbacks here before checking the completion latch.
             Get-Event -ErrorAction SilentlyContinue | Out-Null
+
+            if ($null -ne $global:CommandStartedAt) {
+                $elapsed = [DateTime]::UtcNow - $global:CommandStartedAt
+                $global:GuiElapsedLabel.Text = Format-RetkGuiElapsed $elapsed
+            }
             # HasExited can flip to true before the async
             # OutputDataReceived/ErrorDataReceived readers have delivered all
             # queued lines -- that's a different, unrelated signal from
@@ -478,9 +585,145 @@ function Start-RetkGui {
         $pollTimer.Start()
     }
 
+    function script:Start-RetkGuiHealthCheck {
+        # Runs 're.ps1 doctor' once at startup to populate the status-bar
+        # health indicator. Deliberately independent of Invoke-GuiCommand's
+        # single-command-at-a-time $global:CurrentProcess slot so it doesn't
+        # disable the action buttons or spam the log while it runs. Still
+        # needs its own EOF-signal/poll-timer pair for the same reason
+        # Invoke-GuiCommand does: Register-ObjectEvent's "Exited" action does
+        # not reliably fire inside Application::Run, and HasExited can flip
+        # true before both streams finish delivering their queued lines.
+        $healthLines = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+        $eofSignal = New-Object System.Threading.CountdownEvent -ArgumentList 2
+
+        $onOutput = {
+            param($line)
+            if ($null -eq $line) { [void]$eofSignal.Signal(); return }
+            [void]$healthLines.Add($line)
+        }.GetNewClosure()
+        $onExit = { param($code) }.GetNewClosure()
+
+        $healthProcess = $null
+        try {
+            $healthProcess = Invoke-RetkGuiCommand -Root $root -Arguments @('doctor') -OnOutput $onOutput -OnExit $onExit
+        }
+        catch {
+            $global:GuiHealthLabel.Text = "Tools: check failed"
+            $global:GuiHealthLabel.ForeColor = [System.Drawing.Color]::Firebrick
+            $global:GuiHealthLabel.ToolTipText = $_.Exception.Message
+            return
+        }
+
+        # A plain local reassigned inside this closure does not persist its
+        # new value to the closure's NEXT invocation as a WinForms Tick
+        # handler (confirmed by direct testing: it silently reset to $null
+        # every tick, so the "seconds since first seen exited" grace check
+        # never advanced past ~0 and finalization never fired). Route it
+        # through $global: instead, mirroring Invoke-GuiCommand's
+        # $global:HasExitedSeenAt for the identical reason.
+        $global:GuiHealthExitedSeenAt = $null
+        $healthTimer = New-Object System.Windows.Forms.Timer
+        $healthTimer.Interval = 250
+        $healthTimer.Add_Tick({
+            Get-Event -ErrorAction SilentlyContinue | Out-Null
+            if ($healthProcess.HasExited) {
+                if ($null -eq $global:GuiHealthExitedSeenAt) { $global:GuiHealthExitedSeenAt = [DateTime]::UtcNow }
+                $graceExpired = ([DateTime]::UtcNow - $global:GuiHealthExitedSeenAt).TotalSeconds -ge 5
+                if ($eofSignal.IsSet -or $graceExpired) {
+                    $healthTimer.Stop()
+                    $healthTimer.Dispose()
+                    Get-EventSubscriber | Where-Object { $_.SourceObject -eq $healthProcess } | Unregister-Event -ErrorAction SilentlyContinue
+
+                    $lines = @($healthLines)
+                    if (Test-RetkGuiDoctorHasIssues -Lines $lines) {
+                        $global:GuiHealthLabel.Text = "Tools: issues found"
+                        $global:GuiHealthLabel.ForeColor = [System.Drawing.Color]::Firebrick
+                    }
+                    else {
+                        $global:GuiHealthLabel.Text = "Tools: OK"
+                        $global:GuiHealthLabel.ForeColor = [System.Drawing.Color]::ForestGreen
+                    }
+                    $global:GuiHealthLabel.ToolTipText = if ($lines.Count -gt 0) { $lines -join "`r`n" } else { "No doctor output." }
+                }
+            }
+        }.GetNewClosure())
+        $healthTimer.Start()
+    }
+
     # --- Setup group ---
     $setupGroup = New-RetkGuiGroup -Title "Setup"
     Add-RetkGuiButtonToGroup -Group $setupGroup -Text "Doctor" -OnClick { Invoke-GuiCommand -Arguments @('doctor') } | Out-Null
+
+    # --- Skills group: harness detection + repo-local skill install ---
+    $skillsGroup = New-RetkGuiGroup -Title "Skills"
+    $skillsGroup.Height = 150
+
+    $skillsStatusLabel = New-Object System.Windows.Forms.Label
+    $skillsStatusLabel.Left = 10
+    $skillsStatusLabel.Top = 18
+    $skillsStatusLabel.Width = 500
+    $skillsStatusLabel.Height = 54
+    $skillsStatusLabel.Text = "Checking harnesses..."
+    $skillsGroup.Controls.Add($skillsStatusLabel)
+
+    $skillsButtonFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $skillsButtonFlow.Left = 6
+    $skillsButtonFlow.Top = 76
+    $skillsButtonFlow.AutoSize = $true
+    $skillsButtonFlow.AutoSizeMode = "GrowAndShrink"
+    $skillsButtonFlow.WrapContents = $true
+    $skillsButtonFlow.MaximumSize = New-Object System.Drawing.Size(500, 0)
+    $skillsButtonFlow.Width = 500
+    $skillsGroup.Controls.Add($skillsButtonFlow)
+
+    $RetkGuiSkillNames = @('retoolkit-install', 'retoolkit-flow', 'retoolkit-mcp-analysis')
+    $harnessButtons = @{}
+
+    # Direct top-level references to Start-RetkGui's own locals (no nested
+    # .GetNewClosure()) work fine here, same as Invoke-GuiCommand's direct
+    # $root/$logBox references -- global exposure is only needed for
+    # variables read from INSIDE a .GetNewClosure()'d scriptblock nested
+    # within a `function script:`-registered function.
+    function script:Update-RetkGuiSkillsStatus {
+        $harnesses = Get-RetkGuiHarnessInfo -HomeDir $HOME -CodexHome $env:CODEX_HOME
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($h in $harnesses) {
+            $detected = Test-Path -LiteralPath $h.RootDir
+            $installed = $detected -and (@($RetkGuiSkillNames | Where-Object { Test-Path -LiteralPath (Join-Path $h.SkillsDir $_) }).Count -eq $RetkGuiSkillNames.Count)
+            $statusText = if (-not $detected) { "Not detected" } elseif ($installed) { "Installed" } else { "Not installed" }
+            [void]$lines.Add("$($h.Name): $statusText")
+            $button = $harnessButtons[$h.Name]
+            if ($null -ne $button) { $button.Enabled = $detected -and (-not $global:IsRunning) }
+        }
+        $skillsStatusLabel.Text = $lines -join "`r`n"
+    }
+
+    foreach ($harnessName in @('Claude Code', 'Codex', 'OpenCode')) {
+        $capturedName = $harnessName
+        $harnessButton = New-Object System.Windows.Forms.Button
+        $harnessButton.Text = "Install: $capturedName"
+        $harnessButton.AutoSize = $false
+        $harnessButton.Width = 160
+        $harnessButton.Height = 28
+        $harnessButton.Margin = New-Object System.Windows.Forms.Padding(3, 3, 3, 3)
+        $harnessButton.Add_Click({
+            $harnesses = Get-RetkGuiHarnessInfo -HomeDir $HOME -CodexHome $env:CODEX_HOME
+            $target = $harnesses | Where-Object { $_.Name -eq $capturedName } | Select-Object -First 1
+            if ($null -eq $target) { return }
+            New-Item -ItemType Directory -Force -Path $target.SkillsDir | Out-Null
+            foreach ($skillName in $RetkGuiSkillNames) {
+                $src = Join-Path $root "skills\$skillName"
+                $dst = Join-Path $target.SkillsDir $skillName
+                Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force
+                $logBox.AppendText("[SKILLS] $capturedName <- $skillName`r`n")
+            }
+            Update-RetkGuiSkillsStatus
+        }.GetNewClosure())
+        $skillsButtonFlow.Controls.Add($harnessButton)
+        [void]$global:AllActionButtons.Add($harnessButton)
+        $harnessButtons[$harnessName] = $harnessButton
+    }
 
     # --- Pipeline group ---
     $pipelineGroup = New-RetkGuiGroup -Title "Pipeline"
@@ -580,7 +823,26 @@ function Start-RetkGui {
         Invoke-GuiCommand -Arguments @('pull-ldplayer', $gameName, $packageName)
     }.GetNewClosure() | Out-Null
 
-    $leftPanel.Controls.AddRange(@($setupGroup, $pipelineGroup, $ghidraGroup, $workspaceGroup, $extrasGroup))
+    $leftPanel.Controls.AddRange(@($setupGroup, $skillsGroup, $pipelineGroup, $ghidraGroup, $workspaceGroup, $extrasGroup))
+
+    # --- Split container: resizable divide between actions and log ---
+    $splitContainer = New-Object System.Windows.Forms.SplitContainer
+    # SplitContainer starts at a small designer-default size until Dock=Fill
+    # is resolved by the layout engine. Setting Panel1MinSize/Panel2MinSize
+    # before it has a real size throws ("SplitterDistance must be between
+    # Panel1MinSize and Width - Panel2MinSize") because the constraint is
+    # checked against that tiny default width. Give it an explicit size that
+    # comfortably satisfies the constraint before setting the min sizes.
+    $splitContainer.Width = $form.Width
+    $splitContainer.Height = $form.Height
+    $splitContainer.Orientation = "Vertical"
+    $splitContainer.Panel1MinSize = 380
+    $splitContainer.Panel2MinSize = 300
+    $splitContainer.SplitterWidth = 6
+    $splitContainer.Dock = "Fill"
+    $splitContainer.Panel1.Controls.Add($leftPanel)
+    $splitContainer.Panel2.Controls.Add($rightPanel)
+    $splitContainer.SplitterDistance = 550
 
     # --- Top bar handlers ---
     $refreshButton.Add_Click({ Refresh-Workspaces }.GetNewClosure())
@@ -601,6 +863,7 @@ function Start-RetkGui {
     $clearLogButton.Add_Click({ $logBox.Clear() }.GetNewClosure())
     $cancelButton.Add_Click({
         if ($null -ne $global:CurrentProcess -and -not $global:CurrentProcess.HasExited) {
+            $global:WasCancelled = $true
             # Process.Kill(bool entireProcessTree) is a .NET Core/.NET 5+-only
             # overload; it does not exist on classic .NET Framework, which is
             # what Windows PowerShell 5.1 (this toolkit's target platform, per
@@ -627,12 +890,16 @@ function Start-RetkGui {
         Invoke-GuiCommand -Arguments $parsedArgs
     }.GetNewClosure())
 
-    $form.Controls.Add($leftPanel)
-    $form.Controls.Add($rightPanel)
+    # Among same-edge Dock controls, WinForms places the LAST-added control
+    # closest to the parent edge. Add bottomPanel before statusStrip so the
+    # status bar ends up flush against the window's bottom edge (the usual
+    # desktop convention), with the raw-command bar sitting just above it.
+    $form.Controls.Add($splitContainer)
     $form.Controls.Add($topPanel)
     $form.Controls.Add($bottomPanel)
+    $form.Controls.Add($statusStrip)
 
-    $form.Add_Shown({ Refresh-Workspaces }.GetNewClosure())
+    $form.Add_Shown({ Refresh-Workspaces; Start-RetkGuiHealthCheck; Update-RetkGuiSkillsStatus }.GetNewClosure())
 
     [System.Windows.Forms.Application]::Run($form)
 }

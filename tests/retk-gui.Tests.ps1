@@ -87,6 +87,38 @@ try {
     Assert-Equals $quoted.Count 3 "Quoted path should count as a single token."
     Assert-Equals $quoted[2] 'C:\path with spaces\build.apk' "Quoted token should have quotes stripped."
 
+    # Format-RetkGuiElapsed
+    Assert-Equals (Format-RetkGuiElapsed ([TimeSpan]::FromSeconds(5))) "00:00:05" "5 seconds should format as 00:00:05."
+    Assert-Equals (Format-RetkGuiElapsed ([TimeSpan]::FromSeconds(65))) "00:01:05" "65 seconds should format as 00:01:05, not wrap the minutes."
+    Assert-Equals (Format-RetkGuiElapsed ([TimeSpan]::FromSeconds(3725))) "01:02:05" "3725 seconds should format as 01:02:05."
+
+    # Test-RetkGuiDoctorHasIssues
+    Assert-Equals (Test-RetkGuiDoctorHasIssues -Lines @()) $false "No lines should mean no issues."
+    Assert-Equals (Test-RetkGuiDoctorHasIssues -Lines @("  [OK]   JdkRoot   C:\path")) $false "Only [OK] lines should mean no issues."
+    Assert-Equals (Test-RetkGuiDoctorHasIssues -Lines @("  [OK]   JdkRoot   C:\path", "  [MISS] PythonRoot C:\path")) $true "A [MISS] line should be reported as an issue."
+    # 're.ps1 doctor' prints a blank line before the "Toolkit JDK:" section;
+    # a Mandatory string[] parameter rejects an empty-string ELEMENT unless
+    # AllowEmptyString is also declared, which threw at runtime here before
+    # that attribute was added.
+    Assert-Equals (Test-RetkGuiDoctorHasIssues -Lines @("  [OK]   JdkRoot   C:\path", "", "Toolkit JDK:")) $false "A blank line among the doctor output must not throw a parameter-binding error."
+
+    # Get-RetkGuiHarnessInfo
+    $harnessInfo = Get-RetkGuiHarnessInfo -HomeDir "C:\FakeHome" -CodexHome $null
+    Assert-Equals $harnessInfo.Count 3 "Should return exactly 3 harness entries."
+    $claudeInfo = $harnessInfo | Where-Object { $_.Name -eq 'Claude Code' }
+    Assert-Equals $claudeInfo.RootDir "C:\FakeHome\.claude" "Claude Code root should be HomeDir\.claude."
+    Assert-Equals $claudeInfo.SkillsDir "C:\FakeHome\.claude\skills" "Claude Code skills dir should be under .claude\skills."
+    $codexInfo = $harnessInfo | Where-Object { $_.Name -eq 'Codex' }
+    Assert-Equals $codexInfo.RootDir "C:\FakeHome\.codex" "Codex root should default to HomeDir\.codex when CODEX_HOME is not set."
+    $openCodeInfo = $harnessInfo | Where-Object { $_.Name -eq 'OpenCode' }
+    Assert-Equals $openCodeInfo.RootDir "C:\FakeHome\.config\opencode" "OpenCode root should be HomeDir\.config\opencode."
+    Assert-Equals $openCodeInfo.SkillsDir "C:\FakeHome\.config\opencode\skills" "OpenCode skills dir should be under .config\opencode\skills."
+
+    $harnessInfoWithCodexHome = Get-RetkGuiHarnessInfo -HomeDir "C:\FakeHome" -CodexHome "D:\CustomCodex"
+    $codexInfo2 = $harnessInfoWithCodexHome | Where-Object { $_.Name -eq 'Codex' }
+    Assert-Equals $codexInfo2.RootDir "D:\CustomCodex" "Codex root should honor a CODEX_HOME override when set."
+    Assert-Equals $codexInfo2.SkillsDir "D:\CustomCodex\skills" "Codex skills dir should be under the overridden CODEX_HOME."
+
     # Get-RetkGuiWorkspaceNames
     $workspacesDir = Join-Path $tempRoot2 "workspaces"
     New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "GameA") | Out-Null
@@ -166,6 +198,20 @@ Assert-Contains $guiSource "IsRunning" "GUI should track a single-command-at-a-t
 Assert-Contains $guiSource "GetNewClosure" "Event-bound scriptblocks must capture outer scope with GetNewClosure per Invoke-RetkGuiCommand's contract."
 Assert-Contains $guiSource "Application]::Run" "GUI must start a WinForms message loop."
 Assert-Contains $guiSource "MessageBox" "GUI should show a MessageBox if re.ps1 cannot be located, since -noConsole hides console errors otherwise."
+Assert-Contains $guiSource "SplitContainer" "GUI should let the user resize the actions panel vs. the log panel via a SplitContainer."
+Assert-Contains $guiSource "StatusStrip" "GUI should show a status bar with command state, elapsed time, and a busy indicator."
+Assert-Contains $guiSource "ToolStripProgressBar" "GUI status bar should include a busy-indicator progress bar."
+Assert-Contains $guiSource "GuiStatusLabel" "GUI should track the running/idle status label globally so Invoke-GuiCommand can update it."
+Assert-Contains $guiSource "GuiElapsedLabel" "GUI should track the elapsed-time label globally so the poll timer can update it."
+Assert-Contains $guiSource "GuiHealthLabel" "GUI should show a tool-health indicator label backed by a globally-exposed status label."
+Assert-Contains $guiSource "Start-RetkGuiHealthCheck" "GUI should run a background doctor check on startup to populate the health indicator."
+Assert-Contains $guiSource "AutoToolTip" "Health indicator should show the full doctor output as a tooltip on hover."
+Assert-Contains $guiSource "Get-RetkGuiHarnessInfo" "GUI should compute per-harness (Claude Code/Codex/OpenCode) skill directories."
+Assert-Contains $guiSource "Update-RetkGuiSkillsStatus" "GUI should refresh the harness detection/install status label."
+foreach ($harnessName in @("Claude Code", "Codex", "OpenCode")) {
+    Assert-Contains $guiSource "'$harnessName'" "GUI should wire an install button for the '$harnessName' harness."
+}
+Assert-Contains $guiSource "retoolkit-mcp-analysis" "GUI's skill-install action should copy all 3 repo-local skill folders."
 
 $buildGuiPath = Join-Path $RepoRoot "scripts\build-gui.ps1"
 Assert-True (Test-Path -LiteralPath $buildGuiPath) "scripts\build-gui.ps1 should exist."
