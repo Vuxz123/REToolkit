@@ -250,6 +250,10 @@ foreach ($harnessName in @("Claude Code", "Codex", "OpenCode")) {
     Assert-Contains $guiSource "'$harnessName'" "GUI should wire an install button for the '$harnessName' harness."
 }
 Assert-Contains $guiSource "retoolkit-mcp-analysis" "GUI's skill-install action should copy all 3 repo-local skill folders."
+Assert-Contains $guiSource "Show-RetkGuiWizardStep" "GUI should be able to switch which wizard step panel is visible."
+Assert-Contains $guiSource "stepRailButtons" "GUI should have a 5-button step rail."
+Assert-Contains $guiSource "Automatic (recommended)" "GUI should present Flow as the prominent, recommended path in step 3."
+Assert-Contains $guiSource "Manual (step by step)" "GUI should present Add/Scan/Dump as the manual alternative in step 3."
 
 $buildGuiPath = Join-Path $RepoRoot "scripts\build-gui.ps1"
 Assert-True (Test-Path -LiteralPath $buildGuiPath) "scripts\build-gui.ps1 should exist."

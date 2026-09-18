@@ -287,34 +287,35 @@ function Start-RetkGui {
     $form = New-Object System.Windows.Forms.Form
     $global:GuiForm = $form
     $form.Text = "REToolkit GUI"
-    $form.Width = 1100
+    $form.Width = 1300
     $form.Height = 720
     $form.StartPosition = "CenterScreen"
 
-    # --- Top bar: workspace selector ---
+    # --- Top bar: minimal, persistent regardless of which wizard step is showing ---
     $topPanel = New-Object System.Windows.Forms.Panel
     $topPanel.Dock = "Top"
     $topPanel.Height = 40
 
+    $openFolderButton = New-Object System.Windows.Forms.Button
+    $openFolderButton.Text = "Open folder"
+    $openFolderButton.Left = 10; $openFolderButton.Top = 6
+    $openFolderButton.AutoSize = $true
+
+    $topPanel.Controls.Add($openFolderButton)
+
+    # Workspace combo/Refresh/New workspace move into the step 2 ("New
+    # workspace") panel below instead of living in the top bar -- created
+    # here (same variable names the existing handlers further down already
+    # reference) but not parented into any container yet.
     $workspaceCombo = New-Object System.Windows.Forms.ComboBox
-    $workspaceCombo.Left = 10; $workspaceCombo.Top = 8; $workspaceCombo.Width = 300
     $workspaceCombo.DropDownStyle = "DropDownList"
 
     $refreshButton = New-Object System.Windows.Forms.Button
     $refreshButton.Text = "Refresh"
-    $refreshButton.Left = 320; $refreshButton.Top = 6
 
     $initButton = New-Object System.Windows.Forms.Button
     $initButton.Text = "New workspace"
-    $initButton.Left = 405; $initButton.Top = 6
     $initButton.AutoSize = $true
-
-    $openFolderButton = New-Object System.Windows.Forms.Button
-    $openFolderButton.Text = "Open folder"
-    $openFolderButton.Left = 530; $openFolderButton.Top = 6
-    $openFolderButton.AutoSize = $true
-
-    $topPanel.Controls.AddRange(@($workspaceCombo, $refreshButton, $initButton, $openFolderButton))
 
     # --- Bottom bar: raw command ---
     $bottomPanel = New-Object System.Windows.Forms.Panel
@@ -398,13 +399,8 @@ function Start-RetkGui {
     $rightPanel.Controls.Add($logBox)
     $rightPanel.Controls.Add($logButtonsPanel)
 
-    # --- Left panel: action groups ---
-    $leftPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-    $leftPanel.Dock = "Fill"
-    $leftPanel.FlowDirection = "TopDown"
-    $leftPanel.WrapContents = $false
-    $leftPanel.AutoScroll = $true
-
+    # --- Step rail + step content panels (replaces the old single
+    # FlowLayoutPanel stack of every GroupBox at once) ---
     function New-RetkGuiGroup {
         param([Parameter(Mandatory)] [string]$Title)
         $group = New-Object System.Windows.Forms.GroupBox
@@ -752,9 +748,34 @@ function Start-RetkGui {
         $harnessButtons[$harnessName] = $harnessButton
     }
 
-    # --- Pipeline group ---
-    $pipelineGroup = New-RetkGuiGroup -Title "Pipeline"
-    Add-RetkGuiButtonToGroup -Group $pipelineGroup -Text "Add build" -RequiresWorkspace -OnClick {
+    # --- New workspace group (step 2): combo + Refresh + New workspace ---
+    $workspaceStepGroup = New-RetkGuiGroup -Title "New workspace"
+    $workspaceStepGroup.Height = 90
+    $workspaceCombo.Left = 15; $workspaceCombo.Top = 28; $workspaceCombo.Width = 320
+    $refreshButton.Left = 345; $refreshButton.Top = 26
+    $initButton.Left = 430; $initButton.Top = 26
+    $workspaceStepGroup.Controls.AddRange(@($workspaceCombo, $refreshButton, $initButton))
+
+    # --- Prepare Build: "Automatic" (Flow, prominent) + "Manual" (Add/Scan/Dump) ---
+    $flowGroup = New-RetkGuiGroup -Title "Automatic (recommended)"
+    $flowGroup.Height = 90
+    $flowButton = New-Object System.Windows.Forms.Button
+    $flowButton.Text = "Flow: prepare + open Ghidra"
+    $flowButton.Left = 15; $flowButton.Top = 25; $flowButton.Width = 380; $flowButton.Height = 44
+    $flowButton.Font = New-Object System.Drawing.Font($flowButton.Font.FontFamily, 10, [System.Drawing.FontStyle]::Bold)
+    $flowButton.Add_Click({
+        $gameName = Get-SelectedGameName
+        if ($null -eq $gameName) { return }
+        $path = Show-RetkGuiPathPromptDialog -Title "Flow source (APK/XAPK/AAB or extracted folder)"
+        if ($null -eq $path) { return }
+        Invoke-GuiCommand -Arguments @('flow', $gameName, $path)
+    }.GetNewClosure())
+    $flowGroup.Controls.Add($flowButton)
+    [void]$global:AllActionButtons.Add($flowButton)
+    [void]$global:WorkspaceButtons.Add($flowButton)
+
+    $manualGroup = New-RetkGuiGroup -Title "Manual (step by step)"
+    Add-RetkGuiButtonToGroup -Group $manualGroup -Text "Add build" -RequiresWorkspace -OnClick {
         $gameName = Get-SelectedGameName
         if ($null -eq $gameName) { return }
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -763,7 +784,7 @@ function Start-RetkGui {
             Invoke-GuiCommand -Arguments @('add', $gameName, $dlg.FileName)
         }
     }.GetNewClosure() | Out-Null
-    Add-RetkGuiButtonToGroup -Group $pipelineGroup -Text "Scan" -RequiresWorkspace -OnClick {
+    Add-RetkGuiButtonToGroup -Group $manualGroup -Text "Scan" -RequiresWorkspace -OnClick {
         $gameName = Get-SelectedGameName
         if ($null -eq $gameName) { return }
         $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -772,17 +793,10 @@ function Start-RetkGui {
             Invoke-GuiCommand -Arguments @('scan', $gameName, $dlg.SelectedPath)
         }
     }.GetNewClosure() | Out-Null
-    Add-RetkGuiButtonToGroup -Group $pipelineGroup -Text "Dump" -RequiresWorkspace -OnClick {
+    Add-RetkGuiButtonToGroup -Group $manualGroup -Text "Dump" -RequiresWorkspace -OnClick {
         $gameName = Get-SelectedGameName
         if ($null -eq $gameName) { return }
         Invoke-GuiCommand -Arguments @('dump', $gameName)
-    }.GetNewClosure() | Out-Null
-    Add-RetkGuiButtonToGroup -Group $pipelineGroup -Text "Flow" -RequiresWorkspace -OnClick {
-        $gameName = Get-SelectedGameName
-        if ($null -eq $gameName) { return }
-        $path = Show-RetkGuiPathPromptDialog -Title "Flow source (APK/XAPK/AAB or extracted folder)"
-        if ($null -eq $path) { return }
-        Invoke-GuiCommand -Arguments @('flow', $gameName, $path)
     }.GetNewClosure() | Out-Null
 
     # --- Ghidra group ---
@@ -850,7 +864,58 @@ function Start-RetkGui {
         Invoke-GuiCommand -Arguments @('pull-ldplayer', $gameName, $packageName)
     }.GetNewClosure() | Out-Null
 
-    $leftPanel.Controls.AddRange(@($setupGroup, $skillsGroup, $pipelineGroup, $ghidraGroup, $workspaceGroup, $extrasGroup))
+    # --- Step rail (left, fixed width) + step content (right, one visible at a time) ---
+    $stepRailPanel = New-Object System.Windows.Forms.Panel
+    $stepRailPanel.Dock = "Left"
+    $stepRailPanel.Width = 150
+
+    $stepContentContainer = New-Object System.Windows.Forms.Panel
+    $stepContentContainer.Dock = "Fill"
+
+    $stepTitles = @{ 1 = "Setup"; 2 = "New workspace"; 3 = "Prepare Build"; 4 = "Ghidra"; 5 = "More" }
+    $stepRailButtons = @{}
+    $stepPanels = @{}
+    $stepFlows = @{}
+
+    $railTop = 10
+    for ($i = 1; $i -le 5; $i++) {
+        $railButton = New-Object System.Windows.Forms.Button
+        $railButton.Left = 5; $railButton.Top = $railTop; $railButton.Width = 140; $railButton.Height = 40
+        $railButton.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+        $railButton.Text = "$i. $($stepTitles[$i])"
+        $stepRailPanel.Controls.Add($railButton)
+        $stepRailButtons[$i] = $railButton
+        $railTop += 46
+
+        $stepPanel = New-Object System.Windows.Forms.Panel
+        $stepPanel.Dock = "Fill"
+        $stepPanel.Visible = $false
+        $stepFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+        $stepFlow.Dock = "Fill"
+        $stepFlow.FlowDirection = "TopDown"
+        $stepFlow.WrapContents = $false
+        $stepFlow.AutoScroll = $true
+        $stepPanel.Controls.Add($stepFlow)
+        $stepContentContainer.Controls.Add($stepPanel)
+        $stepPanels[$i] = $stepPanel
+        $stepFlows[$i] = $stepFlow
+    }
+
+    $stepFlows[1].Controls.AddRange(@($setupGroup, $skillsGroup))
+    $stepFlows[2].Controls.Add($workspaceStepGroup)
+    $stepFlows[3].Controls.AddRange(@($flowGroup, $manualGroup))
+    $stepFlows[4].Controls.Add($ghidraGroup)
+    $stepFlows[5].Controls.AddRange(@($workspaceGroup, $extrasGroup))
+
+    function script:Show-RetkGuiWizardStep {
+        param([Parameter(Mandatory)] [int]$StepIndex)
+        for ($i = 1; $i -le 5; $i++) { $stepPanels[$i].Visible = ($i -eq $StepIndex) }
+    }
+
+    for ($i = 1; $i -le 5; $i++) {
+        $capturedStepIndex = $i
+        $stepRailButtons[$i].Add_Click({ Show-RetkGuiWizardStep -StepIndex $capturedStepIndex }.GetNewClosure())
+    }
 
     # --- Split container: resizable divide between actions and log ---
     $splitContainer = New-Object System.Windows.Forms.SplitContainer
@@ -867,9 +932,12 @@ function Start-RetkGui {
     $splitContainer.Panel2MinSize = 300
     $splitContainer.SplitterWidth = 6
     $splitContainer.Dock = "Fill"
-    $splitContainer.Panel1.Controls.Add($leftPanel)
+    # Left-docked control added before the Fill one so the rail reserves its
+    # 150px and the content container gets the remainder.
+    $splitContainer.Panel1.Controls.Add($stepRailPanel)
+    $splitContainer.Panel1.Controls.Add($stepContentContainer)
     $splitContainer.Panel2.Controls.Add($rightPanel)
-    $splitContainer.SplitterDistance = 550
+    $splitContainer.SplitterDistance = 700
 
     # --- Top bar handlers ---
     $refreshButton.Add_Click({ Refresh-Workspaces }.GetNewClosure())
@@ -926,7 +994,7 @@ function Start-RetkGui {
     $form.Controls.Add($bottomPanel)
     $form.Controls.Add($statusStrip)
 
-    $form.Add_Shown({ Refresh-Workspaces; Start-RetkGuiHealthCheck; Update-RetkGuiSkillsStatus }.GetNewClosure())
+    $form.Add_Shown({ Refresh-Workspaces; Start-RetkGuiHealthCheck; Update-RetkGuiSkillsStatus; Show-RetkGuiWizardStep -StepIndex 1 }.GetNewClosure())
 
     [System.Windows.Forms.Application]::Run($form)
 }
