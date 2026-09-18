@@ -139,11 +139,12 @@ panel is visible at a time in the main content area to its right.
   `[pscustomobject]@{ Index; Title; Complete; Unlocked }` records. Keeping
   the pure status computation separate from the WinForms rendering code
   makes it unit-testable the same way `Test-RetkGuiDoctorHasIssues` is today.
-- The top bar (`$topPanel`) keeps `Refresh` and `Open folder`; the workspace
-  combo (`$workspaceCombo`) moves into the step 2 panel. `$topPanel` itself
-  can stay `Dock = "Top"` and simply lose the combo control — `Refresh`/`Open
-  folder` still act on whatever workspace is currently selected via
-  `Get-SelectedGameName`, unchanged.
+- The top bar (`$topPanel`) keeps only `Open folder` (a persistent, always
+  reachable convenience regardless of which step is showing). `$workspaceCombo`,
+  `$refreshButton`, and `$initButton` all move into the step 2 panel, matching
+  the step 2 definition above. `$topPanel` stays `Dock = "Top"` but shrinks to
+  hold just the one button. `Open folder` still acts on whatever workspace is
+  currently selected via `Get-SelectedGameName`, unchanged.
 
 ## Current-step tracking and initial state
 
