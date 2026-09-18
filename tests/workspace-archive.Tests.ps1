@@ -98,4 +98,71 @@ finally {
     }
 }
 
+# Expand-RetkZipArchive
+$zipTempRoot = Join-Path $env:TEMP ("retk-zip-extract-test-" + [guid]::NewGuid().ToString("N"))
+try {
+    New-Item -ItemType Directory -Force -Path $zipTempRoot | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    function New-TestZipWithEntries {
+        param(
+            [Parameter(Mandatory)] [string]$ZipPath,
+            # An array of @{Path=...; Content=...} pairs, NOT a hashtable
+            # keyed by path: PowerShell hashtable/ordered-dictionary keys are
+            # case-insensitive by default, so "res/-n.png" and "res/-N.png"
+            # collide as duplicate keys before the zip is even built --
+            # confirmed by direct testing (DuplicateKeyInHashLiteral).
+            [Parameter(Mandatory)] [object[]]$Entries
+        )
+        if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+        $archive = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($item in $Entries) {
+                $entry = $archive.CreateEntry($item.Path)
+                $stream = $entry.Open()
+                try {
+                    $writer = New-Object System.IO.StreamWriter($stream)
+                    $writer.Write($item.Content)
+                    $writer.Flush()
+                }
+                finally {
+                    $stream.Dispose()
+                }
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+
+    # Regression case: a normal, non-colliding entry must still extract with
+    # exact content -- confirms the manual entry-by-entry rewrite didn't
+    # break the common case while fixing the collision case below.
+    $normalZip = Join-Path $zipTempRoot "normal.zip"
+    New-TestZipWithEntries -ZipPath $normalZip -Entries @([pscustomobject]@{ Path = "readme.txt"; Content = "hello world" })
+    $normalDest = Join-Path $zipTempRoot "normal-out"
+    Expand-RetkZipArchive -ArchivePath $normalZip -DestinationDir $normalDest
+    Assert-Equals (Get-Content -LiteralPath (Join-Path $normalDest "readme.txt") -Raw) "hello world" "A normal, non-colliding zip entry should extract with its exact content."
+
+    # Bug case: [System.IO.Compression.ZipFile]::ExtractToDirectory throws
+    # "The file '...' already exists" when two case-sensitive ZIP entries
+    # collide to the same case-insensitive Windows path -- confirmed by
+    # directly reproducing this against a real Unity IL2CPP Android APK
+    # (aapt2 resource-shrunk filenames "res/-n.png" and "res/-N.png").
+    # Expand-RetkZipArchive must not throw in this situation.
+    $collisionZip = Join-Path $zipTempRoot "collision.zip"
+    New-TestZipWithEntries -ZipPath $collisionZip -Entries @(
+        [pscustomobject]@{ Path = "res/-n.png"; Content = "first" },
+        [pscustomobject]@{ Path = "res/-N.png"; Content = "second" }
+    )
+    $collisionDest = Join-Path $zipTempRoot "collision-out"
+    Expand-RetkZipArchive -ArchivePath $collisionZip -DestinationDir $collisionDest
+    Assert-True (Test-Path -LiteralPath (Join-Path $collisionDest "res\-n.png") -PathType Leaf) "A case-colliding zip entry must still produce a file at the collided path, not throw."
+}
+finally {
+    if (Test-Path -LiteralPath $zipTempRoot) {
+        Remove-Item -LiteralPath $zipTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "workspace-archive checks passed"

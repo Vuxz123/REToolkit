@@ -675,6 +675,53 @@ function Scan-UnityIl2Cpp {
     }
 }
 
+function Expand-RetkZipArchive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$ArchivePath,
+        [Parameter(Mandatory)] [string]$DestinationDir
+    )
+
+    # [System.IO.Compression.ZipFile]::ExtractToDirectory(source, dest) throws
+    # "The file '...' already exists" when a ZIP contains two entries whose
+    # paths differ only by case (e.g. "res/-n.png" and "res/-N.png") -- legal
+    # in a case-sensitive ZIP, but they collide to the same path on Windows'
+    # case-insensitive filesystem. Confirmed by direct testing: a real Unity
+    # IL2CPP Android APK with aapt2 resource-shrunk filenames hit exactly
+    # this and aborted the whole `add`/`flow` extraction. Extract entry-by-
+    # entry with overwrite instead, so a collision means "last entry wins"
+    # rather than a hard failure -- correct here since only the native
+    # binary and global-metadata.dat (real, non-colliding filenames) matter
+    # to the IL2CPP dump; no REToolkit code path reads the resource files.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $fullDestinationDir = [System.IO.Path]::GetFullPath($DestinationDir).TrimEnd([char[]]@('\', '/'))
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $destPath = [System.IO.Path]::GetFullPath((Join-Path $DestinationDir $entry.FullName))
+            $withinDestination = $destPath.Equals($fullDestinationDir, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $destPath.StartsWith($fullDestinationDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+            if (-not $withinDestination) {
+                throw "Zip entry '$($entry.FullName)' extracts outside the destination directory."
+            }
+
+            if ([string]::IsNullOrEmpty($entry.Name)) {
+                # Directory entry (FullName ends with '/'); no file content to extract.
+                New-Item -ItemType Directory -Force -Path $destPath | Out-Null
+                continue
+            }
+
+            $destParent = Split-Path -Parent $destPath
+            if ($destParent) { New-Item -ItemType Directory -Force -Path $destParent | Out-Null }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
 function Add-BuildToProject {
     param(
         [Parameter(Mandatory)] [string]$GameName,
@@ -707,8 +754,7 @@ function Add-BuildToProject {
     Write-Host "       to : $extractedDir" -ForegroundColor Cyan
 
     try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $extractedDir)
+        Expand-RetkZipArchive -ArchivePath $ArchivePath -DestinationDir $extractedDir
     }
     catch {
         throw "Extract failed: $($_.Exception.Message). File may not be a valid ZIP/APK/IPA/AAB/XAPK/APKS."
@@ -726,7 +772,7 @@ function Add-BuildToProject {
             $destDir = Join-Path $file.DirectoryName $baseName
             New-Item -ItemType Directory -Force -Path $destDir | Out-Null
             try {
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($file.FullName, $destDir)
+                Expand-RetkZipArchive -ArchivePath $file.FullName -DestinationDir $destDir
                 Write-Host ("  [OK]   {0} -> {1}" -f $file.Name, (Split-Path -Leaf $destDir)) -ForegroundColor Green
                 Remove-Item -LiteralPath $file.FullName -Force
             }
