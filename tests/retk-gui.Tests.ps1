@@ -254,6 +254,9 @@ Assert-Contains $guiSource "Show-RetkGuiWizardStep" "GUI should be able to switc
 Assert-Contains $guiSource "stepRailButtons" "GUI should have a 5-button step rail."
 Assert-Contains $guiSource "Automatic (recommended)" "GUI should present Flow as the prominent, recommended path in step 3."
 Assert-Contains $guiSource "Manual (step by step)" "GUI should present Add/Scan/Dump as the manual alternative in step 3."
+Assert-Contains $guiSource "Update-RetkGuiWizardState" "GUI should recompute wizard step lock/checkmark state from project.re.json."
+Assert-Contains $guiSource "GuiHealthCheckDone" "GUI should track whether the startup health check has finished, to unlock step 2."
+Assert-Contains $guiSource "Get-RetkGuiWizardStepStatus" "GUI should use the pure step-status helper to drive rail button text/enabled state."
 
 $buildGuiPath = Join-Path $RepoRoot "scripts\build-gui.ps1"
 Assert-True (Test-Path -LiteralPath $buildGuiPath) "scripts\build-gui.ps1 should exist."

@@ -281,6 +281,7 @@ function Start-RetkGui {
     $global:CurrentProcess = $null
     $global:CommandStartedAt = $null
     $global:WasCancelled = $false
+    $global:GuiHealthCheckDone = $false
     $global:AllActionButtons = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
     $global:WorkspaceButtons = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
 
@@ -483,6 +484,7 @@ function Start-RetkGui {
         $cancelButton.Enabled = $Running
         Update-WorkspaceButtonsEnabled
         Update-RetkGuiSkillsStatus
+        Update-RetkGuiWizardState
     }
 
     function script:Invoke-GuiCommand {
@@ -635,6 +637,8 @@ function Start-RetkGui {
             $global:GuiHealthLabel.Text = "Tools: check failed"
             $global:GuiHealthLabel.ForeColor = [System.Drawing.Color]::Firebrick
             $global:GuiHealthLabel.ToolTipText = $_.Exception.Message
+            $global:GuiHealthCheckDone = $true
+            Update-RetkGuiWizardState
             return
         }
 
@@ -668,6 +672,8 @@ function Start-RetkGui {
                         $global:GuiHealthLabel.ForeColor = [System.Drawing.Color]::ForestGreen
                     }
                     $global:GuiHealthLabel.ToolTipText = if ($lines.Count -gt 0) { $lines -join "`r`n" } else { "No doctor output." }
+                    $global:GuiHealthCheckDone = $true
+                    Update-RetkGuiWizardState
                 }
             }
         }.GetNewClosure())
@@ -912,6 +918,38 @@ function Start-RetkGui {
         for ($i = 1; $i -le 5; $i++) { $stepPanels[$i].Visible = ($i -eq $StepIndex) }
     }
 
+    function script:Update-RetkGuiWizardState {
+        $project = $null
+        $gameName = Get-SelectedGameName
+        if ($null -ne $gameName) {
+            # Read project.re.json directly instead of dot-sourcing
+            # scripts\retk-project.ps1's Read-Project: that function (and
+            # Get-WorkspacePath beneath it) depends on the $Workspaces
+            # script-scope variable that only re.ps1's entrypoint sets up,
+            # which this GUI never establishes (it has its own local
+            # $workspacesDir). A plain read keeps this GUI's existing
+            # minimal-coupling design intact.
+            $projectJsonPath = Join-Path $workspacesDir "$gameName\project.re.json"
+            if (Test-Path -LiteralPath $projectJsonPath) {
+                try {
+                    $project = Get-Content -LiteralPath $projectJsonPath -Raw | ConvertFrom-Json
+                }
+                catch {
+                    $project = $null
+                }
+            }
+        }
+
+        $steps = Get-RetkGuiWizardStepStatus -Project $project -HealthCheckDone $global:GuiHealthCheckDone
+        $checkmark = [char]0x2713
+        foreach ($stepInfo in $steps) {
+            $railButton = $stepRailButtons[$stepInfo.Index]
+            $suffix = if ($stepInfo.Complete) { " $checkmark" } elseif (-not $stepInfo.Unlocked) { " (locked)" } else { "" }
+            $railButton.Text = "$($stepInfo.Index). $($stepInfo.Title)$suffix"
+            $railButton.Enabled = $stepInfo.Unlocked
+        }
+    }
+
     for ($i = 1; $i -le 5; $i++) {
         $capturedStepIndex = $i
         $stepRailButtons[$i].Add_Click({ Show-RetkGuiWizardStep -StepIndex $capturedStepIndex }.GetNewClosure())
@@ -941,7 +979,7 @@ function Start-RetkGui {
 
     # --- Top bar handlers ---
     $refreshButton.Add_Click({ Refresh-Workspaces }.GetNewClosure())
-    $workspaceCombo.Add_SelectedIndexChanged({ Update-WorkspaceButtonsEnabled }.GetNewClosure())
+    $workspaceCombo.Add_SelectedIndexChanged({ Update-WorkspaceButtonsEnabled; Update-RetkGuiWizardState }.GetNewClosure())
     $initButton.Add_Click({
         $name = [Microsoft.VisualBasic.Interaction]::InputBox("Workspace name (GameName):", "New workspace", "")
         if ([string]::IsNullOrWhiteSpace($name)) { return }
@@ -994,7 +1032,7 @@ function Start-RetkGui {
     $form.Controls.Add($bottomPanel)
     $form.Controls.Add($statusStrip)
 
-    $form.Add_Shown({ Refresh-Workspaces; Start-RetkGuiHealthCheck; Update-RetkGuiSkillsStatus; Show-RetkGuiWizardStep -StepIndex 1 }.GetNewClosure())
+    $form.Add_Shown({ Refresh-Workspaces; Start-RetkGuiHealthCheck; Update-RetkGuiSkillsStatus; Update-RetkGuiWizardState; Show-RetkGuiWizardStep -StepIndex 1 }.GetNewClosure())
 
     [System.Windows.Forms.Application]::Run($form)
 }
