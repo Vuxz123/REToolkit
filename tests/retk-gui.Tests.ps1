@@ -157,6 +157,15 @@ try {
     $analyzedSteps = Get-RetkGuiWizardStepStatus -Project $projectAnalyzedOnly -HealthCheckDone $true
     Assert-Equals (Get-StepByIndex $analyzedSteps 4).Complete $true "Step 4 also completes on status.analyzed alone (imported can be false on the manual path)."
 
+    $projectNoStatus = [pscustomobject]@{}
+    $noStatusSteps = Get-RetkGuiWizardStepStatus -Project $projectNoStatus -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $noStatusSteps 2).Complete $true "Step 2 completes once ANY project object is selected, even one with no .status property yet."
+    Assert-Equals (Get-StepByIndex $noStatusSteps 3).Complete $false "Step 3 must not throw or complete when .status is entirely missing (a malformed/legacy project.re.json)."
+
+    $projectSymbolsOnly = [pscustomobject]@{ status = [pscustomobject]@{ dumped = $true; imported = $false; analyzed = $false; symbolsApplied = $true } }
+    $symbolsOnlySteps = Get-RetkGuiWizardStepStatus -Project $projectSymbolsOnly -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $symbolsOnlySteps 4).Complete $true "Step 4 also completes on status.symbolsApplied alone (the third arm of the Ghidra-touched check)."
+
     # Get-RetkGuiWorkspaceNames
     $workspacesDir = Join-Path $tempRoot2 "workspaces"
     New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "GameA") | Out-Null

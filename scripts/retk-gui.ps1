@@ -755,12 +755,25 @@ function Start-RetkGui {
     }
 
     # --- New workspace group (step 2): combo + Refresh + New workspace ---
-    $workspaceStepGroup = New-RetkGuiGroup -Title "New workspace"
+    $workspaceStepGroup = New-RetkGuiGroup -Title "Select or create workspace"
     $workspaceStepGroup.Height = 90
     $workspaceCombo.Left = 15; $workspaceCombo.Top = 28; $workspaceCombo.Width = 320
-    $refreshButton.Left = 345; $refreshButton.Top = 26
-    $initButton.Left = 430; $initButton.Top = 26
+    $refreshButton.Left = 340; $refreshButton.Top = 26
+    $initButton.Left = 425; $initButton.Top = 26
     $workspaceStepGroup.Controls.AddRange(@($workspaceCombo, $refreshButton, $initButton))
+
+    $importButton = New-Object System.Windows.Forms.Button
+    $importButton.Text = "Import"
+    $importButton.Left = 15; $importButton.Top = 60; $importButton.Width = 100; $importButton.Height = 24
+    $importButton.Add_Click({
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Filter = "REToolkit archive (*.re;*.zip)|*.re;*.zip|All files (*.*)|*.*"
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            Invoke-GuiCommand -Arguments @('import', $dlg.FileName)
+        }
+    }.GetNewClosure())
+    $workspaceStepGroup.Controls.Add($importButton)
+    [void]$global:AllActionButtons.Add($importButton)
 
     # --- Prepare Build: "Automatic" (Flow, prominent) + "Manual" (Add/Scan/Dump) ---
     $flowGroup = New-RetkGuiGroup -Title "Automatic (recommended)"
@@ -847,13 +860,6 @@ function Start-RetkGui {
             Invoke-GuiCommand -Arguments @('export', $gameName, $dlg.FileName)
         }
     }.GetNewClosure() | Out-Null
-    Add-RetkGuiButtonToGroup -Group $workspaceGroup -Text "Import" -OnClick {
-        $dlg = New-Object System.Windows.Forms.OpenFileDialog
-        $dlg.Filter = "REToolkit archive (*.re;*.zip)|*.re;*.zip|All files (*.*)|*.*"
-        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            Invoke-GuiCommand -Arguments @('import', $dlg.FileName)
-        }
-    }.GetNewClosure() | Out-Null
 
     # --- Extras group ---
     $extrasGroup = New-RetkGuiGroup -Title "Extras"
@@ -936,6 +942,7 @@ function Start-RetkGui {
                 }
                 catch {
                     $project = $null
+                    $logBox.AppendText("[WARN] Could not parse project.re.json for '$gameName'; treating as no workspace.`r`n")
                 }
             }
         }
@@ -970,10 +977,12 @@ function Start-RetkGui {
     $splitContainer.Panel2MinSize = 300
     $splitContainer.SplitterWidth = 6
     $splitContainer.Dock = "Fill"
-    # Left-docked control added before the Fill one so the rail reserves its
-    # 150px and the content container gets the remainder.
-    $splitContainer.Panel1.Controls.Add($stepRailPanel)
+    # Fill-docked control added FIRST so it docks LAST and receives only the
+    # space the Left-docked rail has not already claimed (same reverse-add-order
+    # rule this file already relies on for the Top/Bottom status bar, further
+    # down in this function).
     $splitContainer.Panel1.Controls.Add($stepContentContainer)
+    $splitContainer.Panel1.Controls.Add($stepRailPanel)
     $splitContainer.Panel2.Controls.Add($rightPanel)
     $splitContainer.SplitterDistance = 700
 
