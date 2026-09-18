@@ -121,6 +121,33 @@ function Get-RetkGuiHarnessInfo {
     )
 }
 
+function Get-RetkGuiWizardStepStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter()] [AllowNull()] $Project,
+        [Parameter(Mandatory)] [bool]$HealthCheckDone
+    )
+
+    $hasWorkspace = $null -ne $Project
+    # PowerShell property access on $null (or a missing member) returns
+    # $null rather than throwing, so this is safe even when $Project is
+    # $null or has no .status property (a malformed/legacy project.re.json).
+    $dumped = $hasWorkspace -and [bool]$Project.status.dumped
+    $ghidraTouched = $hasWorkspace -and (
+        [bool]$Project.status.imported -or
+        [bool]$Project.status.analyzed -or
+        [bool]$Project.status.symbolsApplied
+    )
+
+    return @(
+        [pscustomobject]@{ Index = 1; Title = "Setup"; Complete = $HealthCheckDone; Unlocked = $true }
+        [pscustomobject]@{ Index = 2; Title = "New workspace"; Complete = $hasWorkspace; Unlocked = $HealthCheckDone }
+        [pscustomobject]@{ Index = 3; Title = "Prepare Build"; Complete = $dumped; Unlocked = $hasWorkspace }
+        [pscustomobject]@{ Index = 4; Title = "Ghidra"; Complete = $ghidraTouched; Unlocked = $dumped }
+        [pscustomobject]@{ Index = 5; Title = "More"; Complete = $false; Unlocked = $ghidraTouched }
+    )
+}
+
 function Get-RetkGuiWorkspaceNames {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string]$WorkspacesDir)

@@ -119,6 +119,44 @@ try {
     Assert-Equals $codexInfo2.RootDir "D:\CustomCodex" "Codex root should honor a CODEX_HOME override when set."
     Assert-Equals $codexInfo2.SkillsDir "D:\CustomCodex\skills" "Codex skills dir should be under the overridden CODEX_HOME."
 
+    # Get-RetkGuiWizardStepStatus
+    function Get-StepByIndex($steps, [int]$index) { return $steps | Where-Object { $_.Index -eq $index } }
+
+    $noProjectSteps = Get-RetkGuiWizardStepStatus -Project $null -HealthCheckDone $false
+    Assert-Equals $noProjectSteps.Count 5 "Should always return exactly 5 step records."
+    Assert-Equals (Get-StepByIndex $noProjectSteps 1).Complete $false "Step 1 (Setup) is not complete until the health check has run."
+    Assert-Equals (Get-StepByIndex $noProjectSteps 1).Unlocked $true "Step 1 (Setup) is always unlocked."
+    Assert-Equals (Get-StepByIndex $noProjectSteps 2).Unlocked $false "Step 2 should be locked until step 1 (health check) completes."
+
+    $healthDoneNoProjectSteps = Get-RetkGuiWizardStepStatus -Project $null -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $healthDoneNoProjectSteps 1).Complete $true "Step 1 completes once the health check has run, regardless of issues found."
+    Assert-Equals (Get-StepByIndex $healthDoneNoProjectSteps 2).Unlocked $true "Step 2 unlocks once step 1 is complete."
+    Assert-Equals (Get-StepByIndex $healthDoneNoProjectSteps 2).Complete $false "Step 2 is not complete without a selected workspace."
+    Assert-Equals (Get-StepByIndex $healthDoneNoProjectSteps 3).Unlocked $false "Step 3 stays locked with no workspace selected."
+
+    $projectNotDumped = [pscustomobject]@{ status = [pscustomobject]@{ dumped = $false; imported = $false; analyzed = $false; symbolsApplied = $false } }
+    $notDumpedSteps = Get-RetkGuiWizardStepStatus -Project $projectNotDumped -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $notDumpedSteps 2).Complete $true "Step 2 completes once a workspace/project is selected."
+    Assert-Equals (Get-StepByIndex $notDumpedSteps 3).Unlocked $true "Step 3 unlocks once step 2 (workspace selected) is complete."
+    Assert-Equals (Get-StepByIndex $notDumpedSteps 3).Complete $false "Step 3 is not complete until status.dumped is true."
+    Assert-Equals (Get-StepByIndex $notDumpedSteps 4).Unlocked $false "Step 4 stays locked until status.dumped is true."
+
+    $projectDumped = [pscustomobject]@{ status = [pscustomobject]@{ dumped = $true; imported = $false; analyzed = $false; symbolsApplied = $false } }
+    $dumpedSteps = Get-RetkGuiWizardStepStatus -Project $projectDumped -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $dumpedSteps 3).Complete $true "Step 3 completes once status.dumped is true, whether set by 'dump' or 'flow'."
+    Assert-Equals (Get-StepByIndex $dumpedSteps 4).Unlocked $true "Step 4 unlocks once status.dumped is true -- NOT gated on status.imported, since the manual Add/Scan->Dump path never sets it."
+    Assert-Equals (Get-StepByIndex $dumpedSteps 4).Complete $false "Step 4 is not complete until Ghidra has actually been touched."
+    Assert-Equals (Get-StepByIndex $dumpedSteps 5).Unlocked $false "Step 5 stays locked until step 4 is complete."
+
+    $projectImported = [pscustomobject]@{ status = [pscustomobject]@{ dumped = $true; imported = $true; analyzed = $false; symbolsApplied = $false } }
+    $importedSteps = Get-RetkGuiWizardStepStatus -Project $projectImported -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $importedSteps 4).Complete $true "Step 4 completes once status.imported is true."
+    Assert-Equals (Get-StepByIndex $importedSteps 5).Unlocked $true "Step 5 unlocks once step 4 is complete."
+
+    $projectAnalyzedOnly = [pscustomobject]@{ status = [pscustomobject]@{ dumped = $true; imported = $false; analyzed = $true; symbolsApplied = $false } }
+    $analyzedSteps = Get-RetkGuiWizardStepStatus -Project $projectAnalyzedOnly -HealthCheckDone $true
+    Assert-Equals (Get-StepByIndex $analyzedSteps 4).Complete $true "Step 4 also completes on status.analyzed alone (imported can be false on the manual path)."
+
     # Get-RetkGuiWorkspaceNames
     $workspacesDir = Join-Path $tempRoot2 "workspaces"
     New-Item -ItemType Directory -Force -Path (Join-Path $workspacesDir "GameA") | Out-Null
