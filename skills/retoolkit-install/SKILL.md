@@ -1,101 +1,42 @@
 ---
 name: retoolkit-install
-description: Use when setting up REToolkit on Windows, importing repo-local REToolkit skills, installing runtime/Ghidra/Il2CppDumper/GhidraMCP/AssetRipper, or configuring Codex/OpenCode MCP for REToolkit.
+description: Use when setting up REToolkit on Windows, configuring the JavaScript CLI or GhidraMCP client, or reviewing outdated installed REToolkit instructions.
 ---
 
 # REToolkit Install
 
-## Overview
+The recommended CLI is `node re.js <command>` on Node.js 24+. `re.cmd` is a
+Windows convenience wrapper. Install the engines with the retained PowerShell
+installer; core workspace/state/archive/flow commands are native JavaScript.
+The PowerShell GUI stays legacy until a separate GUI migration.
 
-Set up REToolkit from the repository root and keep it MCP-first. The toolkit
-uses portable runtime paths and should not modify global Python, PATH, or the
-Windows `py.exe` launcher.
-
-## Import Skills First
-
-If this skill is being read from the repository, use the repo-local skill
-folders directly when the agent runtime supports it. Import or copy them into
-the agent's normal skill directory only when that runtime requires installed
-skills:
-
-```text
-skills/retoolkit-install
-skills/retoolkit-flow
-skills/retoolkit-mcp-analysis
-```
-
-Do not automatically copy these skills into Codex or another personal skill
-directory unless the user asks for that install step. Keep the repo copy intact.
-
-## Install Workflow
-
-Work from the REToolkit root:
+Read repo-local `retoolkit-install`, `retoolkit-flow` and
+`retoolkit-mcp-analysis` instructions directly. Do not automatically install
+personal skills to run the toolkit. Search older installed
+`ghidra-reverse-engineering-cli` instructions using
+[README](../../README.md#agent-skills-and-older-installations). Updating global
+folders requires an explicit request, complete backups outside active skill
+roots, and review of local customizations. Follow the
+[manual procedure](../../prompts/install-ghidra-skill.md#installed-skill-updates).
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Unblock-File .\re.ps1
-Unblock-File .\install-re-toolkit.ps1
-.\install-re-toolkit.ps1
-.\re.ps1 doctor
-```
-
-Install the recommended toolchain:
-
-```powershell
+npm ci
 .\install-re-toolkit.ps1 -All
+node .\re.js doctor
 ```
 
-Use individual flags only for repair or a targeted install:
+The installer retains its targeted runtime/Ghidra/Il2CppDumper/GhidraMCP/
+AssetRipper flags. Runtime files belong under `runtime/` and `tools/`; do not
+change global Python, Java or PATH. Retained PowerShell adapters require Windows
+PowerShell 5.1; Node does not replace JDK, Python, .NET or the engines.
 
-```powershell
-.\install-re-toolkit.ps1 -InstallRuntime
-.\install-re-toolkit.ps1 -InstallGhidra
-.\install-re-toolkit.ps1 -InstallIl2CppDumper
-.\install-re-toolkit.ps1 -InstallGhidraMcp
-.\install-re-toolkit.ps1 -InstallAssetRipper
-```
+Configure the AI client with `node <absolute-path-to-re.js> mcp`. Merge the
+examples under `config/` into existing configuration without replacing unrelated
+settings. This native JavaScript command starts the local Python stdio bridge;
+the separate Ghidra extension serves the live GUI program. Enable GhidraMCP in
+CodeBrowser and start its MCP server before connecting the client.
 
-`-InstallRuntime` creates toolkit-local JDK/Python paths under `runtime/`.
-`-InstallGhidraMcp` downloads the Ghidra extension ZIP and the
-`ghidra_mcp_bridge-*.whl` Python bridge into `tools/ghidra-mcp`, then `pip
-install`s the wheel into `tools/ghidra-mcp/.venv`; the resulting
-`bridge-mcp-ghidra` console script is the AI-client bridge, not the GUI
-plugin.
-
-## AI Client MCP
-
-Configure the client to run:
-
-```powershell
-.\re.ps1 mcp
-```
-
-Codex TOML shape:
-
-```toml
-[mcp_servers.ghidra]
-command = "powershell.exe"
-args = [
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
-  "mcp"
-]
-
-[mcp_servers.ghidra.env]
-RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"
-```
-
-## Handoff
-
-Use `retoolkit-flow` when the user gives an APK/XAPK/AAB/ZIP or extracted
-build. Use `retoolkit-mcp-analysis` after the Ghidra/PyGhidra GUI is open.
-
-## Common Mistakes
-
-- Do not use global Python 3.14 for PyGhidra; use the toolkit local runtime.
-- Do not treat the MCP bridge as the Ghidra extension; the extension runs in
-  the GUI.
-- If Script Manager does not show `ghidra.py`, fully close all Ghidra/PyGhidra
-  windows and reopen the GUI.
-- Network installs may require user approval in sandboxed agent environments.
+Use `retoolkit-flow` to prepare an authorized build. Preparation does not verify
+analysis readiness. Use `retoolkit-mcp-analysis` after confirming the intended
+GUI program, completed Auto Analysis and required symbols. Synthetic tests do
+not verify live Ghidra, MCP or WinForms behavior.

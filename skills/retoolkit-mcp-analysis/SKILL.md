@@ -1,40 +1,29 @@
 ---
 name: retoolkit-mcp-analysis
-description: Use when analyzing REToolkit-prepared Ghidra/PyGhidra projects through GhidraMCP, connecting AI clients, querying functions/strings/xrefs/symbols/decompilation, or troubleshooting MCP menu/server/project lock issues.
+description: Use when connecting to a REToolkit-prepared Ghidra/PyGhidra program through GhidraMCP, querying functions/decompilation/xrefs, or troubleshooting GUI server and project lock issues.
 ---
 
 # REToolkit MCP Analysis
 
-## Overview
-
-REToolkit analysis is MCP-first. Use the live Ghidra/PyGhidra GUI plus
-GhidraMCP for queries. Do not route project queries through `ghidra-cli`; this
-toolkit disables legacy CLI query aliases and points them back to MCP.
-
-## GUI Preconditions
-
-Before querying from the AI client:
-
-1. Open the target project/program in CodeBrowser.
-2. Run Auto Analysis if the project was freshly imported.
-3. Run `ghidra.py` or `ghidra_with_struct.py` if Il2CppDumper symbols are
-   needed.
-4. Enable `File > Configure > Configure All Plugins > GhidraMCP`.
-5. Start `Tools > GhidraMCP > Start MCP Server`.
-
-If the menu is missing, install
-`tools/ghidra-mcp/GhidraMCP-<version>.zip` through
-`File > Install Extensions > Add`, restart Ghidra, then enable the plugin.
-
-## Client Connection
-
-The AI client should launch the bridge with:
+Interactive analysis uses the live Ghidra/PyGhidra GUI through GhidraMCP.
+Launch the bridge with the recommended JavaScript CLI:
 
 ```powershell
-.\re.ps1 mcp
+node .\re.js mcp
 ```
 
-Then use MCP tools in this order:
+The JavaScript command directly starts the Python stdio bridge in
+`tools/ghidra-mcp/.venv`. The GUI extension is a different component: it owns
+the server and live program. Protocol stdout must not include status banners.
+The retired `ghidra` / `ghidra-cli` backend is disabled.
+
+`flow` success means **prepared**, not **analysis-ready**. Before querying:
+
+1. Confirm the target project/program is open in CodeBrowser.
+2. Finish Auto Analysis; run `ghidra.py` or `ghidra_with_struct.py` with this
+   workspace's `02_Il2CppDumperOutput/script.json` when symbols are required.
+3. Enable `File > Configure > Configure All Plugins > GhidraMCP`.
+4. Start `Tools > GhidraMCP > Start MCP Server`.
 
 ```text
 list_instances
@@ -44,34 +33,23 @@ load_tool_group function
 load_tool_group listing
 ```
 
-Load additional groups only when needed for strings, symbols, comments, types,
-scripts, xrefs, or batch work.
+Verify the connected project/program before interpreting results. Load other
+groups only when needed. Use MCP for functions, decompilation, xrefs, strings,
+symbols, types and comments, with workspace notes and `dump.cs` as supporting
+context. These generated artifacts are not the original source code.
 
-## Query Rules
+If the extension is missing, install the saved `tools/ghidra-mcp/GhidraMCP-<version>.zip`
+through `File > Install Extensions > Add`, restart Ghidra, then enable it. If
+instances are absent, check the intended CodeBrowser and server; check the
+GhidraMCP HTTP Server tool options for the configured port.
 
-- Prefer MCP tools for function listing, decompilation, xrefs, strings,
-  symbols, comments, types, and script execution.
-- Use `workspaces/<GameName>/04_Notes/agent-context.md`,
-  `candidates.md`, `dump.cs`, and `DummyDll` as readable context alongside MCP
-  results.
-- Ask for explicit confirmation before destructive operations such as patching,
-  deleting symbols/functions, or modifying program state.
+For a project lock, use the already-open GUI/MCP server. For deliberate headless
+work, save and close the owning GUI project and let active jobs finish. Never
+delete locks, stop unrelated processes or recommend the retired stop alias.
 
-## Troubleshooting
-
-| Symptom | Action |
-|---|---|
-| `list_instances` is empty | Open the program in CodeBrowser and start `Tools > GhidraMCP > Start MCP Server`. |
-| MCP cannot connect | Check the GhidraMCP HTTP Server port in CodeBrowser tool options. |
-| GhidraMCP menu missing | Install the saved extension ZIP, restart Ghidra, enable plugin. |
-| Project lock error | Use the already-open GUI/MCP server or close the competing Ghidra/headless process. |
-| Script Manager missing `ghidra.py` | Fully close all Ghidra/PyGhidra windows and reopen the GUI. |
-
-## Common Mistakes
-
-- Do not call `.\re.ps1 ghidra-cli` for normal analysis; it is not the query
-  path in this toolkit.
-- Do not start a separate headless process against a project already open in
-  the GUI.
-- Do not confuse the Python bridge with the GUI extension; both are required
-  for MCP-first analysis.
+If installed `ghidra-reverse-engineering-cli` guidance contradicts this skill,
+prefer this checkout's instructions and review the
+[installed-skill search/backup procedure](../../README.md#agent-skills-and-older-installations).
+Do not rewrite personal skills automatically. The retained PowerShell GUI has
+not been migrated to the JavaScript CLI; do not promise GUI feature parity or
+claim a live engine test passed from source checks or disposable fixtures.

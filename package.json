@@ -1,0 +1,26 @@
+{
+  "name": "retoolkit",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Portable Unity IL2CPP preparation and Ghidra handoff CLI",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "retk": "./re.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:ghidra": "node test/real-ghidra.mjs",
+    "test:ghidra-session": "node test/real-ghidra-session.mjs",
+    "test:ghidra-symbols": "node test/real-ghidra-symbols.mjs",
+    "test:mcp": "node test/real-mcp.mjs",
+    "test:handoff": "node test/real-handoff.mjs",
+    "test:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; Get-ChildItem tests/*.Tests.ps1 | ForEach-Object { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }\""
+  },
+  "dependencies": {
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
+  }
+}

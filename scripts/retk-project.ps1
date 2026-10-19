@@ -136,7 +136,7 @@ Most likely cause:
 Fix:
 1. Save your work in Ghidra GUI.
 2. Close the Ghidra GUI project/window for '$($Project.ghidraProjectName)'.
-3. Run: .\re.ps1 ghidra stop
+3. Wait for any other headless operation on this project to finish.
 4. Run: .\re.ps1 analyze $($Project.name)
 
 $processText

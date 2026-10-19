@@ -1,147 +1,83 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+REToolkit prepares authorized Unity IL2CPP builds for Ghidra, with a persistent
+Java headless bridge for CLI queries/typed edits and a retained GUI GhidraMCP path.
+The recommended CLI is `node re.js <command>`
+(Node.js >=24), with `re.cmd` as a Windows convenience wrapper. CLI migration
+comes first; the PowerShell GUI remains legacy for a later migration.
 
-## What this is
+## Development Commands
 
-REToolkit is a portable Windows PowerShell toolkit that prepares Unity IL2CPP
-Android builds (APK/XAPK/AAB) for Ghidra-based reverse engineering, then hands
-off to GhidraMCP for AI-assisted analysis. It is pure PowerShell — no compiled
-project, no package manager, no build step.
-
-Use only on builds you are allowed to inspect. Do not use it to bypass DRM,
-anti-cheat, payment/licensing, or to redistribute source/assets you do not own.
-
-## Commands
-
-There is no build step. Everything runs directly as PowerShell.
-
-**Syntax-check a single script** (no toolkit state needed):
 ```powershell
-[System.Management.Automation.Language.Parser]::ParseFile("path\to\file.ps1", [ref]$null, [ref]$errors)
+npm ci
+npm test
+npm run test:legacy
+node .\re.js help
+node .\re.js doctor
+node .\re.js flow <GameName> "<source>" --dry-run
 ```
 
-**Run the test suite** — each file is standalone, run individually (there is no
-aggregating runner):
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\retk-mcp-first.Tests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ghidra-script-bundle.Tests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ghidra-preferences.Tests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\workspace-archive.Tests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\retk-gui.Tests.ps1
-```
-Despite the `.Tests.ps1` naming, these are **not** real Pester tests — they are
-hand-rolled scripts using local `Assert-Contains`/`Assert-NotContains`/
-`Assert-True`/`Assert-Equals` helpers. `retk-mcp-first.Tests.ps1`,
-`ghidra-script-bundle.Tests.ps1`, and `ghidra-preferences.Tests.ps1` mostly
-`Get-Content -Raw` the real source files and assert that specific
-functions/strings/flags are present or absent — a regression guard on the
-public interface and documented behavior, not an execution test.
-`workspace-archive.Tests.ps1` is the exception: it dot-sources
-`scripts\retk-project.ps1` and actually exercises `New-Workspace` /
-`Export-WorkspaceArchive` / `Import-WorkspaceArchive` end-to-end against a temp
-directory. `retk-gui.Tests.ps1` mixes both styles: real execution tests for
-the pure helpers (`Resolve-RetkGuiRoot`, `Split-RetkGuiCommandLine`,
-`Get-RetkGuiWorkspaceNames`, `Invoke-RetkGuiCommand`) and static string
-assertions for the WinForms wiring in `Start-RetkGui`, since there is no
-WinForms test harness in this repo. When adding a function whose
-presence/behavior other code depends on, add or extend an `Assert-*` line for
-it in the matching test file.
+The main suite uses built-in `node:test` and `test/*.test.js`; use behavioral
+fixtures and disposable temporary directories. Optional `test:legacy` runs the
+original hand-rolled `tests/*.Tests.ps1` scripts under Windows PowerShell 5.1.
+Those include static source checks and helper execution; they are not live GUI
+or real-engine acceptance tests. Do not claim engine success from fake tools.
+The retained GUI helper suite is `tests/retk-gui.Tests.ps1`.
 
-**Run the toolkit itself:**
-```powershell
-.\install-re-toolkit.ps1 -All        # install JDK/Python/.NET/Ghidra/Il2CppDumper/GhidraMCP/AssetRipper
-.\re.ps1 doctor                      # check local toolkit paths/runtime
-.\re.ps1 flow <GameName> <apk-or-extracted-path>
-```
+## Boundaries And Invariants
 
-Target platform is Windows PowerShell 5.1 (not just PowerShell 7) — several
-comments in the code call this out explicitly (e.g. `Join-NativeArgumentString`
-builds a manual command-line string because `ProcessStartInfo.ArgumentList` is
-not reliable there). Do not introduce PS7-only syntax/cmdlets without checking.
+- JavaScript owns workspace creation, extraction/scanning, schema/state,
+  fingerprints, archive transfer, dump/import orchestration and resume planning.
+  Do not implement those commands as a PowerShell fallback.
+- `re.js` is the entry point; JavaScript implementation lives under `src/`.
+  Tests live under `test/`; `package.json` owns test commands.
+- Retain the PowerShell installer and selected compatibility adapters for
+  Ghidra/PyGhidra launchers, raw tool wrappers, LDPlayer and AssetRipper. Keep
+  those PS5.1-compatible and preserve toolkit-local runtime isolation.
+- `mcp` launches the local Python bridge directly from JavaScript, preserving
+  stdio and child exit/signal behavior. Protocol stdout must contain no banners.
+- Existing `re.ps1`, `scripts/retk-*.ps1` and WinForms GUI are legacy paths.
+  The GUI still invokes PowerShell and does not imply JS feature parity.
+- `templates/Il2CppDumper` and `templates/Ghidra` remain template sources.
+  Change templates rather than embedding replacement copies in orchestration.
 
-## Architecture
+Each workspace uses `workspaces/<GameName>/project.re.json` and the existing
+numbered directories. Validate names and paths at a shared boundary. Schema 2
+must read legacy projects, preserve unknown fields, back up before migration,
+and treat unverifiable legacy progress as unknown rather than successful.
+Native binary/metadata identity uses content hashes and sizes; changed content
+invalidates dependent outputs. Ambiguous candidates need explicit selection.
+A matching metadata filename does not establish compatibility.
 
-### Two independent entry points
+Safe resume is the default. Skip only work with valid identity and output
+evidence. Stage extraction/dump artifacts and publish after validation. Keep
+prior good artifacts when a later stage fails. Serialize workspace mutation
+and atomic read-modify-write updates; do not rely only on a final file-write
+mutex or PID identity.
 
-- **`re.ps1`** — the daily-driver CLI. Builds `$Root`/`$Tools`/`$Workspaces`/
-  `$ToolPaths` at the top, then dot-sources `scripts\ghidra-script-bundle.ps1`,
-  `scripts\ghidra-preferences.ps1`, and the modules in `$RetkScriptModules`
-  (`retk-core`, `retk-process`, `retk-il2cpp`, `retk-pyghidra`, `retk-project`,
-  `retk-pipeline`, `retk-ui`, in that order) before dispatching on `$Command`
-  via a `switch`. Every dot-sourced module relies on those script-scope
-  variables already existing — they are not passed as parameters.
-- **`install-re-toolkit.ps1`** — a large (~1400 line), fully self-contained
-  installer. It does not dot-source anything from `scripts\` (except
-  optionally `ghidra-script-bundle.ps1` for Script Bundle registration) and
-  duplicates a few helpers (e.g. `Join-NativeArgumentString`-equivalents)
-  rather than sharing code with `re.ps1`.
-- **`run-ghidra.ps1` / `run-pyghidra.ps1`** — standalone GUI launcher scripts,
-  used directly (not through the `re.ps1` dispatcher). They intentionally
-  duplicate JDK/Python path resolution and env setup from `re.ps1`/
-  `retk-core.ps1` rather than dot-sourcing them, so a fix in one place does not
-  automatically propagate to the others — check both when touching JDK/Python
-  path resolution or `Invoke-WithToolkitEnv`-style logic.
-- **`scripts\retk-gui.ps1`** — a standalone WinForms GUI, not dot-sourced by
-  `re.ps1`. It dot-sources only `scripts\retk-core.ps1` on its own (for
-  `Join-NativeArgumentString`) and shells out to `powershell.exe -File re.ps1
-  <args>` per button click rather than reusing `re.ps1`'s in-process dispatch.
-  `Resolve-RetkGuiRoot` lets it find the repo root either way it can run: from
-  `scripts\` in dev (falls back to the parent directory), or as the compiled
-  `REToolkit-GUI.exe` sitting at the repo root (checks its own directory
-  first). `scripts\build-gui.ps1` (via `ps2exe`) is the only build step in this
-  otherwise build-free repo, producing that `.exe`.
+Never silently overwrite Ghidra programs. Require explicit reimport, with a
+verified backup before replacement. Archive `--force` is explicit too and must
+back up an occupied destination before replacement. Do not kill the user's
+Ghidra process or delete project locks. For headless work, save and close the
+owning GUI project; for interactive work, use its existing MCP server.
 
-### Workspace model
+`flow` success means prepared, not analysis-ready. Imported state does not prove
+Auto Analysis, symbols, correct program selection or MCP readiness. Manual GUI
+steps stay awaiting user action/unknown until separately verified.
 
-Every project lives at `workspaces\<GameName>\` with `project.re.json` as the
-single source of truth (`00_OriginalBuild/`, `01_Extracted/`,
-`02_Il2CppDumperOutput/`, `03_GhidraProject/`, `04_Notes/`,
-`05_ReconstructedSource/`). Almost every command in `scripts\retk-pipeline.ps1`
-and `scripts\retk-project.ps1` follows the same shape: `Read-Project` →
-mutate the in-memory object → `Save-Project` (atomic temp-file+rename under a
-named mutex). All workspace path construction funnels through
-`Get-WorkspacePath` in `scripts\retk-project.ps1`, which calls
-`Assert-WorkspaceName` — that is the single validation choke point for
-`GameName`; do not build `workspaces\<name>` paths any other way.
+## Skills And Documentation
 
-### Templates are the source of truth, not embedded strings
+Use the current repo-local `skills/retoolkit-*` instructions. Search installed
+skill roots for stale `ghidra-reverse-engineering-cli` guidance before following
+it. README and `prompts/install-ghidra-skill.md` document detection and manual
+backup/update. Global installed skills are outside this migration: do not change
+them automatically or overwrite local customizations.
 
-`templates\Il2CppDumper\*.py` and `templates\Ghidra\*` are read from disk at
-runtime (`Get-Il2CppDumperGhidraTemplate` in `scripts\retk-il2cpp.ps1`,
-`Repair-Il2CppGhidraScript`) to patch/repair generated files like
-`ghidra.py`/`ghidra_with_struct.py` inside a workspace or `tools\Il2CppDumper`.
-If you need to change the Ghidra-side Python script behavior, edit the
-template file, not a PowerShell string literal.
+README is the current JavaScript CLI guide; Tutorial.md is the older PowerShell
+workflow. Keep `config/` MCP examples on `node <absolute-re.js> mcp`. Retired
+`ghidra` / `ghidra-cli` aliases remain disabled. Native bridge commands are
+`session`, `function`, `decompile`, `disasm`, `xrefs`, `strings`, `bytes`,
+`comment`, and `symbols plan/apply`. See `docs/ghidra-bridge.md`.
 
-### Toolkit-local runtime isolation
-
-JDK, Python, and the PyGhidra venv all install under `runtime\` scoped to this
-folder and never touch the user's global `PATH`/`JAVA_HOME`/`py` launcher.
-`Invoke-WithToolkitEnv` (`scripts\retk-core.ps1`) temporarily sets
-`JAVA_HOME_OVERRIDE`/`GHIDRA_INSTALL_DIR`/`PYGHIDRA_PYTHON`/`Path` for the
-duration of a scriptblock, then restores the previous values in a `finally`.
-
-### GhidraMCP has two separate halves
-
-`tools\ghidra-mcp\extension\GhidraMCP` (installed into Ghidra's user
-Extensions folder) is the Java-side Ghidra plugin that runs an HTTP server
-inside the GUI. The `bridge-mcp-ghidra` console script — installed by `pip`
-from the `ghidra_mcp_bridge-*.whl` release asset into
-`tools\ghidra-mcp\.venv` — is a different thing: the Python stdio bridge that
-an AI client (Codex/OpenCode) launches via `re.ps1 mcp`; it forwards requests
-to whichever GhidraMCP HTTP server is running. Confusing these two is a
-common failure mode when debugging "MCP not
-responding" issues.
-
-### Detached process launching
-
-`scripts\retk-process.ps1` has two launcher families:
-`Start-DetachedNativeProcess` (hidden window, redirects stdout/stderr to log
-files under `logs\`, with `Invoke-LogRetention` pruning old logs) and
-`Start-DetachedGuiProcess` (visible window, used for e.g. `re.ps1
-assetripper`). Both poll `Process.HasExited` for a short window after launch
-so a process that crashes immediately is reported as a failure instead of a
-false "started" success — `Start-Process` returning a non-null `Process`
-object only means Windows accepted the launch request, not that the process
-is still alive.
+Use only authorized builds; do not bypass DRM, anti-cheat or payment/licensing,
+or redistribute source/assets the user does not own.

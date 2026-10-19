@@ -1,15 +1,8 @@
-# Codex CLI config (TOML fragment).
-# Codex config location: %USERPROFILE%\.codex\config.toml
-# Merge the [mcp_servers.ghidra] section into your existing config.toml.
-
+# Merge this fragment into your existing Codex configuration.
+# Replace this example absolute checkout path; Node.js >=24 is required.
 [mcp_servers.ghidra]
-command = "powershell.exe"
-args = [
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
-  "mcp"
-]
+command = "node"
+args = ["C:\\Users\\DPC00176\\REToolkit\\re.js", "mcp"]
 
 [mcp_servers.ghidra.env]
 RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"

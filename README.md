@@ -1,287 +1,243 @@
 # REToolkit
 
-### REToolkit for Unity games, specifically Android
+REToolkit prepares Unity IL2CPP Android builds for Ghidra. Query an imported
+project through the persistent headless Java bridge, or use GhidraMCP with the
+live Ghidra/PyGhidra GUI. The recommended
+command line is JavaScript: `node re.js <command>` (or `re.cmd <command>` on
+Windows). Node.js 24 or newer is required.
 
-## Quick Install
+The workspace pipeline is native JavaScript. The existing PowerShell installer,
+GUI, and selected tool adapters remain available while the CLI migration comes
+first. The GUI still uses the legacy PowerShell pipeline; it does not yet expose
+the JavaScript CLI's complete state and resume behavior.
 
-Pull this repository to your machine first. If you use an AI agent, you can drag
-the files from `prompts/` into the agent and ask it to install or configure the
-toolkit for you.
+Use builds you are allowed to inspect. Do not bypass DRM, anti-cheat,
+payment/licensing, or redistribute source/assets you do not own.
 
-Suggested agent prompt:
+## Start
 
-```text
-cài đặt với prompts trên và chạy flows cho thằng apk này {path}
-```
-
-Agent note: `flow`, `open`, and `pyghidra-gui` start PyGhidra detached by
-default, so the wrapper returns after launch handoff while the GUI keeps
-running. PyGhidra stdout/stderr logs are written under `logs/pyghidra-gui-*`.
-Use `--console` only when you intentionally want foreground logs.
-
-REToolkit is a portable Windows toolkit for preparing Unity IL2CPP projects for
-Ghidra-based reverse engineering. The toolkit prepares the project; interactive
-analysis and AI-assisted queries should run through GhidraMCP.
-
-Use this only for builds you are allowed to inspect. Do not use it to bypass
-DRM, anti-cheat, payment, licensing, or to redistribute source/assets you do not
-own.
-
-## Workflow
-
-```text
-Unity IL2CPP build
--> extract or scan build
--> locate libil2cpp.so/GameAssembly.dll and global-metadata.dat
--> run Il2CppDumper
--> generate dump.cs, DummyDll, script.json, il2cpp.h, ghidra.py
--> import binary into a Ghidra project with no analysis
--> open Ghidra/PyGhidra GUI
--> run Auto Analysis and ghidra.py manually
--> query/decompile/xref through GhidraMCP
-```
-
-The default `flow` intentionally does not run long headless analysis and does
-not auto-apply `ghidra.py`. Do those steps in the GUI, then let the AI client
-talk to the live Ghidra instance through MCP.
-
-## Layout
-
-```text
-REToolkit/
-  re.ps1
-  install-re-toolkit.ps1
-  tools/
-    ghidra/
-    ghidra-mcp/
-    Il2CppDumper/
-    AssetRipper/
-  runtime/
-    java/jdk-21/
-    python/python-3.12/
-    python/pyghidra-venv/
-  workspaces/
-  workspace-template/
-  config/
-  prompts/
-```
-
-Each project lives under:
-
-```text
-workspaces/<GameName>/
-  project.re.json
-  00_OriginalBuild/
-  01_Extracted/
-  02_Il2CppDumperOutput/
-  03_GhidraProject/
-  04_Notes/
-  05_ReconstructedSource/
-```
-
-## Requirements
-
-- Windows 10/11.
-- Windows PowerShell 5.1 or PowerShell 7.
-- Ghidra compatible with the installed GhidraMCP plugin.
-- JDK 21, preferably the toolkit portable JDK at `runtime/java/jdk-21`.
-- Toolkit-local Python 3.12 at `runtime/python/python-3.12`.
-- .NET Runtime 8 for Il2CppDumper's `net8.0` package.
-- `uv` for running the Python MCP bridge from `re.ps1 mcp`.
-
-## Install
-
-If PowerShell blocks unsigned scripts:
+Install Node.js 24+, then install the toolkit-local engines and runtimes:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Unblock-File .\re.ps1
-Unblock-File .\install-re-toolkit.ps1
-```
-
-Check current state:
-
-```powershell
-.\install-re-toolkit.ps1
-.\re.ps1 doctor
-```
-
-Install runtime and core tools:
-
-```powershell
+npm ci
 .\install-re-toolkit.ps1 -All
+node .\re.js doctor
+node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --no-open
+node .\re.js status FoodHunt
+node .\re.js open FoodHunt
 ```
 
-`-All` runs the recommended full install order: runtime, .NET Runtime,
-Ghidra, Il2CppDumper, GhidraMCP, then AssetRipper.
+The installer remains PowerShell and installs JDK, Python, .NET, Ghidra,
+Il2CppDumper, GhidraMCP and AssetRipper. JavaScript does not replace these
+engines. Runtime files stay under `runtime/` and `tools/`; do not change global
+Python, Java or PATH to work around a missing toolkit runtime.
 
-Install pieces individually:
+`flow` accepts APK/XAPK/AAB/ZIP files or an extracted directory. Its default
+resume behavior preserves valid work. Use `--dry-run` to inspect the plan before
+running engines, and `--no-open` to prepare without launching the GUI:
 
 ```powershell
-.\install-re-toolkit.ps1 -InstallRuntime
-.\install-re-toolkit.ps1 -InstallDotNetRuntime
-.\install-re-toolkit.ps1 -InstallGhidra
-.\install-re-toolkit.ps1 -InstallIl2CppDumper
-.\install-re-toolkit.ps1 -InstallGhidraMcp
-.\install-re-toolkit.ps1 -InstallAssetRipper
+node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --dry-run
+node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --resume --no-open
 ```
 
-`-InstallRuntime` installs JDK 21 and a toolkit-local Python 3.12 under
-`runtime/python/python-3.12`. It does not change the global Python, PATH, or
-`py.exe` launcher, so a system Python 3.14 can stay installed. `pyghidra-gui`
-uses a separate `runtime/python/pyghidra-venv` created from that local Python.
-If the venv is deleted, the PyGhidra wrapper recreates it before launch.
+A successful flow means **prepared**, not **analysis-ready**. Import uses
+`-noanalysis`; run explicit `analyze` or use GUI Auto Analysis before relying on
+decompilation. Symbols have a separate plan/apply workflow below. A detached
+GUI launch does not prove that the intended program opened.
+Verify the program, completed analysis, required symbols and MCP connection
+before reporting analysis readiness.
 
-`-InstallDotNetRuntime` installs Microsoft .NET Runtime 8 with `winget`.
-Il2CppDumper v6.7.48 publishes `net8.0` and `net6.0` zips; the installer uses
-`net8.0` when Microsoft.NETCore.App 8.x is present and falls back to `net6.0`
-only when a 6.x runtime is already installed.
-
-`-InstallIl2CppDumper` also replaces the bundled `ghidra.py` and
-`ghidra_with_struct.py` with toolkit-maintained Python 3/PyGhidra templates.
-The installer and `re.ps1 ghidra-gui`/`re.ps1 pyghidra-gui` register
-`tools/Il2CppDumper` as a Ghidra Script Bundle in the CodeBrowser user config:
-
-```text
-%APPDATA%\ghidra\ghidra_<version>_PUBLIC\tools\_code_browser.tcd
-```
-
-A `.bak.<timestamp>` copy is written before that file is changed. If the
-CodeBrowser config does not exist yet, the toolkit creates it from
-`templates/Ghidra/_code_browser.tcd` before registering the Script Bundle.
-Manual fallback: open Script Manager > Bundle Manager and add
-`tools\Il2CppDumper`.
-
-If Ghidra opens but Script Manager still does not show `ghidra.py` or
-`ghidra_with_struct.py`, fully close all Ghidra/PyGhidra windows and reopen the
-GUI so CodeBrowser reloads its Script Bundle config.
-
-Download the latest GhidraMCP release assets from
-`https://github.com/bethington/ghidra-mcp/releases/latest`:
+## Diagnostics And Jev Handoff
 
 ```powershell
-.\install-re-toolkit.ps1 -InstallGhidraMcp
+node re.js doctor FoodHunt --task prepare --json
+node re.js doctor FoodHunt --task headless --json
+node re.js doctor FoodHunt --task mcp --probe --json
+node re.js status FoodHunt --json
 ```
 
-That installer path uses the GitHub Releases API and downloads these release
-assets into `tools/ghidra-mcp`:
+Readiness is task-specific: `ready`, `available`, `unknown`, or `blocked`.
+Installed files establish availability; a matching live Program establishes
+query readiness. Analysis and symbols have independent evidence. Doctor exits
+1 for a blocked task, and returns stable diagnostic codes with next actions.
+`--probe` explicitly starts a bounded MCP discovery child; it does not connect
+to a guessed instance or query target contents. Diagnostics do not start native
+sessions, repair state, or migrate project files. Status retains its existing
+state refresh behavior. The legacy GUI does not yet consume this model.
 
-- `GhidraMCP-<version>.zip`, the Ghidra extension ZIP.
-- `ghidra_mcp_bridge-<version>-py3-none-any.whl`, the Python MCP bridge
-  (ships its own dependencies).
-
-It also creates `tools/ghidra-mcp/.venv` and `pip install`s the wheel there.
-`re.ps1 mcp` uses that local Python environment when it exists.
-
-When a local Ghidra install is present, the installer also extracts the
-extension ZIP to `tools/ghidra-mcp/extension/GhidraMCP` and installs a copy into
-Ghidra's user extension folder:
-
-```text
-%APPDATA%\ghidra\ghidra_<version>_PUBLIC\Extensions\GhidraMCP
-```
-
-The `bridge_mcp_ghidra` wheel is not the Ghidra plugin. It is the AI-client-side
-MCP bridge: Codex/OpenCode talks to it over stdio (via the `bridge-mcp-ghidra`
-console script installed into `tools/ghidra-mcp/.venv`), and it forwards
-requests to the GhidraMCP server running inside the Ghidra GUI.
-
-Optional:
+Capture narrow observations from an already-running native session, then stop
+the session before taking a portable handoff snapshot:
 
 ```powershell
-.\install-re-toolkit.ps1 -InstallAssetRipper
+node re.js session start FoodHunt
+node re.js evidence capture FoodHunt --kind functions --selector Board --limit 20
+node re.js evidence capture FoodHunt --kind decompile --selector Board_Update --limit 100
+node re.js session stop FoodHunt
+node re.js handoff create FoodHunt --evidence exports/evidence/FoodHunt --out exports/FoodHunt.zip
+node re.js handoff verify exports/FoodHunt.zip
+node re.js jev request exports/FoodHunt.zip --questions config/jev-questions.example.json --out exports/request.json
 ```
 
-## Enable GhidraMCP In The GUI
+Handoff defaults to dump metadata, authored notes, and explicitly supplied
+captured evidence. Large reconstructed output, assets, and binaries require
+individual opt-ins. Request creation is offline and defaults to notes/evidence
+text under a 64 KiB state budget; it fails instead of truncating evidence.
+`--against <bundle>` adds a second build for questions you define in Jev.
+Inspect the generated JSON before sending it. Set `TYPESAFE_API_KEY` in your
+environment and run `node re.js jev run exports/request.json --out exports/result.json`
+to submit explicitly. The adapter follows the documented
+[TypeSafe HTTP API](https://docs.typesafe.ai/api); live service acceptance has
+not been tested. See [the CLI guide](docs/diagnostics-and-jev.md) and
+[portable schema](docs/handoff-schema.md) for selection and limits.
 
-After `-InstallGhidraMcp` downloads the release assets and auto-installs the
-extension:
+## Inputs, State And Repeated Runs
 
-1. Start Ghidra or PyGhidra:
+Every workspace is stored in `workspaces/<GameName>/`, with `project.re.json`
+and the existing `00_OriginalBuild` through `05_ReconstructedSource` folders.
+Schema version 2 records content identity and step state. Legacy project JSON
+remains readable; an old boolean alone does not establish current readiness.
+Unverified legacy progress stays unknown until evidence supports it. Preserve
+unknown fields and the pre-migration backup when moving a workspace forward.
+
+The selected native binary and metadata are identified by SHA-256 and size.
+Changed content invalidates dependent results even if a filename stays the
+same. Metadata candidates are not proved compatible by their names. When a
+scan finds multiple candidates, select paths explicitly instead of accepting
+an arbitrary first match:
 
 ```powershell
-.\re.ps1 ghidra-gui FoodHunt
-# or
-.\re.ps1 pyghidra-gui FoodHunt
+node .\re.js scan FoodHunt "D:\Builds\Extracted" --binary "D:\Builds\Extracted\lib\arm64-v8a\libil2cpp.so" --metadata "D:\Builds\Extracted\assets\bin\Data\Managed\Metadata\global-metadata.dat"
 ```
 
-Passing a `GameName` updates Ghidra's user preferences before launch so the
-tool opens with that workspace project as the recent/default project. Plain
-`ghidra-gui` and `pyghidra-gui` still work when you do not want to select a
-project. If Ghidra has never created `%APPDATA%\ghidra\...\preferences`, the
-toolkit creates it from `templates/Ghidra/preferences` and then injects the
-selected workspace project.
+`add` and `flow` accept `--binary` / `--metadata` too. Resume checks input
+identity and output validity; a file's existence or an old flag is not enough.
+Reusing a Ghidra import opens the selected program read-only to verify its
+identity; close its GUI project first, or use the already-open GUI's MCP server.
+Extraction and dump outputs are staged so a later failure keeps prior valid
+work. Workspace mutation is serialized to avoid two commands racing.
 
-2. Restart Ghidra if it was already open while the installer ran.
+Existing Ghidra programs are protected against silent overwrite. If inputs
+change, choose a new workspace or deliberately request `--reimport`. Reimport
+creates a backup before replacing the existing project; save and close that
+project in Ghidra first. Review `--dry-run` before making this choice:
 
-3. Open a CodeBrowser for the target project/program.
-4. Enable the plugin:
-
-```text
-File > Configure > Configure All Plugins > GhidraMCP
+```powershell
+node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --reimport --no-open
 ```
 
-5. Optional port configuration:
+GUI analysis and manual symbols remain awaiting user action or unknown until verified.
+A successful headless import does not confirm those separate steps.
 
-```text
-CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
+## Persistent Ghidra CLI
+
+Close the workspace's GUI project before starting a session. Read sessions are
+the default; queries reuse one JVM, loaded Program and decompiler. Session start
+does not import or run Auto Analysis.
+
+```powershell
+node re.js session start FoodHunt
+node re.js function list FoodHunt --query Board --limit 50
+node re.js decompile FoodHunt 0x123456 --json
+node re.js session stop FoodHunt
 ```
 
-6. Start the server:
+Editing requires an explicitly started write session. A verified full project
+backup precedes launch. Each data-changing operation creates a packed `.gzf`
+snapshot and saves its transaction before returning success.
 
-```text
-Tools > GhidraMCP > Start MCP Server
+```powershell
+node re.js session start FoodHunt --write
+node re.js function rename FoodHunt 0x123456 Board_Update --dry-run
+node re.js function rename FoodHunt 0x123456 Board_Update
+node re.js comment set FoodHunt 0x123456 --type plate --text "Update board state"
+node re.js symbols plan FoodHunt --address-mode rva
+node re.js symbols apply FoodHunt --plan "<plan path returned above>"
+node re.js session stop FoodHunt
+node re.js open FoodHunt
 ```
 
-If the GhidraMCP menu is still missing, install the saved ZIP manually with:
+Plans require verified current dump outputs. Choose address mode explicitly:
+`rva` adds the Program image base; `va` uses absolute virtual addresses. Inspect
+conflict/skipped counts before apply. USER_DEFINED names are kept unless a new
+plan uses `--replace-user-names`; managed comments preserve surrounding text.
+Function creation needs `--create-functions` and a verified instruction.
+Partial coverage does not set symbolsApplied. Full C types/signatures are outside v1.
 
-```text
-File > Install Extensions > Add
+Use `node re.js session start --help` for bridge commands and
+[the bridge guide](docs/ghidra-bridge.md) for retry/recovery and limits.
+This is experimental v1. Qualification uses source-owned fixtures, not every IL2CPP build. ARM/Thumb
+symbol mapping is currently unqualified; use the retained GUI path there.
+
+## Commands
+
+Run `node re.js help` for current argument details. `re.cmd` is a Windows
+convenience wrapper for the same JavaScript entry point.
+
+| Command | Purpose |
+|---|---|
+| `doctor` | Check toolkit runtime and engine paths. |
+| `init <GameName>` | Create a workspace. |
+| `scan <GameName> <directory>` | Locate/select native binary and metadata. |
+| `add <GameName> <archive>` | Extract the build and scan it. |
+| `dump <GameName>` | Generate Il2CppDumper outputs. |
+| `import <GameName>` | Import the selected binary into Ghidra without analysis. |
+| `flow <GameName> <source>` | Plan and run preparation; safe resume is the default. |
+| `open <GameName>` / `path <GameName>` | Launch the workspace GUI / print project paths. |
+| `status <GameName>` | Inspect persisted identity and progress. |
+| `analyze <GameName>` | Explicit headless analysis with the GUI project closed. |
+| `symbols <GameName>` | Print the manual Il2CppDumper script handoff. |
+| `notes <GameName>` / `context <GameName>` / `candidates <GameName>` | Generate local analysis context from available outputs. |
+| `export <GameName> [file.re]` | Export a workspace ZIP using the `.re` extension. |
+| `import <file.re> [GameName] [--force]` | Restore a workspace archive and rebase paths. |
+| `mcp` | Start the Python GhidraMCP bridge directly from JavaScript over stdio. |
+
+`flow` supports `--resume`, `--dry-run`, `--no-open`, `--binary`, `--metadata`
+and `--reimport`. Import into an occupied Ghidra project also requires deliberate
+reimport. Archive import refuses an existing workspace unless `--force` was
+explicitly supplied; replacement creates a backup first. Preserve that backup
+until the restored workspace has been checked.
+
+```powershell
+node .\re.js export FoodHunt
+node .\re.js import .\exports\FoodHunt.re FoodHuntCopy
 ```
 
-Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, restart Ghidra, then enable
-the plugin.
+The following compatibility commands temporarily invoke a legacy PowerShell
+adapter: `ghidra-gui`, `pyghidra-gui`, `il2cppdumper`, `assetripper`
+(`asset-ripper`), `assetripper-cli`, and `pull-ldplayer`. They require Windows
+PowerShell 5.1. LDPlayer remains interactive and needs an authorized running
+instance. AssetRipper exports do not establish that original source was recovered.
+`open` and the optional GUI handoff at the end of `flow` use the retained
+PyGhidra launcher adapter too.
+Core workspace/state/scan/archive/flow operations do not fall back to PowerShell.
 
-The default server URL is usually `http://127.0.0.1:8089/`. The Python MCP
-bridge installed at `tools/ghidra-mcp/.venv/Scripts/bridge-mcp-ghidra.exe`
-discovers GUI instances and exposes them to AI clients.
+## Ghidra And MCP Handoff
 
-## Configure An AI Client
+1. Open the correct project and program in CodeBrowser.
+2. Run Auto Analysis and wait for completion.
+3. Run `ghidra.py` or `ghidra_with_struct.py` from the `tools/Il2CppDumper`
+   Script Bundle; select this workspace's `02_Il2CppDumperOutput/script.json`.
+4. Enable `File > Configure > Configure All Plugins > GhidraMCP`.
+5. Start `Tools > GhidraMCP > Start MCP Server`.
+6. In the AI client, discover instances, connect, and verify the intended program.
 
-Codex TOML example:
+The GUI extension runs the HTTP server. The separate Python bridge in
+`tools/ghidra-mcp/.venv` connects AI-client stdio to that server. Configure your
+client to launch the bridge through JavaScript:
 
 ```toml
 [mcp_servers.ghidra]
-command = "powershell.exe"
-args = [
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
-  "mcp"
-]
+command = "node"
+args = ["C:\\Users\\DPC00176\\REToolkit\\re.js", "mcp"]
 
 [mcp_servers.ghidra.env]
 RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"
 ```
 
-OpenCode JSON example:
-
-```json
-{
-  "mcpServers": {
-    "ghidra": {
-      "command": "C:\\Users\\DPC00176\\REToolkit\\re.ps1",
-      "args": ["mcp"],
-      "type": "stdio",
-      "env": {
-        "RETOOLKIT_ROOT": "C:\\Users\\DPC00176\\REToolkit"
-      }
-    }
-  }
-}
-```
-
-Agent query flow:
+Replace the absolute root with your checkout. See `config/` for Codex and
+OpenCode fragments. Merge them into existing configuration; do not replace
+unrelated settings.
 
 ```text
 list_instances
@@ -291,194 +247,82 @@ load_tool_group function
 load_tool_group listing
 ```
 
-Then use the MCP tools for function lists, decompilation, strings, xrefs,
-symbols, comments, types, and batch operations.
+Use connected MCP tools for decompilation, functions, strings, xrefs, symbols,
+types and comments. The old `ghidra` / `ghidra-cli` query backend is disabled.
+Legacy `summary`, `strings`, `functions` and `stats` aliases only give guidance.
 
-## Quick Start
+## Agent Skills And Older Installations
 
-Full flow from APK/XAPK/AAB/ZIP:
-
-```powershell
-.\re.ps1 flow FoodHunt "D:\Builds\FoodHunt.apk"
-```
-
-Full flow from an extracted folder:
+Use repo-local `skills/retoolkit-install`, `skills/retoolkit-flow` and
+`skills/retoolkit-mcp-analysis`. An installed `ghidra-reverse-engineering-cli`
+skill can still recommend obsolete commands. Search installed skill roots:
 
 ```powershell
-.\re.ps1 flow FoodHunt "D:\Builds\FoodHunt_Extracted"
+$retkSkillRoots = @((Join-Path $HOME '.codex\skills'), (Join-Path $HOME '.agents\skills'))
+if ($env:CODEX_HOME) { $retkSkillRoots += Join-Path $env:CODEX_HOME 'skills' }
+$retkSkillRoots = @($retkSkillRoots | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
+if ($retkSkillRoots.Count -gt 0) {
+    rg -n -g SKILL.md 'ghidra-reverse-engineering-cli|ghidra-cli|re\.ps1 ghidra\b' $retkSkillRoots
+}
 ```
 
-Manual steps:
+Include any other roots configured by your agent. Inspect matches: warnings
+about disabled aliases are expected; instructions to execute them are stale.
+Updating personal installed skills is separate, explicitly requested work.
+Back up complete folders outside active skill roots, review customizations,
+then install current instructions and archive conflicting legacy copies. See
+[the install prompt](prompts/install-ghidra-skill.md#installed-skill-updates).
+The toolkit does not rewrite global skills automatically.
+
+## Tests And Verification Limits
 
 ```powershell
-.\re.ps1 init FoodHunt
-.\re.ps1 scan FoodHunt "D:\Builds\FoodHunt_Extracted"
-.\re.ps1 dump FoodHunt
-.\re.ps1 import FoodHunt
-.\re.ps1 open FoodHunt
+npm test
+npm run test:legacy
 ```
 
-Workspace archive handoff:
+`npm test` uses Node's built-in `node:test` runner for `test/*.test.js`.
+`test:legacy` is optional and runs the original standalone PowerShell suites;
+keep Windows PowerShell 5.1 compatibility when changing the retained adapters.
+Tests using disposable files or fake engine processes check orchestration and
+state, not Ghidra/Il2CppDumper correctness. GUI helper/source tests do not test
+a live WinForms wizard.
 
-```powershell
-.\re.ps1 export FoodHunt
-.\re.ps1 import .\exports\FoodHunt.re
-```
+Real-engine acceptance must separately cover a fresh authorized build, an
+existing analyzed workspace, `.re` transfer/reopen and a verified MCP query.
+Do not report these as passed from synthetic fixtures. The optional
+`npm run test:ghidra -- C:\\path\\to\\installed-toolkit` builds its own tiny PE
+fixture and checks real import and read-only attestation. This was verified
+locally with Ghidra 12.1.2 and JDK 21; it does not establish IL2CPP dumping,
+game analysis, a live GUI session or an MCP query.
+`npm run test:ghidra-session -- C:\path\to\installed-toolkit` checks the new
+persistent Java bridge, durable mutations and recovery on synthetic fixtures.
+`npm run test:ghidra-symbols -- C:\path\to\installed-toolkit` also covers
+synthetic ELF64 ARM64 and PE64 AMD64 loaders. See
+[verification scope](docs/superpowers/specs/2026-10-19-ghidra-bridge-verification.md).
+The separate read-only bridge check is
+`npm run test:mcp -- C:\\path\\to\\installed-toolkit`; local initialization
+and `tools/list` succeeded with the installed bridge (30 advertised tools).
+This does not verify a connection to a particular game/program.
+`npm run test:handoff -- C:\path\to\installed-toolkit` checks a source-owned
+seeded PE through real Ghidra evidence capture, ZIP transfer verification, and
+offline Jev request creation. It does not test IL2CPP dumping or send to Jev.
 
-`export` writes a normal ZIP archive with a `.re` extension. On import, toolkit
-restores the workspace under `workspaces/` and rebases absolute paths in
-`project.re.json` to the current toolkit folder.
+## Troubleshooting And Legacy GUI
 
-After the GUI opens:
+For a project lock, query the already-open GUI through MCP, or save and close
+that project in all Ghidra/PyGhidra windows before headless work. Let active
+headless jobs finish. Do not delete locks or stop unrelated processes. There
+is no working legacy stop alias.
 
-1. Open `workspaces/FoodHunt/03_GhidraProject`.
-2. Open `libil2cpp.so` or `GameAssembly.dll`.
-3. Run Ghidra Auto Analysis.
-4. Run `ghidra.py` or `ghidra_with_struct.py` from the `tools\Il2CppDumper`
-   Script Bundle, then select the workspace `script.json` when prompted.
-5. Start GhidraMCP from `Tools > GhidraMCP > Start MCP Server`.
-6. Connect the AI client with `connect_instance FoodHunt`.
+If GhidraMCP is missing, install `tools/ghidra-mcp/GhidraMCP-<version>.zip` via
+`File > Install Extensions > Add`, restart Ghidra, then enable the plugin. If
+Script Manager cannot see `ghidra.py`, fully close all Ghidra/PyGhidra windows
+and reopen so the Script Bundle config reloads.
 
-## Pull An APK From LDPlayer
-
-If a game is only installed through the Play Store inside LDPlayer, pull it
-directly from a running instance instead of finding an APK file by hand:
-
-```powershell
-.\re.ps1 pull-ldplayer FoodHunt com.example.foodhunt
-```
-
-This auto-detects `adb.exe` and the running LDPlayer device, opens the app so
-any OBB or dynamic-feature-module downloads can trigger, waits for
-confirmation, then pulls the base APK, all split APKs, and any OBB files into
-`workspaces\FoodHunt\00_OriginalBuild\` and runs the same extract/scan `add`
-does. The workspace is ready for `dump` when the command returns.
-
-Options:
-
-```text
--DeviceSerial <serial>   # target a specific device when multiple are connected
--AdbPath <path>          # use a specific adb.exe instead of auto-detecting
--SkipLaunch              # skip opening the app (use when OBB/modules are already downloaded)
-```
-
-This command is interactive: it needs LDPlayer open with the game installed
-and a human to actually play long enough for background downloads to finish.
-It does not pull app-private data under `/data/data/<package>/`.
-
-## re.ps1 Commands
-
-| Command | Purpose |
-|---|---|
-| `doctor` | Check local toolkit paths and runtime basics. |
-| `init <GameName>` | Create workspace and `project.re.json`. |
-| `add <GameName> <apk/xapk/aab/zip>` | Extract a build into `01_Extracted`, then scan. |
-| `pull-ldplayer <GameName> <PackageName>` | Pull base+split APKs and OBB files from a running LDPlayer instance, then extract/scan like `add`. |
-| `scan <GameName> <ExtractedPath>` | Locate native binary and metadata. |
-| `dump <GameName>` | Run Il2CppDumper. |
-| `import <GameName>` | Import into Ghidra with `analyzeHeadless -import -overwrite -noanalysis`. |
-| `export <GameName> [OutFile.re]` | Package a workspace as a `.re` archive. |
-| `import <Archive.re> [GameName] [--force]` | Restore a `.re` workspace archive; optional name overrides the workspace folder. |
-| `flow <GameName> <apk-or-ExtractedPath>` | Prepare the project and open PyGhidra. |
-| `open <GameName>` | Print paths and open PyGhidra. |
-| `path <GameName>` | Print Ghidra project folder/link. |
-| `status <GameName>` | Show `project.re.json` state. |
-| `notes <GameName>` | Generate `candidates.md` and `agent-context.md`. |
-| `candidates <GameName>` | Parse `dump.cs` for candidate class names. |
-| `context <GameName>` | Generate agent context. |
-| `analyze <GameName>` | Optional headless analysis when the GUI is closed. |
-| `symbols <GameName>` | Print manual GUI instructions for running `ghidra.py`. |
-| `ghidra-gui [GameName]` | Start Ghidra GUI with toolkit env; optional game name sets the default/recent project first. |
-| `pyghidra-gui [GameName]` | Start PyGhidra GUI with toolkit env; optional game name sets the default/recent project first. |
-| `il2cppdumper <args...>` | Raw Il2CppDumper passthrough. |
-| `assetripper [args...]` | Open the installed AssetRipper GUI; alias: `asset-ripper`. |
-| `assetripper-cli <GameName>` | Headlessly export the workspace's extracted build into `05_ReconstructedSource` via AssetRipper's `--headless` HTTP command API; no browser. |
-| `mcp` | Start the GhidraMCP Python bridge for AI clients. |
-
-Legacy query aliases `summary`, `strings`, `functions`, and `stats` no longer
-run a CLI backend. They print MCP setup guidance.
-
-## GUI
-
-Optional desktop GUI, a thin launcher over `re.ps1` — it does not duplicate
-any pipeline logic, it just runs `re.ps1 <command>` as a child process and
-streams the output into a log pane.
-
-Build it once per machine:
-
-```powershell
-.\scripts\build-gui.ps1
-```
-
-This installs the `ps2exe` PowerShell module (CurrentUser scope) if needed,
-then compiles `scripts\retk-gui.ps1` into `REToolkit-GUI.exe` at the repo
-root. `REToolkit-GUI.exe` is a build artifact and is never committed to git
-— rebuild it after pulling changes to `scripts\retk-gui.ps1`.
-
-Run `.\REToolkit-GUI.exe` (or `powershell.exe -File scripts\retk-gui.ps1` in
-dev mode) to pick a workspace, run Doctor/Add build/Flow/Open/Status/etc.
-from buttons, and fall back to the raw command box at the bottom for
-anything else `re.ps1` supports.
-
-## Troubleshooting
-
-### GhidraMCP menu is missing
-
-Enable the plugin in CodeBrowser:
-
-```text
-File > Configure > Configure All Plugins > GhidraMCP
-```
-
-If the plugin is not listed, install the downloaded release ZIP:
-
-```text
-File > Install Extensions > Add
-```
-
-Select `tools/ghidra-mcp/GhidraMCP-<version>.zip`, restart Ghidra, then enable
-the plugin. If the ZIP is missing, rerun:
-
-```powershell
-.\install-re-toolkit.ps1 -InstallGhidraMcp
-```
-
-### MCP server is not responding
-
-1. Confirm the CodeBrowser has the target program open.
-2. Start the server:
-
-```text
-Tools > GhidraMCP > Start MCP Server
-```
-
-3. Check the configured port:
-
-```text
-CodeBrowser > Edit > Tool Options > GhidraMCP HTTP Server
-```
-
-4. In the AI client, call `list_instances`, then `connect_instance <GameName>`.
-
-### Project lock errors
-
-Ghidra projects are normally locked by one process at a time. If
-`analyzeHeadless` reports a lock, close the GUI project or use the MCP server
-from the already-open GUI instead of starting another headless process.
-
-### Il2CppDumper says the file may be protected
-
-That warning can appear on IL2CPP binaries. If `dump.cs`, `DummyDll`, and
-`ghidra.py` are generated, the pipeline can usually continue.
-
-### Il2CppDumper cannot find .NET
-
-Run:
-
-```powershell
-.\install-re-toolkit.ps1 -InstallDotNetRuntime
-```
-
-The installer uses Il2CppDumper's `net8.0` package when Microsoft.NETCore.App
-8.x is installed. It can use the `net6.0` package only when Microsoft.NETCore.App
-6.x is already present.
+The existing `scripts/retk-gui.ps1` / `REToolkit-GUI.exe` remains the legacy
+PowerShell GUI. Rebuild with `.\scripts\build-gui.ps1` after changing its source.
+GUI migration comes later; use JavaScript CLI for the new resume and state
+behavior. [Tutorial.md](Tutorial.md) describes the older PowerShell workflow
+and detailed installation screens; its CLI examples are legacy, not the
+recommended JavaScript entry point.
