@@ -4,6 +4,7 @@ import {fileIdentity,reusable} from './state.js';
 import {stepFingerprint,within} from './inputs.js';
 import {sessionStatus} from './ghidra/provider.js';
 import {probeMcp as defaultProbeMcp} from './mcp-probe.js';
+import {inspectManagedPython,verifyPythonRuntime} from './python-runtime/verify.js';
 
 const exists=file=>typeof file==='string'&&fs.existsSync(file);
 const properties=file=>{
@@ -22,9 +23,10 @@ function extensionFacts(toolkit,extraPaths) {
   // The extension version property is the Ghidra compatibility version, not the
   // bridge/plugin release. Keep these separate and do not invent a version pin.
   const bridgeDir=path.dirname(path.dirname(toolkit.tools.bridge));
-  let bridgeVersion='unknown';
+  const managed=inspectManagedPython(toolkit.root);
+  let bridgeVersion=managed.state==='selected'?managed.receipt.wheels.find(w=>w.name==='ghidra-mcp-bridge').version:'unknown';
   const site=path.join(bridgeDir,'Lib/site-packages');
-  if(exists(site)){
+  if(managed.state==='absent'&&exists(site)){
     const metadata=fs.readdirSync(site).filter(name=>/^ghidra_mcp.*\.dist-info$/i.test(name));
     if(metadata.length===1)bridgeVersion=fs.readFileSync(path.join(site,metadata[0],'METADATA'),'utf8').match(/^Version:\s*(.+)$/m)?.[1]?.trim()??'unknown';
   }
@@ -75,6 +77,12 @@ export async function diagnose(toolkit,{name,task='prepare',probe=false,getSessi
     add('tool.'+key,check.exists?'TOOL_AVAILABLE':key==='java'?'JAVA_RUNTIME_MISSING':key==='bridge'?'MCP_BRIDGE_MISSING':key==='assetripper'?'ASSETRIPPER_MISSING':key==='python'?'PYTHON_RUNTIME_MISSING':'TOOL_MISSING',check.exists?'available':'blocked',`${key}: ${check.exists?'available on disk; execution not verified':'not found'}`,check.exists?null:`Install or configure ${key}.`,{path:check.path},affected);
   }
   for(const [key,required]of Object.entries(toolsFor))if(required.some(tool=>!checks[tool]?.exists))tasks[key].state='blocked';
+  const managed=inspectManagedPython(toolkit.root);
+  if(managed.state!=='absent'){
+    const verified=await verifyPythonRuntime(toolkit.root);
+    if(!verified.ok){tasks.mcp.state='blocked';add('mcp.managed',verified.errors[0].code,'blocked',verified.errors[0].message,'Run python-runtime verify and reinstall a reviewed lock if needed.',{},['mcp']);}
+    else add('mcp.managed','PYTHON_RUNTIME_VERIFIED','available','Selected Python/MCP file inventory matches its locked receipt.',null,{generation:managed.generation,pythonVersion:managed.receipt.python.version},['mcp']);
+  }
   const bridgePython=path.join(path.dirname(toolkit.tools.bridge),'python.exe');
   if(!exists(bridgePython)&&!checks.python?.exists){tasks.mcp.state='blocked';add('mcp.python','MCP_RUNTIME_MISSING','blocked','No configured Python runtime is available for the MCP bridge.','Install the toolkit MCP bridge virtual environment.',{},['mcp']);}
   let facts;

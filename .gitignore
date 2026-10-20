@@ -20,5 +20,6 @@ __pycache__/
 Thumbs.db
 .DS_Store
 REToolkit-GUI.exe
+REToolkit-GUI.exe.provenance.json
 node_modules/
 .worktrees/

@@ -1,6 +1,10 @@
 ﻿[CmdletBinding()]
 param(
     [string]$InstallDir = "",
+    [string]$LockedManifest = "",
+    [string]$PythonManifest = "",
+    [string]$PackageCache = "",
+    [switch]$Plan,
     [switch]$InstallGhidra,
     [switch]$InstallGhidraMcp,
     [switch]$InstallIl2CppDumper,
@@ -32,6 +36,27 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
         $InstallDir = (Get-Location).Path
     }
 }
+if (-not [string]::IsNullOrWhiteSpace($LockedManifest) -or -not [string]::IsNullOrWhiteSpace($PythonManifest)) {
+    $manifestParameter = if (-not [string]::IsNullOrWhiteSpace($PythonManifest)) { 'PythonManifest' } else { 'LockedManifest' }
+    $manifestPath = if ($manifestParameter -eq 'PythonManifest') { $PythonManifest } else { $LockedManifest }
+    $cliCommand = if ($manifestParameter -eq 'PythonManifest') { 'python-runtime' } else { 'toolchain' }
+    foreach ($parameterName in $PSBoundParameters.Keys) {
+        if ($parameterName -notin @('InstallDir', $manifestParameter, 'PackageCache', 'Plan')) {
+            throw "$manifestParameter cannot be combined with other manifest or legacy install/version flags: $parameterName"
+        }
+    }
+    if ($Plan -and -not [string]::IsNullOrWhiteSpace($PackageCache)) {
+        throw 'PackageCache is only supported for locked installation, not Plan.'
+    }
+    $nodeCommand = Get-Command node -ErrorAction Stop
+    $entryFile = Join-Path $PSScriptRoot 're.js'
+    if (-not (Test-Path -LiteralPath $entryFile -PathType Leaf)) { throw "JavaScript CLI not found: $entryFile" }
+    $nodeArguments = @($entryFile, $cliCommand, $(if ($Plan) { 'plan' } else { 'install' }), $manifestPath, '--root', $InstallDir, '--json')
+    if (-not [string]::IsNullOrWhiteSpace($PackageCache)) { $nodeArguments += @('--cache', $PackageCache) }
+    & $nodeCommand.Source @nodeArguments
+    exit $LASTEXITCODE
+}
+if ($Plan -or -not [string]::IsNullOrWhiteSpace($PackageCache)) { throw 'Plan and PackageCache require LockedManifest or PythonManifest.' }
 Set-Location -LiteralPath $InstallDir
 
 if ($All) {

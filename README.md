@@ -32,6 +32,33 @@ Il2CppDumper, GhidraMCP and AssetRipper. JavaScript does not replace these
 engines. Runtime files stay under `runtime/` and `tools/`; do not change global
 Python, Java or PATH to work around a missing toolkit runtime.
 
+For reviewed archive versions, use the new locked installation path:
+
+```powershell
+node re.js toolchain plan config/my-toolchain.lock.json --json
+node re.js toolchain install config/my-toolchain.lock.json --cache D:\RetkPackages --json
+node re.js toolchain verify --json
+```
+
+It verifies SHA256/size, stages all selected packages, refuses busy engines,
+backs up previous trees, and rolls back failures. Supported archives are JDK21,
+Ghidra, Il2CppDumper and AssetRipper. The separate `python-runtime` lock installs
+CPython 3.12 x64 and all MCP wheels into an immutable generation:
+
+```powershell
+node re.js python-runtime plan config/my-python.lock.json --json
+node re.js python-runtime install config/my-python.lock.json --cache D:\RetkPackages --json
+node re.js python-runtime verify --json
+```
+
+Python installation executes the reviewed locked interpreter/pip locally and uses
+offline wheels with exact hashes. MCP verifies the selected file inventory before
+launch; no selection retains the legacy bridge. GUI Python, extensions and .NET
+still use separate setup. See [Python/MCP locks](docs/python-runtime.md).
+
+The lock must contain actual release URLs and checksums; no default vendor lock
+is implied. See [toolchain and release checks](docs/toolchain-and-release.md).
+
 `flow` accepts APK/XAPK/AAB/ZIP files or an extracted directory. Its default
 resume behavior preserves valid work. Use `--dry-run` to inspect the plan before
 running engines, and `--no-open` to prepare without launching the GUI:
@@ -322,6 +349,8 @@ and reopen so the Script Bundle config reloads.
 
 The existing `scripts/retk-gui.ps1` / `REToolkit-GUI.exe` remains the legacy
 PowerShell GUI. Rebuild with `.\scripts\build-gui.ps1` after changing its source.
+Module installation now needs explicit `-InstallPs2Exe`; replacement needs `-Force`.
+Builds publish a provenance sidecar with source revision/hashes and EXE identity.
 GUI migration comes later; use JavaScript CLI for the new resume and state
 behavior. [Tutorial.md](Tutorial.md) describes the older PowerShell workflow
 and detailed installation screens; its CLI examples are legacy, not the

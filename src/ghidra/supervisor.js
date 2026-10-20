@@ -63,6 +63,7 @@ async function reconcileCurrentReceipts() {
     ...(record.error?.code==='state_reconciliation_pending'?{error:null}:{})});}
 }
 try {
+  update({ownerPid:process.pid});
   await withWorkspaceLock(config.workspace,async()=>{
     verifyBinding(config,toolkit,config.name);
     const locks=projectLocks(config.projectDir);
@@ -78,7 +79,7 @@ try {
     if(cancellation()){update({phase:'stopped',completedAt:new Date().toISOString()});return;}
     let engineResult;
     engineStarted=true;
-    const engine=runProcess(config.engine.file,config.engine.args,{cwd:config.root,
+    const engine=runProcess(config.engine.file,config.engine.args,{cwd:config.root,toolchainRoot:config.root,
       env:{...process.env,...config.engine.env},logFile:paths.log,leaseDirectory:path.join(config.workspace,'.retk-lock')})
       .then(()=>{engineClosed=true;return {};},error=>{engineClosed=true;return {error};});
     const deadline=Date.now()+config.startupMs;

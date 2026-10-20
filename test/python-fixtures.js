@@ -1,0 +1,2 @@
+export const source=ext=>({url:`https://example.org/releases/v1/package.${ext}`,sha256:'a'.repeat(64),size:10,verification:'recorded-download'});
+export const lock=()=>({kind:'retoolkit-python-lock',schemaVersion:1,platform:'win32-x64',python:{version:'3.12.10',source:source('zip'),archiveRoot:''},pip:{name:'pip',version:'25.0.1',filename:'pip-25.0.1-py3-none-any.whl',source:source('whl')},wheels:[{name:'ghidra-mcp-bridge',version:'6.0.0',filename:'ghidra_mcp_bridge-6.0.0-py3-none-any.whl',source:source('whl')}]});

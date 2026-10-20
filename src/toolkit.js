@@ -8,6 +8,8 @@ import { runProcess } from './process.js';
 import { restoreWorkspace } from './workspace-archive.js';
 import { activeSession,assertNoSession } from './ghidra/runtime.js';
 import { sessionStatus } from './ghidra/provider.js';
+import {acquireToolchainRead} from './toolchain/lease.js';
+import {inspectManagedPython} from './python-runtime/verify.js';
 
 const directories = ['00_OriginalBuild','01_Extracted','02_Il2CppDumperOutput','03_GhidraProject','04_Notes','05_ReconstructedSource'];
 const id = () => `${new Date().toISOString().replace(/[:.]/g,'-')}-${crypto.randomUUID()}`;
@@ -42,6 +44,8 @@ export function createToolkit(root, dependencies = {}) {
   };
   const env = {...process.env,JAVA_HOME:tools.jdk,JAVA_HOME_OVERRIDE:tools.jdk,GHIDRA_INSTALL_DIR:tools.ghidra,
     PYGHIDRA_PYTHON:tools.pyghidra,PATH:`${path.join(tools.jdk,'bin')}${path.delimiter}${process.env.PATH??''}`};
+  const legacyBridge=tools.bridge;
+  Object.defineProperty(tools,'bridge',{enumerable:true,get(){const selected=inspectManagedPython(root);return selected.state==='selected'?selected.python:legacyBridge;}});
   function workspace(name) {
     if(!/^[A-Za-z0-9_.-]{1,64}$/.test(name)||name.endsWith('.')||['.','..'].includes(name)||/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) throw new Error('Invalid workspace name');
     const directory = path.join(workspaces,name);
@@ -60,12 +64,17 @@ export function createToolkit(root, dependencies = {}) {
     if(fs.existsSync(file)) { const old=json(file); if(!old.schemaVersion||old.schemaVersion<2) fs.copyFileSync(file,`${file}.bak.${id()}`,fs.constants.COPYFILE_EXCL); }
     initializeState(project); syncLegacyStatus(project); atomicJson(file,project);
   }
-  const locked = (name,action) => {if(fs.existsSync(workspace(name))&&!ownsWorkspaceLock(workspace(name)))assertNoSession({root,workspace},name);return withWorkspaceLock(workspace(name), action);};
+  const locked = async(name,action) => {
+    const directory=workspace(name);
+    const toolLease=acquireToolchainRead(root);
+    try{if(fs.existsSync(directory)&&!ownsWorkspaceLock(directory))assertNoSession({root,workspace},name);return await withWorkspaceLock(directory,action);}
+    finally{toolLease.release();}
+  };
   function engineOptions(name,logFile) {
     const appdata=path.join(workspace(name),'04_Notes','.engine-runtime','appdata');
     const local=path.join(workspace(name),'04_Notes','.engine-runtime','local');
     fs.mkdirSync(appdata,{recursive:true}); fs.mkdirSync(local,{recursive:true});
-    return {cwd:root,env:{...env,APPDATA:appdata,LOCALAPPDATA:local},logFile,leaseDirectory:path.join(workspace(name),'.retk-lock')};
+    return {cwd:root,env:{...env,APPDATA:appdata,LOCALAPPDATA:local},logFile,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root};
   }
   async function save(name,project) { return locked(name,()=>saveNow(name,project)); }
   async function init(name) { return locked(name,()=>{
@@ -140,7 +149,7 @@ export function createToolkit(root, dependencies = {}) {
         const cfg=json(config); const text=JSON.stringify({...cfg,RequireAnyKey:false,GenerateScript:true},null,2);
         if(cfg.RequireAnyKey!==false||cfg.GenerateScript!==true) { fs.copyFileSync(config,`${config}.bak.${id()}`); atomicJson(config,JSON.parse(text)); }
       }
-      await run(tools.dumper,[project.nativeBinary,project.metadata,stage],{cwd:stage,env,logFile,leaseDirectory:path.join(workspace(name),'.retk-lock')});
+      await run(tools.dumper,[project.nativeBinary,project.metadata,stage],{cwd:stage,env,logFile,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root});
       for(const file of ['dump.cs','script.json']) {
         if(!fs.existsSync(path.join(stage,file))||fs.statSync(path.join(stage,file)).size===0) throw new Error(`Il2CppDumper did not produce ${file}`);
       }
@@ -260,7 +269,7 @@ export function createToolkit(root, dependencies = {}) {
     if(dependencies.open) return dependencies.open(name);
     // Windows GUI configuration/venv setup remains in the existing OS adapter.
     // Preparation, provenance, resume and import are entirely native JavaScript.
-    return run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'re.ps1'),'pyghidra-gui',name],{cwd:root,env,inherit:true});
+    return run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'re.ps1'),'pyghidra-gui',name],{cwd:root,env,inherit:true,toolchainRoot:root});
   }
   async function compat(command,args=[]) {
     if(['ghidra-gui','pyghidra-gui'].includes(command)) {
@@ -270,7 +279,7 @@ export function createToolkit(root, dependencies = {}) {
     const mutate=['assetripper-cli','pull-ldplayer'].includes(command);
     const execute=async()=>{
       await run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'re.ps1'),command,...args],
-        {cwd:root,env,inherit:true,...(mutate?{leaseDirectory:path.join(workspace(args[0]),'.retk-lock')}:{})});
+        {cwd:root,env,inherit:true,toolchainRoot:root,...(mutate?{leaseDirectory:path.join(workspace(args[0]),'.retk-lock')}:{})});
       if(mutate) {
         const project=read(args[0]);
         if(command==='assetripper-cli') {
@@ -308,5 +317,5 @@ export function createToolkit(root, dependencies = {}) {
     return restoreWorkspace({root,workspaces,archivePath:archive,name,force,initializeState,invalidateSteps,saveProject:saveNow,log});
   }
 
-  return {root,tools,workspace,projectPath,read,save,init,status,scan,add,dump,importProgram,analyze,plan,flow,notes,open,compat,exportArchive,importArchive,candidates,env,run,log};
+  return {root,tools,legacyBridge,workspace,projectPath,read,save,init,status,scan,add,dump,importProgram,analyze,plan,flow,notes,open,compat,exportArchive,importArchive,candidates,env,run,log};
 }

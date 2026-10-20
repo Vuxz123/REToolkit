@@ -27,3 +27,19 @@ test('runtime refuses directory junctions before publishing secrets',()=>{
     assert.throws(()=>secureDirectory(path.join(root,'link','child')),/link|junction/);
   } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
+test('Windows atomic runtime replacement waits briefly for an actual sharing violation',async t=>{
+  if(process.platform!=='win32'){t.skip('Windows file sharing semantics');return;}
+  const {spawn}=await import('node:child_process');const {atomicJson}=await import('../src/ghidra/runtime.js');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-runtime-sharing-')),file=path.join(root,'current.json'),ready=path.join(root,'ready');atomicJson(file,{before:true});
+  const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$h=[IO.File]::Open($env:RETK_SHARED_FILE,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[IO.File]::WriteAllText($env:RETK_READY_FILE,'ready');Start-Sleep -Milliseconds 250}finally{$h.Dispose()}"],{windowsHide:true,stdio:'ignore',env:{...process.env,RETK_SHARED_FILE:file,RETK_READY_FILE:ready}});
+  try{const deadline=Date.now()+5000;while(!fs.existsSync(ready)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(fs.existsSync(ready));atomicJson(file,{after:true});assert.deepEqual(JSON.parse(fs.readFileSync(file)),{after:true});}
+  finally{if(child.exitCode===null)await new Promise(resolve=>child.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});}
+});
+test('persistent Windows sharing failures preserve original JSON and clean temporary files',async t=>{
+  if(process.platform!=='win32'){t.skip('Windows file sharing semantics');return;}
+  const {spawn}=await import('node:child_process');const {atomicJson}=await import('../src/ghidra/runtime.js');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-runtime-persistent-')),file=path.join(root,'current.json'),ready=path.join(root,'ready');atomicJson(file,{before:true});const before=fs.readFileSync(file);
+  const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$h=[IO.File]::Open($env:RETK_SHARED_FILE,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[IO.File]::WriteAllText($env:RETK_READY_FILE,'ready');Start-Sleep -Milliseconds 1800}finally{$h.Dispose()}"],{windowsHide:true,stdio:'ignore',env:{...process.env,RETK_SHARED_FILE:file,RETK_READY_FILE:ready}});
+  try{const deadline=Date.now()+5000;while(!fs.existsSync(ready)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(fs.existsSync(ready));const started=performance.now();assert.throws(()=>atomicJson(file,{after:true}),error=>['EPERM','EACCES','EBUSY'].includes(error.code));assert.ok(performance.now()-started<1600);assert.deepEqual(fs.readFileSync(file),before);assert.deepEqual(fs.readdirSync(root).sort(),['current.json','ready']);}
+  finally{if(child.exitCode===null)await new Promise(resolve=>child.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});}
+});

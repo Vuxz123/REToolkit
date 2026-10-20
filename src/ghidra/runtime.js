@@ -4,10 +4,20 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fingerprint } from '../state.js';
 import { BridgeError } from './protocol.js';
+import {performance} from 'node:perf_hooks';
 
 export function atomicJson(file,value) {
   const temp=`${file}.tmp-${randomUUID()}`;
-  try {fs.writeFileSync(temp,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});fs.renameSync(temp,file);}
+  try {
+    fs.writeFileSync(temp,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});
+    const deadline=performance.now()+1000,pause=new Int32Array(new SharedArrayBuffer(4));
+    for(;;)try{fs.renameSync(temp,file);break;}
+    catch(error){
+      // Keep the old target intact while a Windows sharing handle closes.
+      if(process.platform!=='win32'||!['EPERM','EACCES','EBUSY'].includes(error.code)||performance.now()>=deadline)throw error;
+      Atomics.wait(pause,0,0,Math.min(20,Math.max(1,deadline-performance.now())));
+    }
+  }
   finally {fs.rmSync(temp,{force:true});}
 }
 export function readJson(file) {return JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));}

@@ -17,6 +17,8 @@
     "test:ghidra-symbols": "node test/real-ghidra-symbols.mjs",
     "test:mcp": "node test/real-mcp.mjs",
     "test:handoff": "node test/real-handoff.mjs",
+    "test:toolchain": "node test/toolchain-smoke.mjs",
+    "test:python-runtime": "node test/python-runtime-smoke.mjs",
     "test:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; Get-ChildItem tests/*.Tests.ps1 | ForEach-Object { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }\""
   },
   "dependencies": {

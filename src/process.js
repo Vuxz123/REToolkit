@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { acquireToolchainRead } from './toolchain/lease.js';
 
 export function launchSpec(file, args = []) {
   if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(file)) return { file, args, options:{ shell:false } };
@@ -18,15 +19,18 @@ export function launchSpec(file, args = []) {
   };
 }
 
-export async function runProcess(file, args = [], { leaseDirectory, ...options } = {}) {
-  if (!leaseDirectory) return runChild(file, args, options);
+export async function runProcess(file, args = [], { leaseDirectory, toolchainRoot, ...options } = {}) {
+  if (!leaseDirectory) {
+    const lease=toolchainRoot?acquireToolchainRead(toolchainRoot):null;
+    try{return await runChild(file,args,options);}finally{lease?.release();}
+  }
   launchSpec(file, args); // Reject unsupported shell syntax before reserving a lease.
   const directory = path.resolve(leaseDirectory);
   const stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Engine lease requires an existing workspace lock directory.');
   const token = randomUUID();
   const reservation = path.join(directory, `engine-reserved-${process.pid}-${token}.json`);
-  fs.writeFileSync(reservation, JSON.stringify({ token, parentPid: process.pid, file, args }), { flag: 'wx' });
+  fs.writeFileSync(reservation, JSON.stringify({ token, parentPid: process.pid, file, args,toolchainRoot }), { flag: 'wx' });
   try {
     return await runChild(process.execPath, [fileURLToPath(new URL('./engine-worker.js', import.meta.url)), reservation], {
       ...options, supervised: true, displayFile: file,

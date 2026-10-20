@@ -31,7 +31,7 @@ try {
 
   let result;
   try {
-    result = await runProcess(descriptor.file, descriptor.args, { forwardOutput: true });
+    result = await runProcess(descriptor.file, descriptor.args, { forwardOutput: true,toolchainRoot:descriptor.toolchainRoot });
     report({ exitCode: result.exitCode });
   } catch (error) {
     report({ exitCode: error.exitCode ?? null, signal: error.signal ?? null,

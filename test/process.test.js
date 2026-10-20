@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { runProcess, launchSpec } from '../src/process.js';
+import {withToolchainWrite} from '../src/toolchain/lease.js';
 import { withWorkspaceLock } from '../src/state.js';
 
 function fixture(t) {
@@ -155,7 +156,7 @@ test('a killed engine worker retains an uncertain marker through parent lock rel
   const done = path.join(root, 'done');
   let marker;
   await withWorkspaceLock(root, async () => {
-    const running = runProcess(process.execPath, ['-e', `const fs=require('node:fs');fs.writeFileSync(process.argv[1],'ready');setTimeout(()=>fs.writeFileSync(process.argv[2],'done'),300)`, ready, done], { leaseDirectory: lock });
+    const running = runProcess(process.execPath, ['-e', `const fs=require('node:fs');fs.writeFileSync(process.argv[1],'ready');setTimeout(()=>fs.writeFileSync(process.argv[2],'done'),300)`, ready, done], { leaseDirectory: lock,toolchainRoot:root });
     const rejected = assert.rejects(running);
     const deadline = Date.now() + 3000;
     while (!fs.existsSync(ready) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
@@ -168,6 +169,7 @@ test('a killed engine worker retains an uncertain marker through parent lock rel
   });
   assert.equal(fs.existsSync(marker), true);
   await assert.rejects(withWorkspaceLock(root, () => 'unsafe writer'), /busy.*inspection/i);
+  await assert.rejects(withToolchainWrite(root,()=>{}, {inspectProcesses:async()=>({state:'idle',processes:[]})}),error=>error.code==='TOOLCHAIN_BUSY');
   // The engine may survive its supervisor; allow its short fixture to finish
   // without making any claim that killing the worker stopped its descendant.
   await new Promise(resolve => setTimeout(resolve, 350));
@@ -180,7 +182,7 @@ test('a surviving engine worker prevents lock reclamation after its outer parent
   const stateUrl = pathToFileURL(path.resolve('src/state.js')).href;
   const processUrl = pathToFileURL(path.resolve('src/process.js')).href;
   const toolCode = `const fs=require('node:fs');fs.writeFileSync(process.argv[1],'ready');const timer=setInterval(()=>console.log('engine still writing'),20);setTimeout(()=>{clearInterval(timer);fs.writeFileSync(process.argv[2],'complete')},800);`;
-  const code = `import path from 'node:path';import {withWorkspaceLock} from ${JSON.stringify(stateUrl)};import {runProcess} from ${JSON.stringify(processUrl)};await withWorkspaceLock(process.argv[1],()=>runProcess(process.execPath,['-e',${JSON.stringify(toolCode)},process.argv[2],process.argv[3]],{leaseDirectory:path.join(process.argv[1],'.retk-lock')}));`;
+  const code = `import path from 'node:path';import {withWorkspaceLock} from ${JSON.stringify(stateUrl)};import {runProcess} from ${JSON.stringify(processUrl)};await withWorkspaceLock(process.argv[1],()=>runProcess(process.execPath,['-e',${JSON.stringify(toolCode)},process.argv[2],process.argv[3]],{leaseDirectory:path.join(process.argv[1],'.retk-lock'),toolchainRoot:process.argv[1]}));`;
   const parent = spawn(process.execPath, ['--input-type=module', '-e', code, root, ready, complete], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = once(parent, 'exit');
   let stderr = '';
@@ -198,6 +200,7 @@ test('a surviving engine worker prevents lock reclamation after its outer parent
   await exited;
   assert.equal(fs.existsSync(complete), false);
   await assert.rejects(withWorkspaceLock(root, () => 'unsafe concurrent writer'), /lock|busy/i);
+  await assert.rejects(withToolchainWrite(root,()=>{}, {inspectProcesses:async()=>({state:'idle',processes:[]})}),error=>error.code==='TOOLCHAIN_BUSY');
   let reclaimed;
   try { reclaimed = await withWorkspaceLock(root, () => 'reclaimed after child completion', { timeoutMs: 3000 }); }
   catch (error) {
@@ -206,4 +209,5 @@ test('a surviving engine worker prevents lock reclamation after its outer parent
   }
   assert.equal(reclaimed, 'reclaimed after child completion');
   assert.equal(fs.existsSync(complete), true);
+  await withToolchainWrite(root,()=>{}, {inspectProcesses:async()=>({state:'idle',processes:[]})});
 });

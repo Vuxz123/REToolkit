@@ -1,4 +1,6 @@
 import {spawn} from 'node:child_process';
+import {acquireToolchainRead} from './toolchain/lease.js';
+import {prepareMcpCommand} from './python-runtime/launcher.js';
 
 const MAX_FRAME=1024*1024;
 const safeText=value=>typeof value==='string'?value.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,256):null;
@@ -11,12 +13,13 @@ export async function probeMcp(toolkit,{project,program,timeoutMs=10000,launch,s
   const evidence={tools:[],instances:[]};
   const limitations=['Discovery names do not verify a Program executable hash.','The probe starts a separate bridge; its discovery may clean stale discovery sockets.'];
   const outcome=(state,code,message)=>({state,code,message,evidence,limitations});
-  let child,timer,pending,closed=false,buffer=Buffer.alloc(0),total=0,nextId=0;
+  let child,timer,pending,lease,closed=false,buffer=Buffer.alloc(0),total=0,nextId=0;
   let terminal;
   const fail=error=>{terminal??=error;if(pending){const current=pending;pending=null;current.reject(error);}};
   const deadline=Date.now()+timeoutMs;
   try {
-    const command=launch??{file:toolkit.tools.bridge,args:[]};
+    lease=acquireToolchainRead(toolkit.root);
+    const command=launch??await prepareMcpCommand(toolkit);
     try {child=spawnImpl(command.file,command.args??[],{cwd:toolkit.root,env:command.env??toolkit.env,windowsHide:true,stdio:['pipe','pipe','pipe'],shell:false});}
     catch {throw failure('MCP_BRIDGE_START_FAILED','The configured MCP bridge could not start.');}
     child.on('error',()=>fail(failure('MCP_BRIDGE_START_FAILED','The configured MCP bridge could not start.')));
@@ -93,5 +96,7 @@ export async function probeMcp(toolkit,{project,program,timeoutMs=10000,launch,s
       if(!closed)child.kill('SIGKILL');
       child.stdout.destroy();child.stderr.destroy();
     }
+    if(!child||closed)lease?.release();
+    else child.once('close',()=>{try{lease?.release();}catch{/* Preserve uncertain ownership for inspection. */}});
   }
 }

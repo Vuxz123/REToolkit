@@ -128,13 +128,30 @@ export async function startSession(toolkit,name,{write=false,timeoutMs=300000,id
 }
 export async function stopSession(toolkit,name,{timeoutMs=30000}={}) {
   let record=readSession(toolkit,name);
-  if(!record||['stopped','failed'].includes(record.phase))return publicSession(record);
-  const {paths}=configFor(toolkit,name,record);
-  atomicJson(paths.cancel,{runId:record.runId,reason:'user_stop'});
-  if(record.phase==='ready')await querySession(toolkit,name,'session.stop',{}, {timeoutMs:5000}).catch(()=>{});
+  if(!record)return publicSession(record);
+  const runId=record.runId;
   const deadline=Date.now()+timeoutMs;
-  while(Date.now()<deadline) {record=readSession(toolkit,name);if(['stopped','failed'].includes(record.phase))return publicSession(record);await delay(50);}
-  throw new BridgeError('cleanup_pending','Engine closure has not been confirmed; workspace lock is retained. Inspect session log',{runId:record.runId,logPath:paths.log});
+  if(!['stopped','failed'].includes(record.phase)){
+    const {paths}=configFor(toolkit,name,record);
+    atomicJson(paths.cancel,{runId,reason:'user_stop'});
+    if(record.phase==='ready')await querySession(toolkit,name,'session.stop',{}, {timeoutMs:5000}).catch(()=>{});
+  }
+  while(Date.now()<deadline) {
+    record=readSession(toolkit,name);
+    if(record?.runId!==runId)throw new BridgeError('session_conflict','Session ownership changed while stopping');
+    if(['stopped','failed'].includes(record.phase)){
+      // Terminal state precedes outer cleanup and process exit. Acquire the
+      // lease as proof first; PID exit alone never authorizes lock removal.
+      try{await withWorkspaceLock(toolkit.workspace(name),()=>{}, {timeoutMs:Math.max(0,deadline-Date.now())});}
+      catch{throw new BridgeError('cleanup_pending','Terminal session still has an uncertain workspace/engine lease; inspect before reuse',{runId});}
+      if(readSession(toolkit,name)?.runId!==runId)throw new BridgeError('session_conflict','Session ownership changed during cleanup');
+      let ownerAlive=false;
+      if(Number.isSafeInteger(record.ownerPid)&&record.ownerPid>0){try{process.kill(record.ownerPid,0);ownerAlive=true;}catch(error){if(error.code!=='ESRCH')ownerAlive=true;}}
+      if(!ownerAlive&&!fs.existsSync(runtimePaths(toolkit,name).gate))return publicSession(record);
+    }
+    await delay(50);
+  }
+  throw new BridgeError('cleanup_pending','Engine or supervisor closure has not been confirmed; inspect session status before reuse',{runId,logPath:record.logPath});
 }
 export async function recoverSession(toolkit,name) {
   const previous=readSession(toolkit,name);

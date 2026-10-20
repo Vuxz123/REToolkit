@@ -79,5 +79,18 @@ workflow. Keep `config/` MCP examples on `node <absolute-re.js> mcp`. Retired
 `session`, `function`, `decompile`, `disasm`, `xrefs`, `strings`, `bytes`,
 `comment`, and `symbols plan/apply`. See `docs/ghidra-bridge.md`.
 
+Locked installation uses `toolchain plan|install|verify`, shared engine read/write
+leases, fixed archive destinations, checksum/size/layout checks and journaled
+rollback. Do not bypass uncertain gates or replace active tools. Keep plan/verify
+read-only. `python-runtime plan|install|verify` manages CPython 3.12 x64 and MCP
+CLI wheels in final-path generations with a receipt-hashed active pointer. Hold
+a reader from managed verification through child close; invalid selection must
+block MCP, without affecting native preparation. Never silently fall back from
+a corrupt managed profile. PyGhidra GUI, extensions and global .NET remain separate.
+See `docs/python-runtime.md` for schema, offline pip flags and recovery boundaries.
+See `docs/toolchain-and-release.md`; vendor execution/hosted CI/real GUI acceptance
+must not be claimed from fixture suites. GUI build replacement/module install now
+requires explicit `-Force`/`-InstallPs2Exe`; preserve provenance sidecars.
+
 Use only authorized builds; do not bypass DRM, anti-cheat or payment/licensing,
 or redistribute source/assets the user does not own.

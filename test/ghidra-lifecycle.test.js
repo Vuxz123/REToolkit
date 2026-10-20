@@ -9,6 +9,7 @@ import {createToolkit} from '../src/toolkit.js';
 import {startSession,stopSession,sessionStatus,querySession,mutateSession,recoverSession} from '../src/ghidra/provider.js';
 import {withWorkspaceLock,setStep,outputManifest,fileIdentity} from '../src/state.js';
 import {stepFingerprint} from '../src/inputs.js';
+import {readSession} from '../src/ghidra/runtime.js';
 const fake=fileURLToPath(new URL('./fixtures/ghidra-engine.mjs',import.meta.url));
 async function fixture() {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-session-'));const toolkit=createToolkit(root,{log:()=>{}});
@@ -34,6 +35,8 @@ test('detached session owns workspace until engine closes, reuses process and de
     fs.appendFileSync(toolkit.read('Fixture').nativeBinary,'changed');
     await assert.rejects(querySession(toolkit,'Fixture','functions.list'),error=>error.code==='input_changed');
     await stopSession(toolkit,'Fixture',{timeoutMs:10000});
+    assert.ok(readSession(toolkit,'Fixture').ownerPid);
+    assert.throws(()=>process.kill(readSession(toolkit,'Fixture').ownerPid,0),error=>error.code==='ESRCH');
     await withWorkspaceLock(toolkit.workspace('Fixture'),()=>{});
   } finally {await stopSession(toolkit,'Fixture',{timeoutMs:10000}).catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}
 });

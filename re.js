@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { createToolkit } from './src/toolkit.js';
 import { isBridgeCommand,runBridgeCli,bridgeUsage } from './src/ghidra/cli.js';
 import {isMilestoneCommand,runMilestoneCli} from './src/milestones-cli.js';
+import {isToolchainCommand,runToolchainCli} from './src/toolchain/cli.js';
+import {isPythonRuntimeCommand,runPythonRuntimeCli} from './src/python-runtime/cli.js';
+import {prepareMcpCommand} from './src/python-runtime/launcher.js';
+import {acquireToolchainRead} from './src/toolchain/lease.js';
 
 const usage = `REToolkit JavaScript CLI (Node.js 24+)
   node re.js doctor [Game] [--task prepare|headless|mcp|assetripper] [--probe]
@@ -21,6 +25,10 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   node re.js symbols <Game>
   node re.js open|path|status|notes|context|candidates <Game>
   node re.js mcp
+  node re.js toolchain plan|install <lock.json> [--cache <folder>]
+  node re.js toolchain verify
+  node re.js python-runtime plan|install <lock.json> [--cache <folder>]
+  node re.js python-runtime verify
   node re.js handoff create <Game> [--out <folder|zip>] [--evidence <folder>]
   node re.js handoff verify <folder|zip>
   node re.js evidence capture <Game> --kind decompile|xrefs|functions [--selector <name/address>]
@@ -57,6 +65,8 @@ function parse(argv) {
 
 async function main() {
   const raw=process.argv.slice(2);
+  if(isPythonRuntimeCommand(raw))return runPythonRuntimeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isToolchainCommand(raw))return runToolchainCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isMilestoneCommand(raw))return runMilestoneCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isBridgeCommand(raw))return runBridgeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   // Explicitly retained Windows launchers pass their arguments through verbatim.
@@ -106,7 +116,11 @@ async function main() {
     case 'path': { const p=toolkit.read(name); print({directory:p.ghidraProjectDir,url:new URL(`file:///${p.ghidraProjectDir.replaceAll('\\','/')}`).href,project:p.ghidraProjectName,program:p.ghidraProgramName}); break; }
     case 'open': await toolkit.open(name); break;
     case 'notes': case 'context': case 'candidates': await toolkit.notes(name); print(path.join(toolkit.workspace(name),'04_Notes')); break;
-    case 'mcp': await toolkit.run(toolkit.tools.bridge,['--transport','stdio'],{cwd:root,env:toolkit.env,inherit:true}); break;
+    case 'mcp': {
+      const lease=acquireToolchainRead(root);
+      try{const command=await prepareMcpCommand(toolkit);await toolkit.run(command.file,command.args,{cwd:root,env:command.env,inherit:true,toolchainRoot:root});}
+      finally{lease.release();}break;
+    }
     case 'ghidra': case 'ghidra-cli': case 'summary': case 'strings': case 'functions': case 'stats': throw new Error('Use live GhidraMCP: list_instances, connect_instance, then load the relevant tool groups.');
     default: throw new Error(`Unknown command: ${command}\n${usage}`);
   }
