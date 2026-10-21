@@ -1,0 +1,43 @@
+const fail=message=>{throw Object.assign(new Error(message),{code:'DESKTOP_REQUEST_INVALID'});};
+const name=value=>typeof value==='string'&&/^[A-Za-z0-9_.-]{1,64}$/.test(value)&&!value.endsWith('.')&&!['.','..'].includes(value)&&!/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(value);
+const text=value=>typeof value==='string'&&value.length>0&&value.length<=4096&&!/[\x00-\x1f]/.test(value)&&!value.startsWith('-');
+const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
+const table=[];
+function add(id,label,group,required,builder,optional={}){table.push({id,label,group,required,optional,builder});}
+add('doctor','Kiểm tra công cụ','workspace',{},()=>['doctor']);
+for(const [id,label]of [['init','Tạo workspace'],['status','Đọc trạng thái'],['dump','Dump IL2CPP'],['import','Import Ghidra'],['analyze','Phân tích Ghidra'],['open','Mở PyGhidra'],['notes','Tạo ghi chú']])add('workspace.'+id,label,'workspace',{name},p=>[id,p.name]);
+for(const [id,label]of [['add','Nhập APK/XAPK'],['scan','Quét thư mục'],['flow','Chuẩn bị build']])add('workspace.'+id,label,'pipeline',{name,input:text},p=>[id,p.name,p.input,...(id==='flow'?['--no-open']:[]),...(p.binary?['--binary',p.binary]:[]),...(p.metadata?['--metadata',p.metadata]:[])],{binary:text,metadata:text});
+add('workspace.export','Xuất workspace .re','workspace',{name,out:text},p=>['export',p.name,p.out]);
+for(const [id,label]of [['start','Mở AssetRipper session'],['status','Trạng thái session'],['stop','Đóng session']])add('assets.'+id,label,'assets',{name},p=>['assets','session',id,p.name]);
+for(const [id,label]of [['export','Export Unity project'],['list','Danh sách asset'],['scripts','Mapping script']])add('assets.'+id,label,'assets',{name},p=>['assets',id,p.name]);
+add('assets.index','Lập graph asset','assets',{name},p=>['assets','index',p.name,...(p.graphMaxMiB?['--max-graph-mib',p.graphMaxMiB]:[]),...(p.storage?['--storage',p.storage]:[])],{graphMaxMiB:value=>['128','256','512'].includes(value),storage:value=>['json','sqlite'].includes(value)});
+for(const [id,label]of [['get','Chi tiết asset'],['tree','Hierarchy'],['refs','Tham chiếu'],['source','Đọc script']])add('assets.'+id,label,'assets',{name,id:text},p=>['assets',id,p.name,'--id',p.id]);
+add('reconstruct.plan','Lập kế hoạch script','reconstruct',{name,request:text},p=>['reconstruct','plan',p.name,'--request',p.request]);
+for(const id of ['apply','verify','validation'])add('reconstruct.'+id,id==='apply'?'Áp dụng kế hoạch':id==='verify'?'Xác minh receipt':'Đọc báo cáo Unity','reconstruct',{name,operation:uuid},p=>['reconstruct',id,p.name,'--operation',p.operation]);
+add('reconstruct.validate','Kiểm chứng bằng Unity','reconstruct',{name},p=>['reconstruct','validate',p.name]);
+add('migration.plan','Lập kế hoạch rebind/field','migration',{name,request:text,observations:text},p=>['migration','plan',p.name,'--request',p.request,'--observations',p.observations]);
+add('migration.observe','Quan sát script/field bằng Unity','migration',{name},p=>['migration','observe',p.name,...(p.receipt?['--receipt',p.receipt]:[]),...(p.components?['--components',p.components]:[])],{receipt:text,components:text});
+add('migration.apply','Áp dụng migration vào staging','migration',{name,plan:text,observations:text},p=>['migration','apply',p.name,'--plan',p.plan,'--observations',p.observations]);
+add('migration.verify','Xác minh migration','migration',{name,receipt:text},p=>['migration','verify',p.name,'--receipt',p.receipt,...(p.observations?['--observations',p.observations]:[])],{observations:text});
+for(const id of ['scan','list'])add('libraries.'+id,id==='scan'?'Quét ZIP thư viện':'Danh mục thư viện','libraries',{},()=>['libraries',id]);
+add('libraries.roots','Thêm folder ZIP','libraries',{input:text},p=>['libraries','roots','add',p.input]);
+for(const id of ['identify','plan'])add('libraries.'+id,id==='identify'?'Nhận diện thư viện':'Lập kế hoạch import','libraries',{name},p=>['libraries',id,p.name]);
+for(const id of ['import','verify'])add('libraries.'+id,id==='import'?'Import vào staging':'Xác minh thư viện','libraries',{name,operation:uuid},p=>['libraries',id,p.name,'--operation',p.operation]);
+add('setup.status','Trạng thái bộ cài','runtime',{},()=>['setup','status']);
+for(const id of ['plan','install'])add('setup.'+id,id==='plan'?'Kế hoạch engine native':'Cài engine native','runtime',{lock:text},p=>['setup',id,'--lock',p.lock]);
+for(const id of ['plan','install'])add('desktop-runtime.'+id,id==='plan'?'Kế hoạch runtime GUI':'Cài runtime GUI/extension/.NET','runtime',{lock:text},p=>['desktop-runtime',id,'--lock',p.lock]);
+add('desktop-runtime.verify','Xác minh runtime GUI','runtime',{},()=>['desktop-runtime','verify']);
+add('visual.compare','So ảnh/video','visual',{name,request:text},p=>['visual','compare',p.name,'--request',p.request]);
+add('visual.report','Đọc báo cáo hình ảnh','visual',{name,operation:uuid},p=>['visual','report',p.name,'--operation',p.operation]);
+add('handoff.create','Đóng gói evidence','jev',{name,out:text},p=>['handoff','create',p.name,'--out',p.out]);
+add('jev.request','Tạo request Jev (offline)','jev',{bundle:text,questions:text,out:text},p=>['jev','request',p.bundle,'--questions',p.questions,'--out',p.out]);
+add('jev.run','Gửi request Jev','jev',{request:text,out:text},p=>['jev','run',p.request,'--out',p.out]);
+export const desktopOperations=table.map(({id,label,group,required,optional})=>({id,label,group,required:Object.keys(required),optional:Object.keys(optional)}));
+export function buildDesktopCommand(operation,payload={}){
+ const item=table.find(item=>item.id===operation);if(!item)fail('Unknown desktop operation');
+ if(!payload||typeof payload!=='object'||Array.isArray(payload)||![Object.prototype,null].includes(Object.getPrototypeOf(payload))||Buffer.byteLength(JSON.stringify(payload))>65536)fail('Invalid desktop payload');
+ const rules={...item.required,...item.optional};
+ if(Object.keys(payload).some(key=>!Object.hasOwn(rules,key))||Object.keys(item.required).some(key=>!Object.hasOwn(payload,key))||Object.entries(payload).some(([key,value])=>!rules[key](value)))fail('Invalid or unsupported operation fields');
+ return item.builder(payload);
+}
+export function validateDesktopSender(event,expected){return event?.sender===expected&&event.senderFrame?.url==='retk://app/index.html'&&!event.senderFrame.parent;}

@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {PassThrough} from 'node:stream';
+import {createToolkit} from '../src/toolkit.js';
+import {startAssetSession,stopAssetSession,requestAssetSession} from '../src/assets/session.js';
+import {invokeAssetApi} from '../src/assets/api.js';
+import {serveAssetsMcp} from '../src/assets/mcp.js';
+
+test('persistent fixture engine -> staged export -> MCP graph -> transactional stub -> unchanged component binding',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-assets-acceptance-')),toolkit=createToolkit(root,{log:()=>{}});
+ t.after(async()=>{await stopAssetSession(toolkit,'Game');fs.rmSync(root,{recursive:true,force:true});});
+ await toolkit.init('Game');const input=path.join(toolkit.workspace('Game'),'01_Extracted');
+ fs.writeFileSync(path.join(input,'GameAssembly.dll'),'owned-native');fs.writeFileSync(path.join(input,'global-metadata.dat'),'owned-metadata');await toolkit.scan('Game',input);
+ const fixture=fileURLToPath(new URL('./fixtures/assetripper-engine.mjs',import.meta.url));
+ await startAssetSession(toolkit,'Game',{timeoutMs:10000},{engine:config=>({file:process.execPath,args:[fixture,config]})});
+ await requestAssetSession(toolkit,'Game','assets.export');
+ const project=toolkit.read('Game'),scene=path.join(project.reconstructedSourceDir,'Assets/Main.unity'),script=path.join(project.reconstructedSourceDir,'Assets/Player.cs');
+ fs.writeFileSync(scene,'%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &9007199254740993\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 0123456789abcdef0123456789abcdef, type: 3}\n  health: 42\n');
+ fs.writeFileSync(scene+'.meta','guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n');
+ const before=fs.readFileSync(scene),meta=fs.readFileSync(script+'.meta');
+ const inputStream=new PassThrough(),output=new PassThrough();let stdout='';output.on('data',bytes=>stdout+=bytes);
+ const serving=serveAssetsMcp(toolkit,'Game',{input:inputStream,output});
+ for(const message of [{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'fixture',version:'1'}}},{jsonrpc:'2.0',method:'notifications/initialized'},{jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'assets_index',arguments:{}}},{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'assets_scripts',arguments:{limit:1}}}])inputStream.write(JSON.stringify(message)+'\n');
+ inputStream.end();await serving;
+ const responses=stdout.trim().split('\n').map(JSON.parse);for(const response of responses)assert(!response.result?.isError,JSON.stringify(response));
+ const indexed=JSON.parse(responses[1].result.content[0].text),scripts=JSON.parse(responses[2].result.content[0].text);
+ assert.equal(scripts.items[0].components[0],'object:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:9007199254740993');
+ const request={kind:'retoolkit-reconstruction-request',schemaVersion:1,graphRevision:indexed.revision,changes:[{scriptId:scripts.items[0].scriptId,source:fs.readFileSync(script,'utf8').replace('public int health;','public int health; public void Tick() { health += 1; }')}]};
+ const plan=await invokeAssetApi(toolkit,'Game','reconstruct.plan',{request});const receipt=await invokeAssetApi(toolkit,'Game','reconstruct.apply',{operationId:plan.operationId});
+ assert.equal(receipt.compileReady,false);assert.deepEqual(fs.readFileSync(scene),before);assert.deepEqual(fs.readFileSync(script+'.meta'),meta);
+ assert.equal((await invokeAssetApi(toolkit,'Game','reconstruct.verify',{operationId:plan.operationId})).valid,true);
+});

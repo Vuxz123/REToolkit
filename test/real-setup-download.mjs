@@ -1,0 +1,25 @@
+// Explicit network/layout acceptance. Never installs into the user's toolkit.
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {randomUUID,createHash} from 'node:crypto';
+import {runSetup} from '../src/setup/service.js';
+import {verifyToolchain} from '../src/toolchain/verify.js';
+const repository=path.resolve(import.meta.dirname,'..'),reference=path.resolve(process.argv[2]??repository);
+const runId=randomUUID(),root=path.join(repository,'.cache/setup-vendor-acceptance',runId),cache=path.join(repository,'.cache/setup-vendor-packages');
+const space=fs.statfsSync(repository);assert(space.bavail*space.bsize>=5*1024**3,'Vendor archive acceptance requires at least 5 GiB free');
+const sentinels=['runtime/java/jdk-21/bin/java.exe','runtime/java/jdk-21/release','tools/ghidra/ghidraRun.bat','tools/ghidra/Ghidra/application.properties','tools/Il2CppDumper/Il2CppDumper.exe','tools/AssetRipper/AssetRipper.exe'];
+const identity=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const before=new Map(sentinels.filter(relative=>fs.existsSync(path.join(reference,relative))).map(relative=>[relative,identity(path.join(reference,relative))]));
+const sourceLock=path.join(repository,'config/native-windows-x64.lock.json');
+fs.mkdirSync(root,{recursive:true});let last=0;
+console.log(JSON.stringify({case:'isolated-native-download-start',root,reference,archiveDownloads:true,vendorExecution:false}));
+const result=await runSetup(root,'install',{lock:sourceLock,cache,onProgress:event=>{if(Date.now()-last>2000||event.received===event.total){last=Date.now();process.stderr.write(JSON.stringify({phase:'download',...event})+'\n');}}});
+assert.equal(result.state,'installed');assert.equal(result.packages.length,4);
+const verified=await verifyToolchain(root);assert.equal(verified.state,'verified',JSON.stringify(verified.errors));
+for(const [relative,sha256]of before)assert.equal(identity(path.join(reference,relative)),sha256,'Reference engine sentinel changed: '+relative);
+assert.equal(fs.existsSync(path.join(root,'.cache/toolchain/writer')),false);
+assert.equal(fs.readFileSync(path.join(root,'tools/AssetRipper/.retk-version'),'utf8'),'1.3.14\n');
+const acceptance={passed:true,root,packages:result.packages,sourceLockSha256:identity(sourceLock),verified:true,vendorExecution:false,referenceEngineSentinelsChecked:before.size,referenceEngineSentinelsUnchanged:true};
+fs.writeFileSync(path.join(root,'acceptance.json'),JSON.stringify(acceptance,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify(acceptance));

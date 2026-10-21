@@ -5,6 +5,7 @@ import {diagnose,formatDiagnostics} from './diagnostics.js';
 import {createHandoff,verifyHandoff} from './handoff.js';
 import {captureEvidence} from './evidence.js';
 import {buildJevRequest,runJevRequest,MAX_REQUEST_BYTES} from './jev.js';
+import {loadJevSettings,runConfiguredJevRequest} from './jev-settings.js';
 import {artifactError,externalOutput,publishJson,rejectOutputLinks} from './artifacts.js';
 
 export const milestoneUsage=`Diagnostics and evidence handoff
@@ -85,9 +86,9 @@ export async function runMilestoneCli(raw,defaultRoot){
  if(command==='handoff.verify'){const result=await verifyHandoff(name);print(result);if(!result.ok)process.exitCode=1;return;}
  if(command==='evidence.capture'){print(await captureEvidence(toolkit,name,options));return;}
  if(command==='jev.request'){
-  const file=newOutput(toolkit,options.out);const request=await buildJevRequest(name,{...options,questions:jsonInput(options.questions)});
+  const file=newOutput(toolkit,options.out);const request=await buildJevRequest(name,{...options,model:options.model??loadJevSettings(toolkit.root).settings.model,questions:jsonInput(options.questions)});
   publishJson(file,request,{maxBytes:MAX_REQUEST_BYTES+1});print({path:file,model:request.model,stateBytes:Buffer.byteLength(JSON.stringify(request.state)),network:'not-sent'});return;
  }
- const file=newOutput(toolkit,options.out);const response=await runJevRequest(jsonInput(name),{apiKey:process.env.TYPESAFE_API_KEY,timeoutMs:(options.timeout??60)*1000});
+ const file=newOutput(toolkit,options.out);const response=await runConfiguredJevRequest(toolkit.root,jsonInput(name),{timeoutMs:(options.timeout??60)*1000});
  publishJson(file,response,{maxBytes:4*1024*1024});print({path:file,model:response.model,usage:response.usage});
 }

@@ -39,6 +39,12 @@ async function applyCompatibility(item,stage){
  if(item.id==='assetripper'&&!await statOrNull(path.join(stage,'AssetRipper.exe'))){
   const source=path.join(stage,'AssetRipper.GUI.Free.exe');const target=path.join(stage,'AssetRipper.exe');await assertNoLinks(source);await assertNoLinks(target);await fs.copyFile(source,target,fs.constants.COPYFILE_EXCL);const identity=await hashFile(target);patches.push({path:'AssetRipper.exe',operation:'alias-assetripper-executable',source:'AssetRipper.GUI.Free.exe',sha256:identity.sha256});
  }
+ if(item.id==='assetripper'){
+  const file=path.join(stage,'.retk-version');await assertNoLinks(file);const previous=await statOrNull(file);
+  if(previous&&(!previous.isFile()||previous.size>1024))fail('TOOLCHAIN_LAYOUT_INVALID','AssetRipper version marker is invalid');
+  const before=previous?await hashFile(file):null,bytes=Buffer.from(item.version.replace(/^v/,'')+'\n');await durableWrite(file,bytes);
+  patches.push({path:'.retk-version',operation:'record-declared-assetripper-version',beforeSha256:before?.sha256??null,sha256:createHash('sha256').update(bytes).digest('hex')});
+ }
  return patches;
 }
 async function assertNoUnfinished(root){
@@ -47,7 +53,7 @@ async function assertNoUnfinished(root){
 }
 async function existingFacts(item,target,previousReceipt){const stat=await statOrNull(target);if(!stat)return {exists:false};if(!stat.isDirectory())fail('TOOLCHAIN_PATH_UNSAFE',`Existing tool target is not a directory: ${TARGETS[item.id]}`);const previous=previousReceipt?.packages?.find(p=>p.id===item.id&&p.target===TARGETS[item.id]);return {exists:true,version:previous?.version??null,source:previous?.source??null,files:await snapshotTree(target)};}
 
-export async function installToolchain(root,lock,{cache,fetchImpl=fetch,inspectProcesses,onEvent=()=>{}}={}){
+export async function installToolchain(root,lock,{cache,fetchImpl=fetch,inspectProcesses,onEvent=()=>{},downloadPolicy={},onProgress}={}){
  const plan=planToolchain(root,validateToolchainLock(lock));root=path.resolve(root);await assertNoLinks(root);
  cache=path.resolve(cache??path.join(root,'.cache/toolchain/packages'));
  const forbidden=[...Object.values(TARGETS),'workspaces','.cache/toolchain/transactions','.cache/toolchain/writer','.cache/toolchain/readers'];
@@ -67,7 +73,7 @@ export async function installToolchain(root,lock,{cache,fetchImpl=fetch,inspectP
    const packages=[];
    for(const item of plan.packages){
     const record=journal.packages.find(p=>p.id===item.id);
-    const cached=await cachedArchive(item.source,cache,fetchImpl);
+    const cached=await cachedArchive(item.source,cache,fetchImpl,{...downloadPolicy,onProgress});
     await event('before-source-copy',item.id);
     const archive=await privateArchive(cached,path.join(root,record.sourceArchive),item.source);
     const unpacked=path.join(tx,'unpacked',item.id);await event('before-extract',item.id);await extractChecked(archive,unpacked);

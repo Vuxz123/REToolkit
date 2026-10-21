@@ -1,0 +1,8 @@
+import path from 'node:path';import {createToolkit} from '../toolkit.js';import {startDesktopLauncher,statusDesktopLauncher,validRunId} from './index.js';
+const invalid=()=>{throw Error('Usage: retk ghidra-gui|pyghidra-gui [Game] [--root <toolkit>] [--json]; retk desktop-launch status <UUID>');};
+export const isDesktopLaunchCommand=argv=>['ghidra-gui','pyghidra-gui','desktop-launch'].includes(argv[0]);
+export function parseDesktopLaunchArgs(argv){const args=[],options={};for(let i=0;i<argv.length;i++){const token=argv[i];if(!token.startsWith('--')){args.push(token);continue;}const key=token.slice(2);if(Object.hasOwn(options,key))invalid();if(['json','help'].includes(key))options[key]=true;else if(key==='root'){const value=argv[++i];if(!value||value.startsWith('--'))invalid();options[key]=value;}else invalid();}
+ if(options.help)return {help:true};const [command,name,runId,...extra]=args;if(command==='desktop-launch'){if(name!=='status'||!validRunId(runId)||extra.length)invalid();return {runId,options};}
+ if(!['ghidra-gui','pyghidra-gui'].includes(command)||runId!==undefined||extra.length)invalid();return {launch:{mode:command==='ghidra-gui'?'ghidra':'pyghidra',...(name?{name}:{})},options};
+}
+export async function runDesktopLaunchCli(argv,defaultRoot){const parsed=parseDesktopLaunchArgs(argv);if(parsed.help){console.log('retk ghidra-gui|pyghidra-gui [Game]; retk desktop-launch status <UUID>');return;}const toolkit=createToolkit(path.resolve(parsed.options.root??defaultRoot),{log:message=>console.error(message)});console.log(JSON.stringify(parsed.runId?statusDesktopLauncher(toolkit,parsed.runId):await startDesktopLauncher(toolkit,parsed.launch),null,2));}

@@ -5,6 +5,7 @@ import {stepFingerprint,within} from './inputs.js';
 import {sessionStatus} from './ghidra/provider.js';
 import {probeMcp as defaultProbeMcp} from './mcp-probe.js';
 import {inspectManagedPython,verifyPythonRuntime} from './python-runtime/verify.js';
+import {inspectAssetReadiness} from './assets/readiness.js';
 
 const exists=file=>typeof file==='string'&&fs.existsSync(file);
 const properties=file=>{
@@ -149,6 +150,7 @@ export async function diagnose(toolkit,{name,task='prepare',probe=false,getSessi
     add('workspace','WORKSPACE_UNSELECTED','unknown','No workspace was selected; prepared outputs and Program identity are unknown.','Pass a workspace name to inspect build evidence.',{},['prepare','headless']);
   }
   if(tasks.assetripper.state!=='blocked')tasks.assetripper.state='available';
+  if(project)tasks.assetripper.exportedProject=await inspectAssetReadiness(toolkit,name);
   if(probe){
     let observed;try{observed=await probeMcp(toolkit,{project:project?.ghidraProjectName,program:project?.ghidraProgramName,nativeSha256:project?.identities?.native?.sha256,timeoutMs});}
     catch{observed={code:'MCP_PROBE_FAILED',state:'unknown',message:'The explicit MCP probe failed.',evidence:{}};}

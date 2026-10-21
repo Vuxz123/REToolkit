@@ -42,7 +42,7 @@ export async function runProcess(file, args = [], { leaseDirectory, toolchainRoo
   }
 }
 
-async function runChild(file, args = [], { cwd, env, logFile, inherit = false, supervised = false, displayFile = file, forwardOutput = false } = {}) {
+async function runChild(file, args = [], { cwd, env, logFile, inherit = false, supervised = false, displayFile = file, forwardOutput = false, windowsHide = true } = {}) {
   const spec = launchSpec(file,args);
   if (logFile) fs.mkdirSync(path.dirname(logFile),{recursive:true});
   const log = logFile ? fs.openSync(logFile,'a') : null;
@@ -51,7 +51,7 @@ async function runChild(file, args = [], { cwd, env, logFile, inherit = false, s
     return await new Promise((resolve,reject) => {
       const stdio = inherit ? ['inherit','inherit','inherit'] : ['ignore','pipe','pipe'];
       if(supervised) stdio.push('ipc');
-      const child = spawn(spec.file,spec.args,{...spec.options,cwd,env,windowsHide:true,detached:supervised,stdio});
+      const child = spawn(spec.file,spec.args,{...spec.options,cwd,env,windowsHide,detached:supervised,stdio});
       let cancellation = null; let spawnError = null; let logError = null; let workerResult = null;
       if(supervised) child.on('message',message => { if(message?.type==='retk-engine-result') workerResult=message; });
       // On Windows kill() can terminate cmd.exe without terminating its JVM.

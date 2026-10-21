@@ -11,6 +11,9 @@
     "retk": "./re.js"
   },
   "scripts": {
+    "cli:install": "npm link --offline --ignore-scripts --no-audit --no-fund",
+    "gui:install": "node scripts/install-gui.mjs",
+    "test:desktop": "node test/real-desktop.mjs",
     "test": "node --test test/*.test.js",
     "test:ghidra": "node test/real-ghidra.mjs",
     "test:ghidra-session": "node test/real-ghidra-session.mjs",
@@ -18,11 +21,23 @@
     "test:mcp": "node test/real-mcp.mjs",
     "test:handoff": "node test/real-handoff.mjs",
     "test:toolchain": "node test/toolchain-smoke.mjs",
+    "test:setup-download": "node test/real-setup-download.mjs",
+    "test:adb": "node test/real-adb.mjs",
+    "test:cli-install": "node test/cli-install-smoke.mjs",
     "test:python-runtime": "node test/python-runtime-smoke.mjs",
+    "test:vendor-mcp": "node test/vendor-mcp-smoke.mjs",
+    "test:assets": "node test/real-assets.mjs",
+    "test:unity-validation": "node test/real-unity-validation.mjs",
+    "test:libraries": "node test/real-library-import.mjs",
     "test:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; Get-ChildItem tests/*.Tests.ps1 | ForEach-Object { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }\""
   },
   "dependencies": {
+    "pngjs": "7.0.0",
+    "yaml": "2.9.1",
     "yauzl": "3.4.0",
     "yazl": "3.3.1"
+  },
+  "devDependencies": {
+    "electron": "44.9.1"
   }
 }

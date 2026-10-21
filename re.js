@@ -9,8 +9,26 @@ import {isToolchainCommand,runToolchainCli} from './src/toolchain/cli.js';
 import {isPythonRuntimeCommand,runPythonRuntimeCli} from './src/python-runtime/cli.js';
 import {prepareMcpCommand} from './src/python-runtime/launcher.js';
 import {acquireToolchainRead} from './src/toolchain/lease.js';
+import {isAssetCommand,runAssetCli} from './src/assets/cli.js';
+import {isLibraryCommand,runLibraryCli} from './src/libraries/cli.js';
+import {isSetupCommand,runSetupCli} from './src/setup/cli.js';
+import {isAdbCommand,runAdbCli} from './src/adb/cli.js';
+import {runDesktopCli} from './src/desktop/cli.js';
+import {isDesktopRuntimeCommand,runDesktopRuntimeCli} from './src/desktop-runtime/cli.js';
+import {isDesktopLaunchCommand,runDesktopLaunchCli} from './src/desktop-launch/cli.js';
+import {isVisualCommand,runVisualCli} from './src/visual/cli.js';
+import {isMigrationCommand,runMigrationCli} from './src/reconstruction/migration-cli.js';
+import {isJevSettingsCommand,runJevSettingsCli} from './src/jev-settings-cli.js';
 
 const usage = `REToolkit JavaScript CLI (Node.js 24+)
+  retk --version
+  retk gui [--root <toolkit>]
+  retk desktop-runtime plan|install --lock <lock.json> [--cache <folder>]
+  retk desktop-runtime verify
+  retk desktop-launch status <UUID>
+  retk visual compare <Game> --request <json>
+  retk visual report <Game> --operation <UUID>
+  retk migration observe|plan|apply|verify <Game> ...
   node re.js doctor [Game] [--task prepare|headless|mcp|assetripper] [--probe]
   node re.js init <Game>
   node re.js scan <Game> <folder> [--binary <relative-path>] [--metadata <relative-path>]
@@ -27,22 +45,31 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   node re.js mcp
   node re.js toolchain plan|install <lock.json> [--cache <folder>]
   node re.js toolchain verify
+  node re.js setup resolve|plan|install|status ...
   node re.js python-runtime plan|install <lock.json> [--cache <folder>]
   node re.js python-runtime verify
+  node re.js adb devices [--adb <adb.exe>] [--json]
+  node re.js pull-ldplayer <Game> <package> [--serial <id>] [--adb <adb.exe>] --skip-launch
   node re.js handoff create <Game> [--out <folder|zip>] [--evidence <folder>]
   node re.js handoff verify <folder|zip>
   node re.js evidence capture <Game> --kind decompile|xrefs|functions [--selector <name/address>]
   node re.js jev request <bundle> --questions <json> --out <request.json>
   node re.js jev run <request.json> --out <result.json>
-  node re.js ghidra-gui|pyghidra-gui|il2cppdumper|assetripper|assetripper-cli|pull-ldplayer ...
+  node re.js assets session start|status|stop <Game>
+  node re.js assets export|index|list|tree|get|refs|scripts|source|raw|mcp <Game> ...
+  node re.js reconstruct plan|apply|verify|validate|validation <Game> ...
+  node re.js libraries roots add <folder> | roots list | scan | list
+  node re.js libraries identify|plan|import|verify <Game> ...
+  node re.js ghidra-gui|pyghidra-gui|il2cppdumper|assetripper|assetripper-cli ...
 Global: --root <toolkit-directory>, --json
 Resume is the safe default. Dry-run does not create or change a workspace.
 Existing Ghidra data requires a new workspace or explicit --reimport with backup.
 Prepared does not mean analysis-ready: verify analysis, symbols and MCP program.
-GUI/tool-launch adapters and the installer still use PowerShell during migration.
+Desktop, Ghidra/PyGhidra launch, native setup and ADB capture use JavaScript.
 Native headless queries: session start, function, decompile, disasm, xrefs, strings, bytes.
 Use session start --help for bridge commands; GUI GhidraMCP remains available.
-`;
+Install the retk command from the toolkit checkout: npm ci, then npm run cli:install.
+`.replaceAll('node re.js','retk');
 
 function parse(argv) {
   const options={}; const positionals=[];
@@ -65,12 +92,26 @@ function parse(argv) {
 
 async function main() {
   const raw=process.argv.slice(2);
+  if(raw[0]==='gui')return runDesktopCli(raw);
+  if(isDesktopRuntimeCommand(raw))return runDesktopRuntimeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isDesktopLaunchCommand(raw))return runDesktopLaunchCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isVisualCommand(raw))return runVisualCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isMigrationCommand(raw))return runMigrationCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isJevSettingsCommand(raw))return runJevSettingsCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(['--version','-v'].includes(raw[0])){
+    if(raw.length!==1)throw new Error('The version flag accepts no additional arguments');
+    console.log(JSON.parse(fs.readFileSync(new URL('./package.json',import.meta.url),'utf8')).version);return;
+  }
+  if(isAdbCommand(raw))return runAdbCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isSetupCommand(raw))return runSetupCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isLibraryCommand(raw))return runLibraryCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isAssetCommand(raw))return runAssetCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isPythonRuntimeCommand(raw))return runPythonRuntimeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isToolchainCommand(raw))return runToolchainCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isMilestoneCommand(raw))return runMilestoneCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isBridgeCommand(raw))return runBridgeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   // Explicitly retained Windows launchers pass their arguments through verbatim.
-  const adapters=new Set(['ghidra-gui','pyghidra-gui','il2cppdumper','assetripper','asset-ripper','assetripper-cli','pull-ldplayer']);
+  const adapters=new Set(['il2cppdumper','assetripper','asset-ripper','assetripper-cli']);
   if(adapters.has(raw[0])) {
     const root=path.dirname(fileURLToPath(import.meta.url)); const toolkit=createToolkit(root);
     await toolkit.compat(raw[0],raw.slice(1));
@@ -114,7 +155,7 @@ async function main() {
     }
     case 'status': print(await toolkit.status(name)); break;
     case 'path': { const p=toolkit.read(name); print({directory:p.ghidraProjectDir,url:new URL(`file:///${p.ghidraProjectDir.replaceAll('\\','/')}`).href,project:p.ghidraProjectName,program:p.ghidraProgramName}); break; }
-    case 'open': await toolkit.open(name); break;
+    case 'open': print(await toolkit.open(name)); break;
     case 'notes': case 'context': case 'candidates': await toolkit.notes(name); print(path.join(toolkit.workspace(name),'04_Notes')); break;
     case 'mcp': {
       const lease=acquireToolchainRead(root);
@@ -125,4 +166,4 @@ async function main() {
     default: throw new Error(`Unknown command: ${command}\n${usage}`);
   }
 }
-main().catch(error=>{ console.error(process.argv.includes('--json')?JSON.stringify({ok:false,error:{code:error.code??'operation_failed',message:error.message}}):`REToolkit${error.code?` [${error.code}]`:''}: ${error.message}`); process.exitCode=1; });
+main().catch(error=>{ console.error(process.argv.includes('--json')?JSON.stringify({ok:false,error:{code:error.code??'operation_failed',message:error.message,...(["graph_metadata_limit","node_count_limit","edge_count_limit"].includes(error.code)&&error.details?{details:error.details}:{})}}):`REToolkit${error.code?` [${error.code}]`:''}: ${error.message}`); process.exitCode=1; });

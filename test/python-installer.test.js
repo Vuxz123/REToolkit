@@ -73,3 +73,17 @@ test('Python and wheel archives reject traversal, case collisions and links befo
   await assert.rejects(installPythonRuntime(f.root,f.lock,f.options),{code:'TOOLCHAIN_ARCHIVE_INVALID'});assert.equal(f.calls.length,0);await assert.rejects(fs.stat(path.join(f.root,'escape.txt')),{code:'ENOENT'});
  }
 });
+
+const knownWindowsHook='# .pth file for the PyWin32 extensions\nwin32\nwin32\\lib\npythonwin\n# And some hackery to deal with environments where the post_install script\n# isn\'t run.\nimport pywin32_bootstrap\n';
+async function addWindowsWheel(f,{name='pywin32',version='312',filename='pywin32-312-cp312-cp312-win_amd64.whl',hook=knownWindowsHook,hookPath='pywin32.pth'}={}){
+ const bytes=await zip(f.root,[[hookPath,hook],['win32/win32api.pyd','fixture native bytes']]),url=`https://example.invalid/releases/v1/${filename}`;f.sources.set(url,bytes);f.lock.wheels.push({name,version,filename,source:{url,sha256:sha(bytes),size:bytes.length,verification:'recorded-download'}});
+ const original=f.options.executePython;f.options.executePython=async(...args)=>{const result=await original(...args);if(args[1].join(' ').includes('RETK_PYTHON_PROBE')){const report=JSON.parse(result.stdout);report.distributions.push({name,version});result.stdout=JSON.stringify(report);}return result;};
+}
+test('only reviewed pywin32 wheel retains its exact inert hook and remains sealed',async t=>{
+ const {installPythonRuntime}=await api(),f=await setup(t);await addWindowsWheel(f);const original=f.options.executePython;f.options.executePython=async(file,...args)=>{const result=await original(file,...args);await fs.writeFile(path.join(path.dirname(path.dirname(file)),'site/pywin32.pth'),knownWindowsHook);return result;};const receipt=await installPythonRuntime(f.root,f.lock,f.options);assert.equal(receipt.files.find(file=>file.path==='site/pywin32.pth')?.sha256,sha(Buffer.from(knownWindowsHook)));assert.ok(f.calls.length>=4);
+ const tx=path.join(f.root,'.cache/python-runtime/transactions',receipt.generation,'wheel-preflight/pywin32/pywin32.pth');assert.equal(await fs.readFile(tx,'utf8'),knownWindowsHook);
+ const installed=path.join(f.root,'runtime/python/generations',receipt.generation,'site/pywin32.pth');assert.equal(await fs.readFile(installed,'utf8'),knownWindowsHook);await fs.writeFile(installed,'changed hook');assert.equal((await (await import('../src/python-runtime/verify.js')).verifyPythonRuntime(f.root)).ok,false);
+});
+test('pywin32 exception refuses altered content, alternate paths and unsupported releases before code runs',async t=>{
+ const {installPythonRuntime}=await api();for(const options of [{hook:knownWindowsHook+'import arbitrary\n'},{hookPath:'nested/pywin32.pth'},{hookPath:'different.pth'},{name:'lookalike'},{version:'311',filename:'pywin32-311-cp312-cp312-win_amd64.whl'},{filename:'pywin32-312-cp311-cp311-win_amd64.whl'}]){const f=await setup(t);await addWindowsWheel(f,options);await assert.rejects(installPythonRuntime(f.root,f.lock,f.options),e=>['PYTHON_WHEEL_INVALID','TOOLCHAIN_ARCHIVE_INVALID'].includes(e.code));assert.equal(f.calls.length,0);}
+});

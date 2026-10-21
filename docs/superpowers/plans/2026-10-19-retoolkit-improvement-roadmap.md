@@ -46,7 +46,7 @@ có staging/rollback mới theo phạm vi từng installer. Python/MCP CLI có
 [kiểm chứng](../specs/2026-10-19-python-mcp-lock-verification.md) riêng.
 
 1. Manifest bộ phiên bản Ghidra/JDK/Il2CppDumper/MCP bridge+extension/AssetRipper đã kiểm chứng; update chủ động và ghi lại trước/sau.
-2. Đã có staging/checksum/layout/rollback cho bốn ZIP relocatable. Python/MCP CLI đã dùng CPython 3.12 x64 và toàn bộ wheel khóa hash, pip offline, generation tại đường dẫn cuối, receipt/file verify và rollback con trỏ. Smoke Python/pip thật dùng wheel tự tạo; chưa nghiệm thu vendor bridge+extension. .NET và PyGhidra GUI còn riêng; hash tự tính chỉ định danh bản tải.
+2. Đã có staging/checksum/layout/rollback cho bốn ZIP relocatable. Python/MCP CLI đã dùng CPython 3.12 x64 và toàn bộ wheel khóa hash, pip offline, generation tại đường dẫn cuối, receipt/file verify và rollback con trỏ. Bộ vendor CPython3.12.10/bridge6.0.0/pywin32312 đã qua cài offline và stdio với35 distribution; metadata extension khớp Ghidra12.1.2. Plugin/GUI thật, .NET và PyGhidra GUI còn riêng; hash tự tính chỉ định danh bản tải. Xem [kiểm chứng vendor](../specs/2026-10-20-vendor-mcp-qualification-verification.md).
 3. Đã thêm CI Windows chạy JS và PowerShell 5.1 không tải engine; chưa chạy hosted workflow. Engine acceptance riêng. PowerShell 7 chỉ khi công bố hỗ trợ.
 4. Fixture release: archive lồng, case collision, nhiều ABI/metadata, Unicode/khoảng trắng, migration/resume, output thiếu/hỏng.
 5. Kiểm chứng build IL2CPP được phép sử dụng: prepare, analyzed workspace, `.re` transfer/reopen, exact MCP query và review handoff.

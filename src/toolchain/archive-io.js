@@ -2,41 +2,23 @@ import fs from 'node:fs/promises';
 import {createWriteStream} from 'node:fs';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {Readable,Transform} from 'node:stream';
+import {Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {crc32} from 'node:zlib';
 import yauzl from 'yauzl';
 import {MAX_PACKAGE_BYTES,createPathAccountant,safeRelative,toolchainError,assertNoLinks,statOrNull,within} from './manifest.js';
+import {fetchArchive} from './download.js';
 
 const fail=(code,message,cause)=>{throw toolchainError(code,message,cause);};
 export async function mkdirSafe(folder){await assertNoLinks(folder);await fs.mkdir(folder,{recursive:true});await assertNoLinks(folder);}
 export async function durableWrite(file,bytes){await assertNoLinks(file);const temporary=path.join(path.dirname(file),`.retk-${randomUUID()}.tmp`);const handle=await fs.open(temporary,'wx');try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}await fs.rename(temporary,file);}
 export async function hashFile(file){await assertNoLinks(file);const stat=await fs.lstat(file);if(!stat.isFile())fail('TOOLCHAIN_PATH_UNSAFE','Archive cache entry must be a regular file.');const hash=createHash('sha256');const handle=await fs.open(file,'r');try{for await(const chunk of handle.createReadStream({autoClose:false}))hash.update(chunk);}finally{await handle.close();}return {sha256:hash.digest('hex'),size:stat.size};}
 export async function matches(file,source){if(!await statOrNull(file))return false;const actual=await hashFile(file);return actual.sha256===source.sha256&&actual.size===source.size;}
-async function fetchArchive(source,file,fetchImpl){
- let url=source.url,response;
- try{
-  for(let redirects=0;;redirects++){
-   response=await fetchImpl(url,{redirect:'manual',signal:AbortSignal.timeout(120000)});
-   if([301,302,303,307,308].includes(response.status)){
-    if(redirects>=5)fail('TOOLCHAIN_DOWNLOAD_FAILED','Too many archive download redirects.');
-    const next=new URL(response.headers.get('location'),url);if(next.protocol!=='https:'||next.username||next.password)fail('TOOLCHAIN_DOWNLOAD_FAILED','Unsafe archive download redirect.');
-    await response.body?.cancel();url=next.href;continue;
-   }
-   break;
-  }
-  if(!response.ok||!response.body)fail('TOOLCHAIN_DOWNLOAD_FAILED',`Archive download failed (HTTP ${response.status}).`);
-  let size=0;const hash=createHash('sha256');
-  const limit=new Transform({transform(chunk,encoding,callback){size+=chunk.length;if(size>source.size||size>MAX_PACKAGE_BYTES){callback(toolchainError('TOOLCHAIN_INTEGRITY','Downloaded archive exceeds locked size.'));return;}hash.update(chunk);callback(null,chunk);}});
-  await pipeline(Readable.fromWeb(response.body),limit,createWriteStream(file,{flags:'wx'}));
-  if(size!==source.size||hash.digest('hex')!==source.sha256)fail('TOOLCHAIN_INTEGRITY','Downloaded archive checksum or size does not match lock.');
- }catch(error){if(typeof error.code==='string'&&error.code.startsWith('TOOLCHAIN_'))throw error;fail('TOOLCHAIN_DOWNLOAD_FAILED','Archive download failed.',error);}
-}
-export async function cachedArchive(source,cache,fetchImpl){
+export async function cachedArchive(source,cache,fetchImpl,options={}){
  await mkdirSafe(cache);const file=path.join(cache,`${source.sha256}.zip`);await assertNoLinks(file);
  if(await matches(file,source))return file;
  const temporary=path.join(cache,`.retk-download-${randomUUID()}.tmp`);
- try{await fetchArchive(source,temporary,fetchImpl);await assertNoLinks(file);await fs.rename(temporary,file);return file;}
+ try{await fetchArchive(source,temporary,fetchImpl,options);await assertNoLinks(file);await fs.rename(temporary,file);return file;}
  finally{await assertNoLinks(temporary);await fs.rm(temporary,{force:true});}
 }
 export async function privateArchive(cacheFile,destination,source){

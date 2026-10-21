@@ -10,6 +10,12 @@ import { activeSession,assertNoSession } from './ghidra/runtime.js';
 import { sessionStatus } from './ghidra/provider.js';
 import {acquireToolchainRead} from './toolchain/lease.js';
 import {inspectManagedPython} from './python-runtime/verify.js';
+import {createAdbClient,resolveAdbPath,validatePackageName,validateSerial} from './adb/client.js';
+import {captureBundle} from './adb/capture.js';
+import {parseAdbArgs} from './adb/options.js';
+import {rejectOutputLinks} from './artifacts.js';
+import {startDesktopLauncher} from './desktop-launch/index.js';
+import {inspectDesktopRuntime,verifyDesktopRuntime,desktopRuntimeEnvironment} from './desktop-runtime/index.js';
 
 const directories = ['00_OriginalBuild','01_Extracted','02_Il2CppDumperOutput','03_GhidraProject','04_Notes','05_ReconstructedSource'];
 const id = () => `${new Date().toISOString().replace(/[:.]/g,'-')}-${crypto.randomUUID()}`;
@@ -149,7 +155,10 @@ export function createToolkit(root, dependencies = {}) {
         const cfg=json(config); const text=JSON.stringify({...cfg,RequireAnyKey:false,GenerateScript:true},null,2);
         if(cfg.RequireAnyKey!==false||cfg.GenerateScript!==true) { fs.copyFileSync(config,`${config}.bak.${id()}`); atomicJson(config,JSON.parse(text)); }
       }
-      await run(tools.dumper,[project.nativeBinary,project.metadata,stage],{cwd:stage,env,logFile,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root});
+      const desktop=inspectDesktopRuntime(root);let dumpEnv=env;
+      if(desktop.state==='invalid')throw Object.assign(new Error(desktop.error.message),{code:desktop.error.code});
+      if(desktop.state==='selected'){const verified=await verifyDesktopRuntime(root);if(!verified.ok)throw Object.assign(new Error('Desktop runtime changed; verify or repair it before dumping'),{code:'DESKTOP_PROFILE_INVALID'});dumpEnv=desktopRuntimeEnvironment(verified.profile,env);}
+      await run(tools.dumper,[project.nativeBinary,project.metadata,stage],{cwd:stage,env:dumpEnv,logFile,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root});
       for(const file of ['dump.cs','script.json']) {
         if(!fs.existsSync(path.join(stage,file))||fs.statSync(path.join(stage,file)).size===0) throw new Error(`Il2CppDumper did not produce ${file}`);
       }
@@ -267,16 +276,19 @@ export function createToolkit(root, dependencies = {}) {
   async function open(name) {
     assertNoSession({root,workspace},name);
     if(dependencies.open) return dependencies.open(name);
-    // Windows GUI configuration/venv setup remains in the existing OS adapter.
-    // Preparation, provenance, resume and import are entirely native JavaScript.
-    return run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'re.ps1'),'pyghidra-gui',name],{cwd:root,env,inherit:true,toolchainRoot:root});
+    return startDesktopLauncher({root,tools,env,workspace,read},{mode:'pyghidra',name});
   }
   async function compat(command,args=[]) {
-    if(['ghidra-gui','pyghidra-gui'].includes(command)) {
-      if(args[0]&&fs.existsSync(workspace(args[0])))assertNoSession({root,workspace},args[0]);
-      else if(!args[0]&&fs.existsSync(workspaces))for(const entry of fs.readdirSync(workspaces,{withFileTypes:true}))if(entry.isDirectory())assertNoSession({root,workspace},entry.name);
+    if(command==='pull-ldplayer'){
+      const parsed=parseAdbArgs([command,...args]);
+      if(parsed.help||parsed.root||parsed.json)throw new Error('Use the ADB CLI entrypoint for help, root and JSON options');
+      return pullLdPlayer(parsed.game,parsed.packageName,parsed.options);
     }
-    const mutate=['assetripper-cli','pull-ldplayer'].includes(command);
+    if(['ghidra-gui','pyghidra-gui'].includes(command)) {
+      if(args.length>1||args.some(arg=>arg.startsWith('-')))throw Error('Use the typed Ghidra GUI command options');
+      return startDesktopLauncher({root,tools,env,workspace,read},{mode:command==='ghidra-gui'?'ghidra':'pyghidra',...(args[0]?{name:args[0]}:{})});
+    }
+    const mutate=command==='assetripper-cli';
     const execute=async()=>{
       await run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'re.ps1'),command,...args],
         {cwd:root,env,inherit:true,toolchainRoot:root,...(mutate?{leaseDirectory:path.join(workspace(args[0]),'.retk-lock')}:{})});
@@ -286,11 +298,6 @@ export function createToolkit(root, dependencies = {}) {
           const output=project.reconstructedSourceDir;
           if(!output||!fs.existsSync(output)||!walk(output).length) throw new Error('AssetRipper adapter produced no verifiable output');
           setStep(project,'assetripper','succeeded',fingerprint({source:project.extractedPath,native:project.identities.native?.sha256,metadata:project.identities.metadata?.sha256}),outputManifest([output]));
-        } else {
-          // Legacy pull may have chosen an arbitrary ABI. Native CLI requires
-          // explicit selection again if the extracted bundle is ambiguous.
-          project.nativeBinary=null; project.metadata=null;
-          selectInputs(project,project.extractedPath);
         }
         saveNow(args[0],project);
       }
@@ -298,13 +305,33 @@ export function createToolkit(root, dependencies = {}) {
     if(mutate) { if(!args[0]) throw new Error(`${command} requires a workspace`); return locked(args[0],execute); }
     return execute();
   }
+  async function pullLdPlayer(name,packageName,options={}){
+    rejectOutputLinks(workspace(name));validatePackageName(packageName);
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['adb','serial','skipLaunch','binary','metadata','confirm'].includes(key)))throw new Error('Invalid ADB capture options');
+    if(options.serial!==undefined)validateSerial(options.serial);
+    if(options.skipLaunch!==undefined&&typeof options.skipLaunch!=='boolean')throw new Error('Invalid skip-launch flag');
+    if(!options.skipLaunch&&typeof options.confirm!=='function')throw Object.assign(new Error('Interactive launch requires confirmation; use --skip-launch for unattended capture'),{code:'ADB_INTERACTIVE_REQUIRED'});
+    for(const key of ['binary','metadata'])if(options[key]!==undefined&&(typeof options[key]!=='string'||!options[key]||options[key].length>4096||/[\x00-\x1f]/.test(options[key])))throw new Error('Invalid explicit input selection');
+    const file=resolveAdbPath(options.adb);
+    return locked(name,async()=>{
+      await init(name);
+      const client=createAdbClient({file,run,runOptions:{cwd:root,env,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root}});
+      const serial=await client.selectDevice(options.serial);
+      const capture=await captureBundle({workspace:workspace(name),packageName,serial,client,skipLaunch:Boolean(options.skipLaunch),confirm:options.confirm});
+      try{
+        const project=await add(name,capture.bundle,{binary:options.binary,metadata:options.metadata});
+        project.ldplayerCapture={runId:capture.runId,packageName,serial,bundle:capture.bundle,manifest:capture.manifest,sha256:capture.archive.sha256};saveNow(name,project);
+        return {kind:'retoolkit-adb-result',schemaVersion:1,state:'prepared',capture,project,notice:'Captured inputs are selected; binary/metadata compatibility, dumping and Ghidra analysis remain unverified.'};
+      }catch(error){error.message+=`\nSaved capture: ${capture.bundle}\nSelect inputs with add <Game> <bundle> --binary <path> --metadata <path>.`;throw error;}
+    });
+  }
   async function flow(name,source,options={}) {
     if(options.dryRun) return plan(name,source,options);
-    return locked(name,async()=>{
+    const prepared=await locked(name,async()=>{
       await init(name); await add(name,source,options); await dump(name); await importProgram(name,options); await notes(name);
-      if(!options.noOpen) await open(name);
       log('Prepared. Auto Analysis, symbols and the MCP connection still require verification.'); return read(name);
     });
+    if(!options.noOpen)await open(name);return prepared;
   }
   async function exportArchive(name,out) { return locked(name,async()=>{
     const destination=path.resolve(out??path.join(root,'exports',`${name}.re`));
@@ -317,5 +344,5 @@ export function createToolkit(root, dependencies = {}) {
     return restoreWorkspace({root,workspaces,archivePath:archive,name,force,initializeState,invalidateSteps,saveProject:saveNow,log});
   }
 
-  return {root,tools,legacyBridge,workspace,projectPath,read,save,init,status,scan,add,dump,importProgram,analyze,plan,flow,notes,open,compat,exportArchive,importArchive,candidates,env,run,log};
+  return {root,tools,legacyBridge,workspace,projectPath,read,save,init,status,scan,add,dump,importProgram,analyze,plan,flow,notes,open,compat,pullLdPlayer,exportArchive,importArchive,candidates,env,run,log};
 }

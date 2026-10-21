@@ -1,10 +1,78 @@
-# Locked toolchain installation and release checks
+# Native setup, locked toolchains and release checks
 
 The JavaScript CLI provides a checksummed, staged installation path for four
-relocatable Windows x64 ZIP packages. This supplements the retained PowerShell
-setup. Python/MCP CLI has a separate [generation and wheel lock](python-runtime.md).
-GUI Python, user extensions and global .NET still need separate setup; they are
-not reproduced by this archive lock.
+relocatable Windows x64 ZIP packages. `setup` resolves exact releases and reuses
+that transaction; the PowerShell installer is a thin PS5.1 Node24 adapter.
+Python/MCP CLI has a separate [generation and wheel lock](python-runtime.md).
+GUI Python, user extensions and global .NET require separate reviewed profiles;
+their installation has not been ported.
+
+## Resolve and install native engines
+
+```powershell
+node re.js setup resolve --components jdk,ghidra,dumper,assetripper --json
+node re.js setup resolve --components jdk,ghidra --out config/reviewed-native.lock.json --json
+node re.js setup plan --components jdk,ghidra,dumper,assetripper --json
+node re.js setup install --components jdk,ghidra,dumper,assetripper --json
+node re.js setup status --json
+```
+
+The exact defaults are JDK21.0.11, Ghidra12.1.2, Il2CppDumper6.7.48 net8.0 and
+AssetRipper1.3.14. Exact overrides use `--jdk-version`, `--ghidra-version`,
+`--dumper-version` and `--assetripper-version`; a version must belong to a selected
+component. Ghidra selection includes JDK unless an explicit lock defines its own
+package coverage. Without `--components`, native selection defaults to JDK/Ghidra.
+
+The shipped `config/native-windows-x64.lock.json` records all four exact releases
+from official publisher metadata. Use it for repeatable installation without
+resolving metadata again:
+
+```powershell
+node re.js setup plan --lock config/native-windows-x64.lock.json --json
+node re.js setup install --lock config/native-windows-x64.lock.json --json
+```
+
+`resolve` returns a regular toolchain lock; optional `--out` exclusively publishes
+a fresh UTF8 JSON file and refuses an existing file or managed engine/runtime/
+workspace/cache destination. It does not install archives. `plan` returns the
+resolved lock and offline package plan without writing. Both operations access
+publisher metadata unless supplied `--lock`. No latest release selection, guessed
+dated filenames or invented hashes are permitted. Missing published checksum,
+missing exact version or ambiguous assets fail resolution; supply a reviewed
+existing `--lock` rather than weakening identity checks.
+
+`install` resolves every selected source before downloading or staging engines.
+It uses the existing all-selected-package transaction below. `status` reads the
+committed receipt and local version metadata without writes. Existing files or
+matching version text do not establish installation success; absent or changed
+receipts remain unknown or unverified.
+
+```powershell
+node re.js setup plan --lock config/my-toolchain.lock.json --json
+node re.js setup install --lock config/my-toolchain.lock.json --cache D:\RetkPackages --json
+# Equivalent explicit native PowerShell selection:
+.\install-re-toolkit.ps1 -All -NativeOnly -Plan
+.\install-re-toolkit.ps1 -All -NativeOnly
+```
+
+`--lock` avoids metadata networking and defines the entire package selection, so
+it cannot be mixed with selection/version flags. Planning stays offline. A full
+verified cache makes installation download-free; missing entries download only
+the exact locked sources. All commands accept `--root <toolkit>`.
+
+The adapter with no flags delegates read-only `setup status`. `-All` alone, or
+Node `--all` without `--native-only`, rejects GUI Python, GhidraMCP GUI extension
+and global .NET requirements before metadata downloads or engine writes. Those
+components are never silently skipped or reported complete. `-InstallRuntime`
+also requests GUI Python and is blocked; use `-InstallGhidra` (includes JDK) or
+`setup install --components jdk,ghidra` for native Java/Ghidra. Dedicated
+`-InstallGhidraMcp` and `-InstallDotNetRuntime` likewise require separate profiles.
+Custom legacy endpoints and irrelevant explicit versions are rejected.
+
+Exact `-LockedManifest` and `-PythonManifest` routes remain available; the latter
+supports the MCP CLI Python generation only. Neither implies GUI Python,
+extension or global .NET setup. The adapter has no raw PowerShell download,
+installer fallback, broad Temp cleanup or global environment changes.
 
 ## Plan, install and verify
 
@@ -17,7 +85,7 @@ node re.js toolchain verify --json
 .\install-re-toolkit.ps1 -LockedManifest config/my-toolchain.lock.json -PackageCache D:\RetkPackages
 ```
 
-`plan` validates without network or writes. `install` explicitly downloads missing
+`toolchain plan` validates without network or writes. `install` explicitly downloads missing
 archives; the cache uses `<sha256>.zip` and is revalidated. A valid prepopulated
 cache enables installation without downloads. `verify` reads the last committed
 receipt and compares every recorded file's SHA256/size with the exact inventory.
@@ -26,10 +94,25 @@ installed through this path. Changed/missing/extra files also cause exit1.
 Each receipt covers only the packages selected in its lock, leaving other tools
 untouched and unclaimed. These commands accept `--root <toolkit>`.
 
-Locked and legacy operation/version flags cannot be combined. The locked branch
-delegates before any legacy temp sweep or setup action. Existing `-All` and other
-legacy latest-based modes retain their behavior and do not gain this transaction
-guarantee. No system PATH, registry or .NET installation is changed by locked mode.
+Locked and other operation/version flags cannot be combined. Both manifest
+branches delegate directly to Node after validation. No system PATH, registry or
+.NET installation is changed by this setup path.
+
+## Bounded downloads
+
+Archive downloads use bounded HTTPS redirects and verify the complete SHA256 and
+size before publication. Transient network failures, HTTP408/429 and server
+errors have bounded retries. A transfer can resume with Range within its current
+invocation using an exclusively owned temporary file; Content-Range must match
+the exact offset and total. A server returning200 restarts the private transfer.
+Unsafe responses and identity failures are terminal. There is no persistent
+partial cache, cross-run download resume, or force recovery that bypasses gates.
+Progress is sent to stderr so JSON stdout remains parseable.
+
+AssetRipper installation records a `.retk-version` marker from the locked package
+version and includes it in the inventory and patch journal. This supports the
+existing runtime adapter; it is version provenance from the lock, not an
+independent binary version or execution probe.
 
 ## Write a real archive lock
 
@@ -79,7 +162,8 @@ Il2CppDumper receives the repo's `ghidra.py` and `ghidra_with_struct.py` templat
 with their hashes recorded. Its config is normalized to `RequireAnyKey=false` and
 `GenerateScript=true`, preserving other keys. AssetRipper's GUI.Free executable
 is copied to the expected `AssetRipper.exe` alias when needed. The installed file
-inventory includes all these derived bytes; the journal records their patches.
+inventory includes these derived bytes and the pinned `.retk-version` marker;
+the journal records their patches.
 Version strings for Dumper/AssetRipper are declared by the lock and bound to its
 archive digest, not independently attested by executing the vendor program.
 
@@ -161,6 +245,16 @@ backup, then cleans up. It executes no vendor binary and downloads nothing;
 Windows process inspection permissions are required. Unit tests substitute
 external process/network observations while exercising real files and ZIPs.
 
-No existing installed engine was replaced during implementation. Real vendor-set
+The setup tests use bounded fake Node commands, source-owned ZIPs and simulated
+metadata/network responses. They check delegation, exact release selection,
+retry/Range behavior and rollback; they do not establish real vendor download or
+runtime correctness. The separate opt-in `npm run test:setup-download` downloads
+the shipped vendor lock into a new `.cache/setup-vendor-acceptance/<id>` toolkit,
+uses a dedicated archive cache, verifies all installed inventories, and records
+available reference-engine sentinel hashes before and after. It requires at least
+5 GiB free and retains archives and installation evidence; no vendor binary runs.
+The 2026-10-20 run passed for JDK21.0.11, Ghidra12.1.2, Dumper6.7.48 and
+AssetRipper1.3.14. See [scope and results](superpowers/specs/2026-10-20-node-setup-verification.md).
+No existing installed engine was replaced during implementation. Real vendor execution/set
 compatibility, a real vendor Python/MCP lock qualification, a real ps2exe/GUI build, hosted CI,
 authorized IL2CPP builds and live Jev remain separate qualification work.

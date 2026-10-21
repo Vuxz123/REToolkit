@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {WINDOWS_SITE_SCRIPT} from './windows-site.js';
 
 const MAX_OUTPUT=1024*1024;
 const ENTRY_POINT='bridge_mcp_ghidra.cli:main';
@@ -21,9 +22,10 @@ sys.argv = ['pip'] + sys.argv[3:]
 runpy.run_module('pip', run_name='__main__')
 `;
 const PROBE_SCRIPT=`# RETK_PYTHON_PROBE
-import sys, json, struct, re, importlib.metadata as metadata
-site = sys.argv[1]
-sys.path.insert(0, site)
+${WINDOWS_SITE_SCRIPT}
+import json, struct
+if _retk_pywin32:
+    import pywintypes, win32api, win32event
 distributions = list(metadata.distributions(path=[site]))
 canonical = lambda value: re.sub(r'[-_.]+', '-', value).lower()
 found = [{'name': canonical(d.metadata['Name']), 'version': d.version} for d in distributions]
@@ -38,8 +40,8 @@ if not callable(main) or entries[0].load() is not main:
     raise RuntimeError('bridge entry is not callable')
 print(json.dumps({'pythonVersion': '.'.join(map(str, sys.version_info[:3])), 'bits': struct.calcsize('P') * 8, 'implementation': sys.implementation.name, 'distributions': sorted(found, key=lambda d: d['name']), 'entryPoint': 'bridge_mcp_ghidra.cli:main'}))
 `;
-const MCP_SCRIPT=`import sys
-sys.path.insert(0, sys.argv[1])
+const MCP_SCRIPT=`# RETK_PYTHON_MCP
+${WINDOWS_SITE_SCRIPT}
 sys.argv = ['bridge-mcp-ghidra'] + sys.argv[2:]
 from bridge_mcp_ghidra.cli import main
 raise SystemExit(main())

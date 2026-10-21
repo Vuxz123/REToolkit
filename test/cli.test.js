@@ -12,6 +12,13 @@ test('CLI help and doctor JSON are readable and report task readiness',()=>{
   assert.ok([0,1].includes(doctor.status));if(doctor.status===1)assert.equal(report.readiness,'blocked');
   assert.equal(report.checks.dumper.exists,fs.existsSync(report.checks.dumper.path));
 });
+test('CLI exposes package version and documents the installed command',()=>{
+  const version=JSON.parse(fs.readFileSync('package.json','utf8')).version;
+  for(const flag of ['--version','-v']){const result=invoke(flag);assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),version);}
+  assert.notEqual(invoke('--version','extra').status,0);
+  assert.match(invoke('--help').stdout,/retk doctor/);
+  assert.match(JSON.parse(fs.readFileSync('package.json','utf8')).scripts['cli:install'],/^npm link --offline --ignore-scripts --no-audit --no-fund$/);
+});
 test('CLI rejects unknown/missing/extra arguments before creating a workspace',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-cli-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   for(const args of [['flow','Game'],['scan','Game','missing','--binary'],['init','Game','extra'],['doctor','extra'],['init','Game','--typo']]) {

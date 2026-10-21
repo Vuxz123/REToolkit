@@ -1,0 +1,51 @@
+{
+  "kind": "retoolkit-toolchain-lock",
+  "schemaVersion": 1,
+  "platform": "win32-x64",
+  "packages": [
+    {
+      "id": "jdk",
+      "version": "21.0.11",
+      "source": {
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip",
+        "sha256": "d3625e7cadf23787ea540229544b6e2ab494b3b54da1801879e583e1dfee0a64",
+        "size": 205073954,
+        "verification": "publisher-checksum"
+      },
+      "archiveRoot": "jdk-21.0.11+10"
+    },
+    {
+      "id": "ghidra",
+      "version": "12.1.2",
+      "source": {
+        "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip",
+        "sha256": "b62e81a0390618466c019c60d8c2f796ced2509c4c1aea4a37644a77272cf99d",
+        "size": 572803866,
+        "verification": "publisher-checksum"
+      },
+      "archiveRoot": "ghidra_12.1.2_PUBLIC"
+    },
+    {
+      "id": "dumper",
+      "version": "6.7.48",
+      "source": {
+        "url": "https://github.com/wklin8607/Il2CppDumper/releases/download/Il2CppDumper/Il2CppDumper-v6.7.48-net8.0.zip",
+        "sha256": "769a71804537a8fdce0bbdfb25a080d99f8dde78f6557c4540ddc1ba8f3912ff",
+        "size": 410887,
+        "verification": "publisher-checksum"
+      },
+      "archiveRoot": ""
+    },
+    {
+      "id": "assetripper",
+      "version": "1.3.14",
+      "source": {
+        "url": "https://github.com/AssetRipper/AssetRipper/releases/download/1.3.14/AssetRipper_win_x64.zip",
+        "sha256": "808cddf66dd0357ad6b36b97de3a2aef5e3552e63af3ee0610f9a03a0378101c",
+        "size": 41695535,
+        "verification": "publisher-checksum"
+      },
+      "archiveRoot": ""
+    }
+  ]
+}

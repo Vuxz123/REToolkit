@@ -60,7 +60,13 @@ Limits: lock1MiB; at most256 dependency wheels; aggregate source/expanded data8G
 aggregate ZIP entries100,000; paths64 components/32,768 characters; path/inventory
 metadata128MiB; wheel metadata files1MiB. ZIP path/link/case/CRC checks run before
 Python. Wheel startup hooks (`.pth`, `sitecustomize.py`, `usercustomize.py`) are
-rejected. Sources must supply a nonempty `python.exe` and no `pyvenv.cfg`.
+rejected except the exact inert root `pywin32.pth` in the reviewed pywin32 312
+CPython312 x64 wheel. Its bytes must match the known upstream file; Python never
+evaluates it. A fixed adapter adds only the selected site's win32 directories and
+retains its local DLL-directory handle. The pre-activation probe imports
+`pywintypes`, `win32api` and `win32event` to check native dependency loading.
+Other pywin32 versions/layouts remain unsupported. Sources must supply a nonempty
+`python.exe` and no `pyvenv.cfg`.
 
 ## Build, selection and launch
 
@@ -115,5 +121,23 @@ archive attacks, source/interpreter tamper, pointer rollback, launch and diagnos
 isolation. `npm run test:python-runtime` additionally copies an installed CPython
 to Temp and uses its bundled pinned pip wheel plus source-owned bridge/dependency
 wheels with networking refused. It never activates the production profile.
-Real vendor wheels, extension compatibility, live GUI behavior and a publisher
-checksum-backed release lock still require separate qualification.
+An explicit offline vendor check is available after preparing a reviewed lock,
+its checksum cache and the matching extension ZIP:
+
+```powershell
+npm run test:vendor-mcp -- <python-lock.json> <cache> <GhidraMCP.zip> <installed-ghidra>
+```
+
+It creates a private Temp toolkit, refuses downloads, installs the real locked
+wheels, checks extension metadata/JAR layout against the bridge and installed
+Ghidra, and performs only MCP initialization and paginated tools listing. The
+bridge uses private discovery/user directories. It makes no tool calls or target
+queries, and verifies the sealed runtime again after actual child close. Failed
+checks retain private diagnostics; uncertain close retains ownership. Stdout and
+discarded stderr share a4MiB bound; every frame/page/deadline is bounded too.
+
+The local CPython3.12.10/pip25.0.1/bridge6.0.0/pywin32312 set passed real offline
+installation and stdio qualification with35 distributions; extension metadata
+matched Ghidra12.1.2. This establishes CLI behavior and static metadata agreement.
+Plugin activation and live GUI compatibility remain unqualified. See
+[qualification evidence](superpowers/specs/2026-10-20-vendor-mcp-qualification-verification.md).

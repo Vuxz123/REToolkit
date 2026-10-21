@@ -1,0 +1,60 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createToolkit} from '../src/toolkit.js';
+import {createHash} from 'node:crypto';
+import {fixture} from './reconstruction-fixture.js';
+import {selectedAssetBinding} from '../src/assets/context.js';
+import {indexUnityProject} from '../src/assets/graph.js';
+import {pipeline} from 'node:stream/promises';
+import yazl from 'yazl';
+import {readLibraryConfig,addLibraryRoot,runLibraryOperation} from '../src/libraries/service.js';
+test('empty roots are unconfigured and adding roots preserves configured policy',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-library-service-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const toolkit=createToolkit(root,{log:()=>{}});assert.deepEqual(readLibraryConfig(toolkit).libraryRoots,[]);
+ assert.equal((await runLibraryOperation(toolkit,null,'libraries.scan')).state,'unconfigured');
+ const archives=path.join(root,'archives');fs.mkdirSync(archives);addLibraryRoot(toolkit,archives);addLibraryRoot(toolkit,archives);
+ assert.deepEqual(readLibraryConfig(toolkit).libraryRoots,[archives]);assert.equal(readLibraryConfig(toolkit).libraryImportPolicy,'auto-staging-on-unique-match');
+ await assert.rejects(runLibraryOperation(toolkit,null,'libraries.list'),/scan|catalog|stale/i);
+ await runLibraryOperation(toolkit,null,'libraries.scan');assert.deepEqual((await runLibraryOperation(toolkit,null,'libraries.list')).items,[]);
+ await assert.rejects(runLibraryOperation(toolkit,null,'shell.exec'),/operation/);
+});
+test('rehashing forged catalog metadata cannot authorize Editor execution',async t=>{
+ const f=await fixture(t),toolkit=createToolkit(f.root,{log:()=>{}});await toolkit.init('Game');const workspace=toolkit.workspace('Game'),input=path.join(workspace,'01_Extracted');
+ fs.writeFileSync(path.join(input,'GameAssembly.dll'),'native');fs.writeFileSync(path.join(input,'global-metadata.dat'),'metadata');await toolkit.scan('Game',input);
+ fs.cpSync(f.projectDir,path.join(workspace,'05_ReconstructedSource'),{recursive:true});
+ const roots=path.join(f.root,'libraries');fs.mkdirSync(roots);const zip=new yazl.ZipFile();zip.addBuffer(Buffer.from('{"name":"com.retk.fixture","version":"1.2.3"}'),'package.json');zip.end();await pipeline(zip.outputStream,fs.createWriteStream(path.join(roots,'fixture.zip')));
+ addLibraryRoot(toolkit,roots);await runLibraryOperation(toolkit,null,'libraries.scan');
+ const file=path.join(f.root,'.cache/libraries/catalog.json'),value=JSON.parse(fs.readFileSync(file));value.packages[0].identity.types=['Invented.Type'];delete value.revision;value.revision=createHash('sha256').update(JSON.stringify(value)).digest('hex');fs.writeFileSync(file,JSON.stringify(value));
+ const plan=await runLibraryOperation(toolkit,'Game','libraries.plan',{requirements:{kind:'retoolkit-library-requirements',schemaVersion:1,packages:[{id:'com.retk.fixture',version:'1.2.3'}]}});assert.equal(plan.state,'ready');
+ const saved=JSON.parse(fs.readFileSync(path.join(workspace,plan.storedPlan),'utf8'));assert.equal(saved.graph,undefined);assert.equal(saved.graphSnapshot.revision,plan.graphRevision);assert.match(saved.graphSnapshot.inventorySha256,/^[a-f0-9]{64}$/);
+ await assert.rejects(runLibraryOperation(toolkit,'Game','libraries.import',{operationId:plan.operationId}),{code:'library_catalog_stale'});
+ assert.equal(fs.existsSync(path.join(workspace,'04_Notes/assets/library-imports',plan.operationId)),false);assert.equal(fs.existsSync(path.join(workspace,'.retk-lock')),false);
+});
+test('identification pages compact candidates and installed entries without serializing their inventories',async t=>{
+ const f=await fixture(t),toolkit=createToolkit(f.root,{log:()=>{}});await toolkit.init('Game');const workspace=toolkit.workspace('Game'),input=path.join(workspace,'01_Extracted');
+ fs.writeFileSync(path.join(input,'GameAssembly.dll'),'native');fs.writeFileSync(path.join(input,'global-metadata.dat'),'metadata');await toolkit.scan('Game',input);
+ const project=path.join(workspace,'05_ReconstructedSource');fs.cpSync(f.projectDir,project,{recursive:true});
+ fs.mkdirSync(path.join(project,'Packages'));fs.writeFileSync(path.join(project,'Packages/manifest.json'),JSON.stringify({dependencies:{'com.retk.need':'1.2.3'}}));
+ const graph=await indexUnityProject(project,{binding:selectedAssetBinding(toolkit,'Game').binding});
+ const common={version:'1.2.3',format:'assets',root:'Assets',identity:{packageId:null,assemblies:[],namespaces:[],types:[]},dependencies:{},compatibility:{},guidInventory:[],limitations:[],archiveSha256:'a'.repeat(64),archivePath:path.join(f.root,'unused.zip')};
+ const packages=[{...common,id:'b'.repeat(64),libraryId:'com.retk.need',recognition:'candidate',payloadFiles:Array.from({length:20000},(_,i)=>({path:'Assets/'+i+'.txt',size:0,sha256:'a'.repeat(64)})),evidence:[]}];
+ for(let i=0;i<3;i++)packages.push({...common,id:String(i).repeat(64),libraryId:'com.retk.installed'+i,recognition:'confirmed',payloadFiles:graph.files.filter(file=>file.path.startsWith('Assets/')),evidence:[{kind:'huge',value:'x'.repeat(1024**2)}]});
+ const catalog={kind:'retoolkit-library-catalog',schemaVersion:1,state:'indexed',roots:[],archives:[],packages,limitations:[]};catalog.revision=createHash('sha256').update(JSON.stringify(catalog)).digest('hex');
+ const file=path.join(f.root,'.cache/libraries/catalog.json');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(catalog));
+ const candidate=await runLibraryOperation(toolkit,'Game','libraries.identify',{limit:1});assert.equal(candidate.items.length,1);assert.equal(candidate.items[0].payloadFileCount,20000);assert(!('payloadFiles'in candidate.items[0]));assert(Buffer.byteLength(JSON.stringify(candidate))<16000);
+ const first=await runLibraryOperation(toolkit,'Game','libraries.identify',{section:'installed',limit:1});assert.equal(first.items.length,1);assert.equal(first.counts.installed,3);assert(first.nextCursor);
+ const next=await runLibraryOperation(toolkit,'Game','libraries.identify',{section:'installed',limit:1,cursor:first.nextCursor});assert.notEqual(next.items[0].id,first.items[0].id);
+ await assert.rejects(runLibraryOperation(toolkit,'Game','libraries.identify',{section:'candidates',cursor:first.nextCursor}),{code:'library_cursor_invalid'});
+ const requirements=await runLibraryOperation(toolkit,'Game','libraries.identify',{section:'requirements'});assert.equal(requirements.items[0].source,'project-manifest');assert.equal(requirements.items[0].id,'com.retk.need');
+});
+test('root insertion order cannot make a freshly scanned catalog stale; changed bytes do',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-library-service-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const toolkit=createToolkit(root,{log:()=>{}});
+ for(const name of ['z-libs','a-libs']){const dir=path.join(root,name);fs.mkdirSync(dir);addLibraryRoot(toolkit,dir);}
+ await runLibraryOperation(toolkit,null,'libraries.scan');assert.equal((await runLibraryOperation(toolkit,null,'libraries.list')).state,'indexed');
+ const file=path.join(root,'.cache/libraries/catalog.json'),catalog=JSON.parse(fs.readFileSync(file));catalog.limitations=[];fs.writeFileSync(file,JSON.stringify(catalog));
+ await assert.rejects(runLibraryOperation(toolkit,null,'libraries.list'),{code:'library_catalog_stale'});
+});

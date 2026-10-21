@@ -23,3 +23,7 @@ REToolkit-GUI.exe
 REToolkit-GUI.exe.provenance.json
 node_modules/
 .worktrees/
+.retk-libraries.json
+
+# Local Jev settings (environment reference only)
+/config/jev.json

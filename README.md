@@ -1,43 +1,109 @@
 # REToolkit
 
+AssetRipper AI access and controlled Unity stub reconstruction are available in
+the JavaScript CLI: `retk assets --help` and
+`retk reconstruct --help`. See [the workflow and MCP setup](docs/assetripper-ai.md).
+Reconstructed exports can now be [validated in an isolated Unity staging project](docs/unity-validation.md)
+with `retk reconstruct validate <Game>`.
+Local library ZIPs can be [cataloged, planned and imported into staging](docs/libraries.md)
+with `retk libraries --help`; library roots start empty.
+
 REToolkit prepares Unity IL2CPP Android builds for Ghidra. Query an imported
 project through the persistent headless Java bridge, or use GhidraMCP with the
 live Ghidra/PyGhidra GUI. The recommended
-command line is JavaScript: `node re.js <command>` (or `re.cmd <command>` on
-Windows). Node.js 24 or newer is required.
+command line is `retk <command>`, registered through npm after installing
+Node.js 24+. Direct `node re.js <command>` and `re.cmd <command>` also work.
 
-The workspace pipeline is native JavaScript. The existing PowerShell installer,
-GUI, and selected tool adapters remain available while the CLI migration comes
-first. The GUI still uses the legacy PowerShell pipeline; it does not yet expose
-the JavaScript CLI's complete state and resume behavior.
+The workspace pipeline, native setup, Ghidra/PyGhidra launch and Electron desktop
+use JavaScript. Run `npm run gui:install`, then `retk gui` for the desktop.
+The PowerShell installer remains a thin Node adapter; the previous Windows GUI
+is retained as legacy. See [desktop, runtime, visual and migration setup](docs/desktop.md).
+Jev now has a local configuration file and a **Settings · Jev** screen; see
+[Jev configuration](docs/jev-settings.md).
 
 Use builds you are allowed to inspect. Do not bypass DRM, anti-cheat,
 payment/licensing, or redistribute source/assets you do not own.
 
 ## Start
 
-Install Node.js 24+, then install the toolkit-local engines and runtimes:
+Install Node.js 24+, open CMD in this REToolkit checkout and register the command:
 
-```powershell
+```cmd
 npm ci
-.\install-re-toolkit.ps1 -All
-node .\re.js doctor
-node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --no-open
-node .\re.js status FoodHunt
-node .\re.js open FoodHunt
+npm run cli:install
+retk --version
+retk --help
 ```
 
-The installer remains PowerShell and installs JDK, Python, .NET, Ghidra,
-Il2CppDumper, GhidraMCP and AssetRipper. JavaScript does not replace these
-engines. Runtime files stay under `runtime/` and `tools/`; do not change global
-Python, Java or PATH to work around a missing toolkit runtime.
+`cli:install` uses [npm link](https://docs.npmjs.com/cli/v11/commands/npm-link/)
+to register `retk`/`retk.cmd` in npm's global prefix. You can then run `retk`
+from any CMD directory; engines and workspaces stay in this linked checkout.
+Keep the checkout at its current path, or rerun registration after moving it.
+No npm registry publication or engine download happens during registration.
+This project has not been published as a public npm package by this workflow;
+install from this checkout rather than an unverified registry name.
+
+If CMD cannot find `retk`, run `npm prefix -g` and check that directory is on
+your user PATH, then open a new CMD. Registration does not edit PATH itself.
+To unregister the command, run `npm unlink --global retoolkit --ignore-scripts`;
+the source checkout and its workspace data stay in place.
+
+Then plan and install the four toolkit-local native engines:
+
+```cmd
+retk setup plan --lock config/native-windows-x64.lock.json --json
+retk setup install --lock config/native-windows-x64.lock.json --json
+retk doctor
+retk flow FoodHunt "D:\Builds\FoodHunt.apk" --no-open
+retk status FoodHunt
+retk open FoodHunt
+```
+
+Relative build, lock and output paths resolve from the current CMD directory.
+For a command run elsewhere, pass absolute paths or use metadata-based native
+setup: `retk setup install --all --native-only --json`.
+
+This first setup stage covers JDK21, Ghidra, Il2CppDumper and AssetRipper ZIPs.
+Exact defaults are JDK 21.0.11, Ghidra 12.1.2, Dumper 6.7.48 net8.0 and
+AssetRipper 1.3.14; Ghidra selection includes JDK. `setup resolve` emits a lock,
+`setup plan` resolves metadata without writing, `setup install` uses the existing
+staged transaction, and `setup status` reads the receipt and version metadata.
+Resolution uses publisher release metadata and fails if the exact asset lacks a
+published checksum. The shipped [native Windows x64 lock](config/native-windows-x64.lock.json)
+records these four exact releases and their publisher checksums. To resolve other
+exact versions, use `--components` and the matching `--*-version` options. For a
+separate reviewed lock:
+
+```powershell
+retk setup plan --lock config/my-toolchain.lock.json --json
+retk setup install --lock config/my-toolchain.lock.json --cache D:\RetkPackages --json
+retk setup status --json
+```
+
+`--lock` skips metadata networking; planning is offline and installation uses a
+verified prepopulated cache without downloads. Missing cache entries download
+only the locked archives. Metadata-based `resolve` and `plan` do access the
+network. `resolve --out <fresh.json>` writes a new lock without overwriting one.
+Downloads have bounded retries and Range resumption within the same invocation;
+there is no cross-run partial-download resume. Progress goes to stderr.
+
+The equivalent Windows PowerShell 5.1 adapter is
+`.\install-re-toolkit.ps1 -All -NativeOnly`; with no flags it reads status.
+`-All` without `-NativeOnly` fails before metadata downloads or engine writes
+because GUI Python, GhidraMCP extensions and global .NET need separate reviewed
+profiles. `-InstallRuntime` also requests GUI Python and is blocked for the same
+reason. Use `-InstallGhidra` (includes JDK) or
+`retk setup install --components jdk,ghidra` for native Java/Ghidra setup.
+GUI Python, extension and global .NET installation have not been ported. Runtime
+files stay under `runtime/` and `tools/`; do not change global Python, Java or PATH
+to work around a missing toolkit runtime.
 
 For reviewed archive versions, use the new locked installation path:
 
 ```powershell
-node re.js toolchain plan config/my-toolchain.lock.json --json
-node re.js toolchain install config/my-toolchain.lock.json --cache D:\RetkPackages --json
-node re.js toolchain verify --json
+retk toolchain plan config/my-toolchain.lock.json --json
+retk toolchain install config/my-toolchain.lock.json --cache D:\RetkPackages --json
+retk toolchain verify --json
 ```
 
 It verifies SHA256/size, stages all selected packages, refuses busy engines,
@@ -46,26 +112,35 @@ Ghidra, Il2CppDumper and AssetRipper. The separate `python-runtime` lock install
 CPython 3.12 x64 and all MCP wheels into an immutable generation:
 
 ```powershell
-node re.js python-runtime plan config/my-python.lock.json --json
-node re.js python-runtime install config/my-python.lock.json --cache D:\RetkPackages --json
-node re.js python-runtime verify --json
+retk python-runtime plan config/my-python.lock.json --json
+retk python-runtime install config/my-python.lock.json --cache D:\RetkPackages --json
+retk python-runtime verify --json
 ```
 
 Python installation executes the reviewed locked interpreter/pip locally and uses
 offline wheels with exact hashes. MCP verifies the selected file inventory before
-launch; no selection retains the legacy bridge. GUI Python, extensions and .NET
-still use separate setup. See [Python/MCP locks](docs/python-runtime.md).
+launch; no selection retains the legacy bridge. `-PythonManifest` preserves this
+MCP CLI route in the adapter, and `-LockedManifest` preserves the native lock
+route. These routes cannot be mixed with native selection/version flags. Neither
+installs GUI Python, extensions or .NET. See [Python/MCP locks](docs/python-runtime.md).
 
-The lock must contain actual release URLs and checksums; no default vendor lock
-is implied. See [toolchain and release checks](docs/toolchain-and-release.md).
+Windows MCP dependencies now include a narrow adapter for the reviewed
+pywin32312 CPython312 x64 wheel. `npm run test:vendor-mcp -- <lock> <cache>
+<extension.zip> <ghidra>` checks offline installation, MCP transport and extension
+metadata in Temp. The locally tested bridge6.0.0 set passes CLI qualification;
+GUI/plugin activation remains a separate check.
+
+Locks must contain actual release URLs and checksums. The shipped native lock
+covers four engine ZIPs; Python/MCP uses its separate wheel lock. See
+[toolchain and release checks](docs/toolchain-and-release.md).
 
 `flow` accepts APK/XAPK/AAB/ZIP files or an extracted directory. Its default
 resume behavior preserves valid work. Use `--dry-run` to inspect the plan before
 running engines, and `--no-open` to prepare without launching the GUI:
 
 ```powershell
-node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --dry-run
-node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --resume --no-open
+retk flow FoodHunt "D:\Builds\FoodHunt.apk" --dry-run
+retk flow FoodHunt "D:\Builds\FoodHunt.apk" --resume --no-open
 ```
 
 A successful flow means **prepared**, not **analysis-ready**. Import uses
@@ -78,10 +153,10 @@ before reporting analysis readiness.
 ## Diagnostics And Jev Handoff
 
 ```powershell
-node re.js doctor FoodHunt --task prepare --json
-node re.js doctor FoodHunt --task headless --json
-node re.js doctor FoodHunt --task mcp --probe --json
-node re.js status FoodHunt --json
+retk doctor FoodHunt --task prepare --json
+retk doctor FoodHunt --task headless --json
+retk doctor FoodHunt --task mcp --probe --json
+retk status FoodHunt --json
 ```
 
 Readiness is task-specific: `ready`, `available`, `unknown`, or `blocked`.
@@ -97,13 +172,13 @@ Capture narrow observations from an already-running native session, then stop
 the session before taking a portable handoff snapshot:
 
 ```powershell
-node re.js session start FoodHunt
-node re.js evidence capture FoodHunt --kind functions --selector Board --limit 20
-node re.js evidence capture FoodHunt --kind decompile --selector Board_Update --limit 100
-node re.js session stop FoodHunt
-node re.js handoff create FoodHunt --evidence exports/evidence/FoodHunt --out exports/FoodHunt.zip
-node re.js handoff verify exports/FoodHunt.zip
-node re.js jev request exports/FoodHunt.zip --questions config/jev-questions.example.json --out exports/request.json
+retk session start FoodHunt
+retk evidence capture FoodHunt --kind functions --selector Board --limit 20
+retk evidence capture FoodHunt --kind decompile --selector Board_Update --limit 100
+retk session stop FoodHunt
+retk handoff create FoodHunt --evidence exports/evidence/FoodHunt --out exports/FoodHunt.zip
+retk handoff verify exports/FoodHunt.zip
+retk jev request exports/FoodHunt.zip --questions config/jev-questions.example.json --out exports/request.json
 ```
 
 Handoff defaults to dump metadata, authored notes, and explicitly supplied
@@ -112,7 +187,7 @@ individual opt-ins. Request creation is offline and defaults to notes/evidence
 text under a 64 KiB state budget; it fails instead of truncating evidence.
 `--against <bundle>` adds a second build for questions you define in Jev.
 Inspect the generated JSON before sending it. Set `TYPESAFE_API_KEY` in your
-environment and run `node re.js jev run exports/request.json --out exports/result.json`
+environment and run `retk jev run exports/request.json --out exports/result.json`
 to submit explicitly. The adapter follows the documented
 [TypeSafe HTTP API](https://docs.typesafe.ai/api); live service acceptance has
 not been tested. See [the CLI guide](docs/diagnostics-and-jev.md) and
@@ -134,7 +209,7 @@ scan finds multiple candidates, select paths explicitly instead of accepting
 an arbitrary first match:
 
 ```powershell
-node .\re.js scan FoodHunt "D:\Builds\Extracted" --binary "D:\Builds\Extracted\lib\arm64-v8a\libil2cpp.so" --metadata "D:\Builds\Extracted\assets\bin\Data\Managed\Metadata\global-metadata.dat"
+retk scan FoodHunt "D:\Builds\Extracted" --binary "D:\Builds\Extracted\lib\arm64-v8a\libil2cpp.so" --metadata "D:\Builds\Extracted\assets\bin\Data\Managed\Metadata\global-metadata.dat"
 ```
 
 `add` and `flow` accept `--binary` / `--metadata` too. Resume checks input
@@ -150,7 +225,7 @@ creates a backup before replacing the existing project; save and close that
 project in Ghidra first. Review `--dry-run` before making this choice:
 
 ```powershell
-node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --reimport --no-open
+retk flow FoodHunt "D:\Builds\FoodHunt.apk" --reimport --no-open
 ```
 
 GUI analysis and manual symbols remain awaiting user action or unknown until verified.
@@ -163,10 +238,10 @@ the default; queries reuse one JVM, loaded Program and decompiler. Session start
 does not import or run Auto Analysis.
 
 ```powershell
-node re.js session start FoodHunt
-node re.js function list FoodHunt --query Board --limit 50
-node re.js decompile FoodHunt 0x123456 --json
-node re.js session stop FoodHunt
+retk session start FoodHunt
+retk function list FoodHunt --query Board --limit 50
+retk decompile FoodHunt 0x123456 --json
+retk session stop FoodHunt
 ```
 
 Editing requires an explicitly started write session. A verified full project
@@ -174,14 +249,14 @@ backup precedes launch. Each data-changing operation creates a packed `.gzf`
 snapshot and saves its transaction before returning success.
 
 ```powershell
-node re.js session start FoodHunt --write
-node re.js function rename FoodHunt 0x123456 Board_Update --dry-run
-node re.js function rename FoodHunt 0x123456 Board_Update
-node re.js comment set FoodHunt 0x123456 --type plate --text "Update board state"
-node re.js symbols plan FoodHunt --address-mode rva
-node re.js symbols apply FoodHunt --plan "<plan path returned above>"
-node re.js session stop FoodHunt
-node re.js open FoodHunt
+retk session start FoodHunt --write
+retk function rename FoodHunt 0x123456 Board_Update --dry-run
+retk function rename FoodHunt 0x123456 Board_Update
+retk comment set FoodHunt 0x123456 --type plate --text "Update board state"
+retk symbols plan FoodHunt --address-mode rva
+retk symbols apply FoodHunt --plan "<plan path returned above>"
+retk session stop FoodHunt
+retk open FoodHunt
 ```
 
 Plans require verified current dump outputs. Choose address mode explicitly:
@@ -191,19 +266,20 @@ plan uses `--replace-user-names`; managed comments preserve surrounding text.
 Function creation needs `--create-functions` and a verified instruction.
 Partial coverage does not set symbolsApplied. Full C types/signatures are outside v1.
 
-Use `node re.js session start --help` for bridge commands and
+Use `retk session start --help` for bridge commands and
 [the bridge guide](docs/ghidra-bridge.md) for retry/recovery and limits.
 This is experimental v1. Qualification uses source-owned fixtures, not every IL2CPP build. ARM/Thumb
 symbol mapping is currently unqualified; use the retained GUI path there.
 
 ## Commands
 
-Run `node re.js help` for current argument details. `re.cmd` is a Windows
+Run `retk help` for current argument details. `re.cmd` is a Windows
 convenience wrapper for the same JavaScript entry point.
 
 | Command | Purpose |
 |---|---|
 | `doctor` | Check toolkit runtime and engine paths. |
+| `setup resolve / plan / install / status` | Resolve exact native releases, inspect/install a lock, or read installed receipt state. |
 | `init <GameName>` | Create a workspace. |
 | `scan <GameName> <directory>` | Locate/select native binary and metadata. |
 | `add <GameName> <archive>` | Extract the build and scan it. |
@@ -218,6 +294,7 @@ convenience wrapper for the same JavaScript entry point.
 | `export <GameName> [file.re]` | Export a workspace ZIP using the `.re` extension. |
 | `import <file.re> [GameName] [--force]` | Restore a workspace archive and rebase paths. |
 | `mcp` | Start the Python GhidraMCP bridge directly from JavaScript over stdio. |
+| `libraries <operation>` | Catalog local Unity library ZIPs, resolve requirements and verify staging imports. |
 
 `flow` supports `--resume`, `--dry-run`, `--no-open`, `--binary`, `--metadata`
 and `--reimport`. Import into an occupied Ghidra project also requires deliberate
@@ -226,18 +303,31 @@ explicitly supplied; replacement creates a backup first. Preserve that backup
 until the restored workspace has been checked.
 
 ```powershell
-node .\re.js export FoodHunt
-node .\re.js import .\exports\FoodHunt.re FoodHuntCopy
+retk export FoodHunt
+retk import .\exports\FoodHunt.re FoodHuntCopy
 ```
 
 The following compatibility commands temporarily invoke a legacy PowerShell
 adapter: `ghidra-gui`, `pyghidra-gui`, `il2cppdumper`, `assetripper`
-(`asset-ripper`), `assetripper-cli`, and `pull-ldplayer`. They require Windows
-PowerShell 5.1. LDPlayer remains interactive and needs an authorized running
-instance. AssetRipper exports do not establish that original source was recovered.
+(`asset-ripper`), and `assetripper-cli`. They require Windows
+PowerShell 5.1. AssetRipper exports do not establish that original source was recovered.
 `open` and the optional GUI handoff at the end of `flow` use the retained
 PyGhidra launcher adapter too.
 Core workspace/state/scan/archive/flow operations do not fall back to PowerShell.
+
+ADB discovery and LDPlayer capture are native JavaScript:
+
+```powershell
+retk adb devices --adb C:\LDPlayer\LDPlayer9\adb.exe --json
+retk pull-ldplayer FoodHunt com.example.game --serial emulator-5554 --skip-launch --json
+```
+
+Use `--adb <adb.exe>` if ADB is not on PATH or in a known LDPlayer location.
+An explicit serial is required when several devices are ready. Capture keeps
+base/split APKs and OBBs, checks remote/local sizes and records SHA256 before
+importing through the Node pipeline. Without `--skip-launch`, an interactive
+terminal launches the game and waits for Enter after its downloads finish.
+JSON/Agent calls require `--skip-launch`. See [ADB capture and recovery](docs/adb-capture.md).
 
 ## Ghidra And MCP Handoff
 
@@ -314,6 +404,15 @@ keep Windows PowerShell 5.1 compatibility when changing the retained adapters.
 Tests using disposable files or fake engine processes check orchestration and
 state, not Ghidra/Il2CppDumper correctness. GUI helper/source tests do not test
 a live WinForms wizard.
+
+`npm run test:setup-download` explicitly downloads the four locked native ZIPs
+into an isolated `.cache` toolkit and verifies installed inventories. It requires
+at least 5 GiB free, retains its evidence, and executes no vendor binary. See
+[native setup verification](docs/superpowers/specs/2026-10-20-node-setup-verification.md).
+
+`npm run test:adb` compiles and runs a source-owned fake ADB executable against
+owned base/split/OBB ZIPs. It checks the actual CLI, supervised child processes,
+leases and partial-pull preservation without connecting to a device or emulator.
 
 Real-engine acceptance must separately cover a fresh authorized build, an
 existing analyzed workspace, `.re` transfer/reopen and a verified MCP query.

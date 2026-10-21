@@ -1,0 +1,7 @@
+{
+  "kind": "retoolkit-jev-settings",
+  "schemaVersion": 1,
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "model": "jev-latest",
+  "apiKeyEnv": "TYPESAFE_API_KEY"
+}

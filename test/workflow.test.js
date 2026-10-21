@@ -40,9 +40,13 @@ function fixture(t) {
       if(post>=0&&!calls.noReceipt) fs.writeFileSync(args[post+2],JSON.stringify({sha256:args[post+3],program:args[post+4]}));
     }
     return { stdout: '', stderr: '', exitCode: 0 };
-  }, async open() { calls.open++; } });
+  }, async open() { calls.open++;assert.equal(fs.existsSync(path.join(root,'workspaces/Game/.retk-lock')),false,'flow must release preparation ownership before GUI worker claims it'); } });
   return { root, source, binary, metadata, toolkit, calls };
 }
+
+test('flow hands preparation ownership to the GUI after releasing the workspace lock',async t=>{
+ const f=fixture(t);await f.toolkit.flow('Game',f.source);assert.equal(f.calls.open,1);
+});
 
 test('legacy migration is read-only until save, backs up original, preserves unknown fields', async t => {
   const f = fixture(t); await f.toolkit.init('Legacy');

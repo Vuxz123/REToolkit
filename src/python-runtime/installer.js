@@ -7,6 +7,7 @@ import {TARGETS,MAX_METADATA_BYTES,JOURNAL_RESERVE_BYTES,encodeToolchainMetadata
 import {validatePythonLock,pythonLockFingerprint,validatePythonReceipt,ACTIVE_PATH,GENERATIONS_PATH,PYTHON_LIMITATIONS} from './manifest.js';
 import {snapshotPythonGeneration,verifyPythonGeneration,verifyPythonRuntime} from './verify.js';
 import {executePython as defaultExecutePython,runPythonBuild} from './runner.js';
+import {validateWindowsWheel,allowWindowsHook,validateWindowsHook} from './windows-site.js';
 
 const fail=(code,message,cause)=>{throw toolchainError(code,message,cause);};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -22,9 +23,9 @@ async function assertFinishedTransactions(root){
   }
  }
 }
-function wheelEntry({path:relative,directory,size}){
+function wheelEntry(wheel,{path:relative,directory,size}){
  if(directory)return;
- if(/(?:^|\/)(?:[^/]*\.pth|sitecustomize\.py|usercustomize\.py)$/i.test(relative))fail('PYTHON_WHEEL_INVALID','Wheel contains a forbidden Python startup hook.');
+ if(/(?:^|\/)(?:[^/]*\.pth|sitecustomize\.py|usercustomize\.py)$/i.test(relative)&&!allowWindowsHook(wheel,relative,size))fail('PYTHON_WHEEL_INVALID','Wheel contains a forbidden Python startup hook.');
  if(/(?:^|\/)[^/]+\.dist-info\//i.test(relative)&&size>1024**2)fail('PYTHON_WHEEL_INVALID','Wheel metadata exceeds 1 MiB.');
 }
 async function pythonLayout(folder){
@@ -34,7 +35,7 @@ async function pythonLayout(folder){
 }
 
 export async function installPythonRuntime(root,lock,{cache,fetchImpl=fetch,inspectProcesses,onEvent=()=>{},executePython=defaultExecutePython}={}){
- lock=validatePythonLock(lock);root=path.resolve(root);await assertNoLinks(root);cache=path.resolve(cache??path.join(root,'.cache/python-runtime/packages'));
+ lock=validatePythonLock(lock);for(const wheel of [lock.pip,...lock.wheels])validateWindowsWheel(wheel);root=path.resolve(root);await assertNoLinks(root);cache=path.resolve(cache??path.join(root,'.cache/python-runtime/packages'));
  const forbidden=[...Object.values(TARGETS),'runtime/python','workspaces','.cache/python-runtime/transactions','.cache/toolchain/transactions','.cache/toolchain/writer','.cache/toolchain/readers'];
  if(forbidden.some(relative=>within(path.join(root,relative),cache)))fail('TOOLCHAIN_PATH_UNSAFE','Package cache must be outside managed runtime/engine trees, workspaces and transaction/lease directories.');
  await assertNoLinks(cache);
@@ -61,7 +62,15 @@ export async function installPythonRuntime(root,lock,{cache,fetchImpl=fetch,insp
    // installed package paths have their final immutable generation identity.
    const pythonFolder=path.join(generation,'python');await assertNoLinks(pythonFolder);await fs.rename(pythonStage,pythonFolder);await mkdirSafe(path.join(generation,'site'));
    const wheelhouse=path.join(tx,'wheelhouse');await mkdirSafe(wheelhouse);
-   for(const wheel of [lock.pip,...lock.wheels]){const file=await capture(wheel.source,path.join(wheelhouse,wheel.filename));await event('before-wheel-preflight');await extractChecked(file,path.join(tx,'wheel-preflight',wheel.name),{budget,validateEntry:wheelEntry});}
+   for(const wheel of [lock.pip,...lock.wheels]){
+    const file=await capture(wheel.source,path.join(wheelhouse,wheel.filename)),unpackedWheel=path.join(tx,'wheel-preflight',wheel.name);await event('before-wheel-preflight');
+    await extractChecked(file,unpackedWheel,{budget,validateEntry:entry=>wheelEntry(wheel,entry)});
+    if(wheel.name==='pywin32'){
+     const hookFile=path.join(unpackedWheel,'pywin32.pth'),stat=await statOrNull(hookFile);
+     if(!stat?.isFile()||!allowWindowsHook(wheel,'pywin32.pth',stat.size))fail('PYTHON_WHEEL_INVALID','Reviewed pywin32 startup layout is missing.');
+     validateWindowsHook(wheel,'pywin32.pth',await fs.readFile(hookFile));
+    }
+   }
    await event('staged');await recheckSources();
    const requirements=path.join(tx,'requirements.txt');await durableWrite(requirements,Buffer.from(lock.wheels.map(wheel=>`${wheel.name}==${wheel.version} --hash=sha256:${wheel.source.sha256}`).join('\n')+'\n'));
    const pythonBefore=await snapshotPythonGeneration(generation);

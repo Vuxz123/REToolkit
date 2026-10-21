@@ -1,0 +1,9 @@
+import fs from 'node:fs';import path from 'node:path';import {runProcess} from '../process.js';
+const packageRoot=path.resolve(import.meta.dirname,'../..');
+export function parseDesktopArgs(argv){const result={root:packageRoot};if(argv[0]!=='gui')throw Error('Expected gui');
+ const seen=new Set();for(let i=1;i<argv.length;i++){const arg=argv[i];if(!['--root','--help','--json'].includes(arg)||seen.has(arg))throw Error('Unknown or duplicate desktop option');seen.add(arg);if(arg==='--help')result.help=true;else if(arg==='--json')result.json=true;else{const value=argv[++i];if(!value||value.startsWith('--')||/[\x00-\x1f]/.test(value))throw Error('Invalid desktop root');result.root=value;}}return result;}
+export function desktopLaunchSpec(root,node,electron){const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;return {file:electron,windowsHide:false,args:[path.join(packageRoot,'src/desktop/main.cjs'),'--toolkit-root',path.resolve(root),'--node-path',node],env};}
+export function electronExecutable(){const directory=path.join(packageRoot,'node_modules/electron'),pkg=path.join(directory,'package.json'),exe=path.join(directory,'dist/electron.exe');
+ if(!fs.existsSync(pkg)||JSON.parse(fs.readFileSync(pkg,'utf8')).version!=='44.9.1'||!fs.existsSync(exe))throw Object.assign(new Error('Electron44.9.1 runtime is missing. Run npm ci, then npm run gui:install from the toolkit checkout.'),{code:'DESKTOP_RUNTIME_MISSING'});return exe;}
+export async function runDesktopCli(argv){const options=parseDesktopArgs(argv);if(options.help){console.log('retk gui [--root <toolkit>]\nElectron desktop; close its window after active jobs have finished.');return;}
+ const spec=desktopLaunchSpec(options.root,process.execPath,electronExecutable());await runProcess(spec.file,spec.args,{cwd:packageRoot,env:spec.env,inherit:true,windowsHide:spec.windowsHide});}

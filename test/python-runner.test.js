@@ -8,6 +8,7 @@ import {syncBuiltinESMExports} from 'node:module';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {fileURLToPath} from 'node:url';
+import {WINDOWS_SITE_SCRIPT} from '../src/python-runtime/windows-site.js';
 
 const runner = await import('../src/python-runtime/runner.js').catch(() => ({}));
 const temporary = t => { const dir=fs.mkdtempSync(path.join(os.tmpdir(),'retk-python-runner-')); t.after(()=>fs.rmSync(dir,{recursive:true,force:true})); return dir; };
@@ -42,6 +43,14 @@ test('build only invokes locked offline pip then checks exact metadata and calla
   for(const flag of ['--isolated','--no-index','--no-deps','--only-binary=:all:','--require-hashes','--no-compile','--no-cache-dir','--no-input','--disable-pip-version-check']) assert.ok(args.includes(flag),flag);
   assert.equal(args[args.indexOf('--target')+1],input.site);assert.equal(args[args.indexOf('--find-links')+1],input.wheelhouse); assert.equal(args[args.indexOf('--requirement')+1],input.requirements);
   assert.ok(calls[2].args.includes('check'));assert.ok(calls[2].args.includes('--disable-pip-version-check')); assert.match(calls[3].args[4],/callable/); assert.match(calls[3].args[4],/console_scripts/);
+});
+
+test('only metadata probe and MCP launch share the fixed Windows site prefix',async t=>{
+  const calls=[];await runner.runPythonBuild(buildInput(temporary(t)),{executePython:fakePython(calls)});
+  assert.ok(calls[3].args[4].includes(WINDOWS_SITE_SCRIPT));
+  assert.ok(runner.managedMcpArgs('site')[4].includes(WINDOWS_SITE_SCRIPT));
+  for(const call of calls.slice(0,3))assert.equal(call.args[4].includes(WINDOWS_SITE_SCRIPT),false);
+  assert.match(calls[3].args[4],/import pywintypes, win32api, win32event/);
 });
 
 test('build refuses wrong Python and pinned pip before installation',async t=>{
@@ -111,6 +120,26 @@ test('fixed metadata and launch bootstraps import a callable without running it 
   fs.writeFileSync(path.join(packageDir,'cli.py'),'main = 12\n');
   const args=calls[3].args;
   await assert.rejects(runner.executePython(installedPython,args,{cwd:dir}),{code:'PYTHON_PROCESS_FAILED'});
+});
+
+test('source-owned Windows modules load during probe and launch with retained DLL scope', {skip:!installedPython},async t=>{
+  const dir=temporary(t),input=buildInput(dir);input.wheels=[...wheels,{name:'pywin32',version:'312'}];
+  for(const folder of ['bridge_mcp_ghidra','win32/lib','Pythonwin','pywin32_system32'])fs.mkdirSync(path.join(input.site,folder),{recursive:true});
+  for(const file of ['win32/win32api.pyd','win32/win32event.pyd','pywin32_system32/pythoncom312.dll','pywin32_system32/pywintypes312.dll'])fs.writeFileSync(path.join(input.site,file),'source-owned fixture');
+  fs.writeFileSync(path.join(input.site,'bridge_mcp_ghidra/__init__.py'),'');
+  fs.writeFileSync(path.join(input.site,'bridge_mcp_ghidra/cli.py'),"def main():\n    import pywintypes, win32api, win32event\n");
+  const imports=path.join(input.site,'imports.txt');
+  for(const [name,file] of [['pywintypes','win32/lib/pywintypes.py'],['win32api','win32api.py'],['win32event','win32event.py']])fs.writeFileSync(path.join(input.site,file),`import __main__, os\nassert __main__._retk_windows_dll_directory is not None\nwith open(os.path.join(__main__.site, 'imports.txt'), 'a') as stream:\n    stream.write('${name}\\n')\n`);
+  for(const wheel of input.wheels){const info=path.join(input.site,`${wheel.name.replaceAll('-','_')}-${wheel.version}.dist-info`);fs.mkdirSync(info);fs.writeFileSync(path.join(info,'METADATA'),`Metadata-Version: 2.1\nName: ${wheel.name}\nVersion: ${wheel.version}\n`);if(wheel.name==='ghidra-mcp-bridge')fs.writeFileSync(path.join(info,'entry_points.txt'),`[console_scripts]\nbridge-mcp-ghidra = ${entryPoint}\n`);}
+  for(const file of ['pywin32.pth','sitecustomize.py','pywin32_bootstrap.py'])fs.writeFileSync(path.join(input.site,file),"raise RuntimeError('startup hook executed')\n");
+  const calls=[];
+  const actual=await runner.runPythonBuild(input,{executePython:async(file,args,options)=>{const fake=await fakePython(calls)(file,args,options);return calls.length===4?runner.executePython(installedPython,args,options):fake;}});
+  assert.deepEqual(actual.distributions,input.wheels);
+  assert.deepEqual(fs.readFileSync(imports,'utf8').trim().split(/\r?\n/),['pywintypes','win32api','win32event']);
+  await runner.executePython(installedPython,runner.managedMcpArgs(input.site),{cwd:dir});
+  assert.deepEqual(fs.readFileSync(imports,'utf8').trim().split(/\r?\n/),['pywintypes','win32api','win32event','pywintypes','win32api','win32event']);
+  fs.unlinkSync(path.join(input.site,'win32event.py'));
+  await assert.rejects(runner.executePython(installedPython,calls[3].args,{cwd:dir}),{code:'PYTHON_PROCESS_FAILED'});
 });
 
 test('cancellation rejects after child close and retains install ownership',async()=>{
