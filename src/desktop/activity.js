@@ -3,6 +3,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {assertAssetPath} from '../assets/context.js';
 import {validationProgressPreview} from '../unity/progress.js';
+import {assetProgressPreview} from '../assets/progress.js';
 import {buildDesktopCommand} from './operations.js';
 import {createGhidraActivityReader} from './ghidra-activity.js';
 import {readDesktopJson,readDesktopArtifact,desktopEntries} from './history.js';
@@ -52,6 +53,7 @@ export function createDesktopActivityReader(root,{toolkit,ghidraActivity,isAlive
    ...(record.operationId&&uuid.test(record.operationId)?{operationId:record.operationId}:{}),
    ...(record.preparationProgress?{preparationProgress:{runId:uuid.test(record.preparationProgress.runId??'')?record.preparationProgress.runId:null,stage:text(record.preparationProgress.stage,80),state:text(record.preparationProgress.state,32),updatedAt:date(record.preparationProgress.updatedAt)}}:{}),
    ...(validationProgressPreview(record.validationProgress)?{validationProgress:validationProgressPreview(record.validationProgress)}:{}),
+   ...(assetProgressPreview(record.assetProgress)?{assetProgress:assetProgressPreview(record.assetProgress)}:{}),
    ...(record.wakeProgress?{wakeProgress:{jobId:uuid.test(record.wakeProgress.jobId??'')?record.wakeProgress.jobId:null,threadId:text(record.wakeProgress.threadId,80),state:wakeRunning||notificationQueued?text(record.wakeProgress.state,64):'unknown',transportReady:wakeRunning&&record.wakeProgress.transportReady===true,resumed:false,updatedAt:date(record.wakeProgress.updatedAt)}}:{}),
    ...(record.log?{log:{path:text(record.log.path,512),tail:text(record.log.tail,4096),updatedAt:date(record.log.updatedAt),quiet:record.log.quiet===true}}:{})};
  }

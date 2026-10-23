@@ -27,6 +27,11 @@ test('project activity reads bounded durable summaries and retains exact source 
  assert.ok(snapshot.warnings.some(w=>w.code==='activity_record_unavailable'));
  await assert.rejects(reader.inspect('../Game'));await assert.rejects(reader.inspect('Other'));
 });
+test('durable source/index activity retains only bounded progress fields',async t=>{
+ const f=fixture(t);f.job(id,{operation:'reconstruct.apply',assetProgress:{phase:'refresh.copying',elapsedMs:45,changedScripts:1,databaseBytes:12345,secret:'PRIVATE_SENTINEL'}});
+ const reader=createDesktopActivityReader(f.root,{toolkit:f.toolkit,isAlive:()=>true}),snapshot=await reader.inspect('Game');
+ assert.deepEqual(snapshot.jobs[0].assetProgress,{phase:'refresh.copying',elapsedMs:45,changedScripts:1,databaseBytes:12345});assert(!JSON.stringify(snapshot).includes('PRIVATE_SENTINEL'));
+});
 
 test('session observations expose launch and process evidence without context, environment or connectivity claims',async t=>{
  const f=fixture(t);f.write(`04_Notes/agent-sessions/${id}/launch.json`,{harness:'codex',env:{SECRET:'PRIVATE_SENTINEL'},args:['PRIVATE_SENTINEL'],prompt:'PRIVATE_SENTINEL'});

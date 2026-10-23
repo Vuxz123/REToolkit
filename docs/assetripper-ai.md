@@ -131,11 +131,14 @@ body-mode and requires same-build constructor metadata plus native evidence.
 Partial declarations, directives, malformed syntax and uncertain overlapping
 declaration inventories remain blocked.
 
-An existing source without `.meta` is accepted only when all top-level types are
-open generic classes. Its target is bound to the complete inventory, exact
-path/hash, assembly and generic/nested metadata names. No GUID or `.meta` is
-created. Other meta-free sources remain unsupported. Existing GUID/local-fileID
-checks still apply to asset-backed sources.
+An existing source without `.meta` has two supported classifications: all
+top-level types are open generic classes, or all types are nongeneric data
+classes with no explicit base clauses (implicit `System.Object`). The latter
+does not guess external/aliased inheritance, including an explicit `: object`.
+Both require zero claimed component bindings, exact complete inventory,
+path/hash, assembly and parser-derived full type identity. No GUID or `.meta` is
+created. Partial/ambiguous declarations and other meta-free sources remain
+unsupported. Existing GUID/local-fileID checks still apply to asset-backed sources.
 
 Plans bind the declaration skeleton and exact parser/helper/runtime identity;
 apply re-derives these from current files. Bounds are 1 MiB per source, 10000
@@ -143,6 +146,14 @@ source documents, 64 MiB aggregate input and 2 MiB analyzer output. Stale graph
 inventory requires a fresh index before planning. Source integrity does not
 prove compilation, serialized bindings or gameplay; run the independent checks
 after applying an authorized plan.
+
+Source apply now refreshes a complete matching graph instead of rebuilding all
+serialized objects/references. SQLite copies the authenticated sealed database
+into a fresh exclusive generation, updates only changed script rows/manifest
+metadata and seals a new receipt. JSON retains all nodes/edges/assets; a saved
+script-only plan projection cannot substitute for a complete current graph.
+When that complete JSON baseline is missing, full indexing remains the fallback.
+See [storage and refresh costs](assets-storage.md#source-only-apply-refresh).
 
 `assets scripts` and `reconstruct plan` accept `--evidence evidence.json` containing
 an array of existing REToolkit evidence envelopes. These must match the selected

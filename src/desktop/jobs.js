@@ -6,6 +6,7 @@ import {workspaceResultPreview} from './workspace-preview.js';
 import {validationResultPreview} from './validation-preview.js';
 import {validationProgressPreview} from '../unity/progress.js';
 import {createDesktopHistory} from './history.js';
+import {withoutJevCredentials} from '../jev-environment.js';
 const terminal=new Set(['succeeded','failed','unverified','unknown']);
 function capturePreview(job){
  const workspace=workspaceResultPreview(job);if(workspace)return workspace;
@@ -20,15 +21,14 @@ function capturePreview(job){
  return {kind:'retoolkit-adb-result',schemaVersion:1,state:text(job.result.state),capture:{bundle:text(job.result.capture?.bundle),manifest:text(job.result.capture?.manifest),...(data?{applicationData:{coverage:text(data.coverage),bundle:text(data.bundle),files:count(data.files),scopes:Array.isArray(data.scopes)?data.scopes.slice(0,2).map(scope=>({id:text(scope.id),state:text(scope.state),access:text(scope.access),files:count(scope.files)})):[]}}:{})}};
 }
 function compact(job){if(Buffer.byteLength(JSON.stringify(job))<=16384)return structuredClone(job);const {id,operation,state,createdAt,completedAt,exitCode,storedResult}=job,preview=capturePreview(job);return {id,operation,state,createdAt,completedAt,exitCode,storedResult,payload:{name:job.payload.name},result:{...preview,notice:preview.kind==='retoolkit-workspace-preview'?'Đã rút gọn danh sách tệp lớn; trạng thái và lựa chọn đầu vào được giữ bên dưới. Kết quả đầy đủ ở đường dẫn đã lưu.':'Output exceeds desktop preview. Inspect storedResult or use a bounded CLI query.'},...(job.error?{error:{code:String(job.error.code).slice(0,128),message:String(job.error.message).slice(0,1024)}}:{}),...(job.progress?{progress:job.progress.slice(-512)}:{}),...(validationProgressPreview(job.validationProgress)?{validationProgress:validationProgressPreview(job.validationProgress)}:{})};}
-export function createDesktopBroker(root,{node=process.execPath,spawnImpl=spawn,onChange=()=>{},history=true}={}){
+export function createDesktopBroker(root,{node=process.execPath,spawnImpl=spawn,onChange=()=>{},history=true,jevEnvironment=()=>process.env}={}){
  root=path.resolve(root);const journal=createDesktopHistory(root,{enabled:history!==false}),jobs=journal.load();let active=false;
  const notify=(job,persist=true)=>{if(persist)journal.save(jobs.map(compact));try{onChange(compact(job));}catch{}};
  function pump(){
   if(active)return;const job=jobs.find(job=>job.state==='queued');if(!job)return;active=true;job.state='running';job.startedAt=new Date().toISOString();notify(job);
   const args=buildDesktopCommand(job.operation,job.payload);let child,stdout='',stderr='',stdoutBytes=0,stderrBytes=0,truncated=false,spawnError;
   const outputDecoder=new StringDecoder('utf8'),errorDecoder=new StringDecoder('utf8'),progressDecoder=new StringDecoder('utf8');
-  const childEnv={...process.env,ELECTRON_RUN_AS_NODE:undefined};if(job.operation!=='jev.run')for(const key of Object.keys(childEnv))if(/^(TYPESAFE|JEV)_/.test(key))delete childEnv[key];
-  try{child=spawnImpl(node,[path.resolve(import.meta.dirname,'../../re.js'),...args,'--root',root,'--json'],{cwd:root,windowsHide:true,shell:false,env:childEnv,stdio:['ignore','pipe','pipe']});}
+  try{const childEnv={...(job.operation==='jev.run'?jevEnvironment():withoutJevCredentials(process.env)),ELECTRON_RUN_AS_NODE:undefined};child=spawnImpl(node,[path.resolve(import.meta.dirname,'../../re.js'),...args,'--root',root,'--json'],{cwd:root,windowsHide:true,shell:false,env:childEnv,stdio:['ignore','pipe','pipe']});}
   catch(error){finish(null,error);return;}
   child.stdout.on('data',bytes=>{stdoutBytes+=bytes.length;if(!truncated&&stdoutBytes<=2*1024**2)stdout+=outputDecoder.write(bytes);else truncated=true;});
   let progressLine='',progressOverflow=false;

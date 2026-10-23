@@ -36,6 +36,13 @@ test('terminal apply queues one fixed scoped message with actual child argv and 
  assert.equal(JSON.parse(fs.readFileSync(path.join(f.workspace,result.statusReference),'utf8')).state,'queued');
  await assert.rejects(f.run({assetIds:['script:999']}),{code:'agent_wake_policy_conflict'});assert.equal(f.calls().length,2);
 });
+test('Codex wake capability probes and queue children never inherit Jev credentials',async t=>{
+ const f=await fixture(t);let checked=0;
+ const result=await f.run({}, {env:{TYPESAFE_API_KEY:'private-test-key',jev_mixed:'mixed-private-test-key',OPENAI_API_KEY:'harness-auth'},spawn:(file,args,options)=>{
+  checked++;assert.equal(options.env.TYPESAFE_API_KEY,undefined);assert.equal(options.env.jev_mixed,undefined);assert.equal(options.env.OPENAI_API_KEY,'harness-auth');return f.dependencies.spawn(file,args,options);
+ }});
+ assert.equal(result.state,'queued');assert.equal(checked,2);assert(!JSON.stringify(result).includes('private-test-key'));
+});
 
 test('failed or unknown upstream jobs queue inspection only and never scoped validation',async t=>{
  for(const state of ['failed','unknown']){

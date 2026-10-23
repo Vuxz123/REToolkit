@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {assertAssetPath,assetError} from '../assets/context.js';
 import {validateAssetParams,validateAssetParamsForJob,invokeAssetApi} from '../assets/api.js';
 import {validationProgressPreview} from '../unity/progress.js';
+import {assetProgressPreview} from '../assets/progress.js';
 import {verifySymbolPlan} from '../ghidra/symbol-plan.js';
 import {atomicJson} from '../ghidra/runtime.js';
 import {startSession,sessionStatus,stopSession,querySession,mutateSession} from '../ghidra/provider.js';
@@ -51,8 +52,8 @@ async function checkPlan(toolkit,name,operation,params){
  params.plan=verified.path;
 }
 function publicRecord(record){
- const {kind,schemaVersion,jobId,workspace,operation,operationId,state,stage,sequence,createdAt,startedAt,updatedAt,completedAt,pid,exitCode,error,diagnosticTail,currentSteps,engine,domainState,outcomeVerified,diagnosticReference,logReference,validationProgress,preparationProgress,wakeProgress}=record;
- return {kind,schemaVersion,jobId,workspace,operation,operationId,state,stage,sequence,createdAt,startedAt,updatedAt,completedAt,pid,exitCode,error,diagnosticTail,currentSteps,engine,domainState,outcomeVerified,diagnosticReference,logReference,validationProgress,preparationProgress,wakeProgress};
+ const {kind,schemaVersion,jobId,workspace,operation,operationId,state,stage,sequence,createdAt,startedAt,updatedAt,completedAt,pid,exitCode,error,diagnosticTail,currentSteps,engine,domainState,outcomeVerified,diagnosticReference,logReference,validationProgress,assetProgress,preparationProgress,wakeProgress}=record;
+ return {kind,schemaVersion,jobId,workspace,operation,operationId,state,stage,sequence,createdAt,startedAt,updatedAt,completedAt,pid,exitCode,error,diagnosticTail,currentSteps,engine,domainState,outcomeVerified,diagnosticReference,logReference,validationProgress,assetProgress,preparationProgress,wakeProgress};
 }
 function alive(pid){if(!Number.isSafeInteger(pid)||pid<=0)return false;try{process.kill(pid,0);return true;}catch(error){return error.code!=='ESRCH';}}
 
@@ -169,6 +170,8 @@ export async function executeJob(toolkit,name,jobId,{invoke=invokeOperation,onPr
  };
  const previousRun=toolkit.run;
  const previousValidationProgress=toolkit.onValidationProgress;
+ const previousAssetProgress=toolkit.onAssetProgress;
+ toolkit.onAssetProgress=event=>{const assetProgress=assetProgressPreview(event);if(assetProgress)progress('assets.'+assetProgress.phase,{assetProgress});};
  toolkit.onValidationProgress=event=>{
   const validationProgress=validationProgressPreview(event);if(!validationProgress)return;
   progress('unity.validation.running',{engine:'Unity.exe',validationProgress});
@@ -199,7 +202,7 @@ export async function executeJob(toolkit,name,jobId,{invoke=invokeOperation,onPr
   const knownReasons=new Set(['Scan inputs before dump','Dump IL2CPP before import','Import a program before analysis']);
   const uncertain=new Set(['request_timeout','connection_lost','connection_timeout','connection_closed','protocol_mismatch','response_limit','cleanup_pending','startup_timeout','needs_recovery','ERR_PROCESS_CANCELLED']).has(code);
   progress(uncertain?'operation.unverified':'operation.failed',{state:uncertain?'unknown':'failed',outcomeVerified:!uncertain,completedAt:now(),exitCode:Number.isSafeInteger(error.exitCode)&&error.exitCode!==0?error.exitCode:1,error:{code,message:uncertain?'The operation outcome is unverified after a timeout, transport loss or pending engine cleanup. Inspect the saved diagnostic, owned session and exact operation receipt before any explicit retry.':reasons[code]??(knownReasons.has(error.message)?error.message:`Operation ${request.operation} failed at ${record.stage}; inspect its saved diagnostic and workspace state before retrying.`),...(typeof error.operationId==='string'&&uuid.test(error.operationId)?{operationId:error.operationId}:{})},diagnosticReference:path.relative(paths.workspace,paths.diagnostic).split(path.sep).join('/')});
- }finally{clearInterval(timer);toolkit.run=previousRun;toolkit.onValidationProgress=previousValidationProgress;}
+ }finally{clearInterval(timer);toolkit.run=previousRun;toolkit.onValidationProgress=previousValidationProgress;toolkit.onAssetProgress=previousAssetProgress;}
  return publicRecord(record);
 }
 

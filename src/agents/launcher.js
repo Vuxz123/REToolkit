@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {assertAssetPath} from '../assets/context.js';
 import {within} from '../inputs.js';
 import {assertGeminiBinding} from './gemini-binding.js';
+import {withoutJevCredentials} from '../jev-environment.js';
 
 export const harnesses=Object.freeze([
  {id:'codex',label:'Codex CLI',command:'codex'},
@@ -165,7 +166,10 @@ saved symbol receipts and exact build/program/session identity. Symbol writes us
 a contained saved plan path and exact planHash plus the existing ownership and
 receipt checks. Never bypass locks, replay uncertain writes, invent receipts or
 treat partial coverage as full readiness. Use only the owned Ghidra session.
-Keep keys in the environment and out of context, saved session files and reports.
+Keep keys out of context, saved session files and reports. GUI Jev credentials
+stay private to Settings and explicit Jev operations; this Agent terminal does
+not receive the TYPESAFE_/JEV_ environment namespace. Do not copy those keys into
+this session or dump the environment. Harness authentication remains separate.
 `;
 }
 
@@ -232,7 +236,7 @@ export function createAgentLauncher(root,{node=process.execPath,spawnImpl=spawn,
    const cwdEncoded=Buffer.from(workspace,'utf8').toString('base64');
    const script=`$ErrorActionPreference='Stop'; $cwd=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${cwdEncoded}')); Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-NoExit','-EncodedCommand','${terminalEncoded}') -WorkingDirectory $cwd -WindowStyle Normal -ErrorAction Stop | Out-Null`;
    const powershell=path.join(env.SystemRoot??env.WINDIR??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
-   const child=spawnImpl(powershell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{cwd:workspace,env:{...env},shell:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
+   const child=spawnImpl(powershell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{cwd:workspace,env:withoutJevCredentials(env),shell:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
    await new Promise((resolve,reject)=>{
     let diagnostics='';child.stderr?.on('data',data=>{diagnostics=(diagnostics+data.toString()).slice(-2000);});
     const timer=setTimeout(()=>{child.kill?.();reject(Error('Terminal bootstrap timed out after 15 seconds'));},15000);

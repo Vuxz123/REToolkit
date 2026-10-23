@@ -97,7 +97,7 @@ async function validatePlan(plan,graph,{projectDir,editorPath,dump}){
     check(c.path===asset.path&&c.guid===asset.guid&&fingerprint(c.identity)===fingerprint(body?.identity??{assembly:asset.script.assembly,...declaration}),'Plan target declaration contract identity changed');
     const before=graph.files.find(f=>f.path===c.path),meta=graph.files.find(f=>f.path===c.path+'.meta');
     if(asset.guid){shape(c.meta,['path','sha256','size']);check(meta&&c.meta.path===meta.path&&c.meta.sha256===meta.sha256&&c.meta.size===meta.size,'Invalid plan meta hashes');}
-    else check(body&&!meta&&c.meta===null,'Generic source meta absence changed');
+    else check(body&&!meta&&c.meta===null,'Compiler source meta absence changed');
     check(before&&c.beforeSha256===before.sha256&&c.beforeSize===before.size&&c.afterSha256===hash(c.source)&&c.afterSize===Buffer.byteLength(c.source),'Invalid plan source/meta hashes');
     check(Array.isArray(c.evidenceIds)&&c.evidenceIds.length<=1000&&c.evidenceIds.every(id=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)),'Invalid plan evidence IDs');
     if(c.mode==='initialization')check(c.evidenceIds.every(id=>body.initializationProof.constructors.some(declaration=>declaration.evidenceId===id)),'Plan initialization evidence IDs differ from constructor proof');

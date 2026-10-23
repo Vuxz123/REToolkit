@@ -12,8 +12,11 @@ starts the Electron desktop after `npm run gui:install`; it brokers the same Nod
 CLI through sandboxed typed IPC. PowerShell GUI remains legacy. Ghidra/PyGhidra
 launch, desktop runtime installation, visual comparisons and migration commands
 are Node modules. See docs/desktop.md and docs/jev-settings.md. Never record API
-keys in job payloads, configuration JSON, logs or reports. GUI keys are session
-only; file settings reference a TYPESAFE_*/JEV_* environment variable.
+keys in job payloads, configuration JSON, logs or reports. GUI keys stay in a
+private Settings closure, supplied only to explicit Jev operations; do not mutate
+process.env with them. File settings reference a TYPESAFE_*/JEV_* variable.
+Agent bootstrap/runner/wake children strip that namespace case-insensitively,
+while retaining harness authentication. Existing terminals are not updated in place.
 
 ## Development Commands
 

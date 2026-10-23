@@ -237,8 +237,10 @@ this route. Preserve all imports, attributes, generic/nested headers, constraint
 signatures, fields/initializers and accessor visibility; change only existing
 executable bodies, keeping block/arrow/auto-property forms. Do not add members
 or backing fields. This is syntax validation, not game compilation/execution.
-Meta-free sources qualify only when every top-level declaration is an open
-generic class; use their exact `opaque:Assets/...cs` ID, never invent a GUID.
+Meta-free sources qualify when every top-level declaration is an open generic
+class, or when every type is a nongeneric class with no base clause (data-source).
+Both require no claimed component binding. Use the exact `opaque:Assets/...cs`
+ID, never invent a GUID or add `.meta` to evade the gate.
 Partial/directive/uncertain overlapping identities remain blocked. Apply
 re-derives parser identity, skeleton and complete assembly inventory; stale
 source requires reindexing. See `docs/assetripper-ai.md` for the full contract.

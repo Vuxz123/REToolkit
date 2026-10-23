@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
@@ -171,4 +172,59 @@ export function openSqliteGraph({file,receipt,graph}={}){
   close(){if(closed)return;try{db.close();}finally{fs.closeSync(fd);closed=true;}}
  };
  return reader;
+}
+
+/** Copy authenticated immutable bytes, change only script asset rows and reseal.
+ * Caller holds workspace ownership and proves the source-only inventory delta.
+ * No original database, node, edge or hierarchy row is written. */
+export async function refreshSqliteGraph({file,outputFile,graph,updatedGraph,scriptIds,onProgress=()=>{}}){
+ file=assertAssetPath(file);outputFile=assertAssetPath(outputFile);
+ check(file!==outputFile&&Array.isArray(scriptIds)&&scriptIds.length>0&&scriptIds.length<=16&&new Set(scriptIds).size===scriptIds.length,'sqlite_refresh_invalid','Expected a fresh destination and exact changed scripts');
+ const selected=new Set(scriptIds),updates=[];
+ check(fingerprint(graph.binding)===fingerprint(updatedGraph.binding)&&fingerprint(graph.profile)===fingerprint(updatedGraph.profile)&&graph.unityVersion===updatedGraph.unityVersion&&graph.assets.length===updatedGraph.assets.length,'sqlite_refresh_invalid','Source refresh changed structural metadata');
+ for(let i=0;i<graph.assets.length;i++){
+  const before=graph.assets[i],after=updatedGraph.assets[i];
+  if(!selected.has(before.id)){check(fingerprint(before)===fingerprint(after),'sqlite_refresh_invalid','Unselected asset changed');continue;}
+  const {script:oldScript,...oldIdentity}=before,{script:newScript,...newIdentity}=after;
+  check(before.kind==='script'&&before.path.endsWith('.cs')&&fingerprint(oldIdentity)===fingerprint(newIdentity)&&oldScript?.assembly===newScript?.assembly,'sqlite_refresh_invalid','Changed asset is not the same compiler script');updates.push(after);
+ }
+ check(updates.length===selected.size,'sqlite_refresh_invalid','Missing selected script');
+ for(const key of ['assets','nodes','edges','missingReferences','opaqueAssets','summarizedFields','summarizedNodes','summarizedSerializedBytes'])check(graph.coverage[key]===updatedGraph.coverage[key],'sqlite_refresh_invalid','Source refresh changed serialized coverage');
+ const original=fileStat(file),reader=openSqliteGraph({file,receipt:graph.storage,graph});let ownedIdentity,db,transaction=false,observerIdentity;
+ const pin=()=>{const stat=fileStat(outputFile);check(ownedIdentity&&stat.dev===ownedIdentity.dev&&stat.ino===ownedIdentity.ino,'sqlite_graph_changed','Fresh database was replaced');return stat;};
+ const maximum=graph.profile?.limits?.maxDatabaseBytes??SQLITE_GRAPH_LIMITS.maxDatabaseBytes;
+ const budget=()=>{let size=pin().size;try{const journal=fs.lstatSync(outputFile+'-journal');check(journal.isFile()&&!journal.isSymbolicLink(),'sqlite_graph_changed','Unexpected refresh journal');size+=journal.size;}catch(e){if(e.code!=='ENOENT')throw e;}check(size<=maximum,'sqlite_graph_disk_limit','Refresh database and journal exceed disk budget');};
+ try{
+  check(sameStat(original,fileStat(file)),'sqlite_graph_changed','Original database changed');
+  await onProgress({phase:'refresh.copying',databaseBytes:graph.storage.size});
+  await fsp.copyFile(file,outputFile,fs.constants.COPYFILE_EXCL|fs.constants.COPYFILE_FICLONE);
+  const copied=fileStat(outputFile);ownedIdentity={dev:copied.dev,ino:copied.ino};
+  check(copied.dev!==original.dev||copied.ino!==original.ino,'sqlite_graph_changed','Fresh database must be independent');
+  let fd=fs.openSync(outputFile,'r');try{check(fileHash(fd)===graph.storage.sha256&&sameStat(copied,fs.fstatSync(fd))&&sameStat(copied,pin()),'sqlite_graph_changed','Copied database does not match sealed source');}finally{fs.closeSync(fd);}
+  check(sameStat(original,fileStat(file)),'sqlite_graph_changed','Original database changed during copy');
+  observerIdentity=copied;
+  await onProgress({phase:'refresh.updating',databaseBytes:graph.storage.size,copiedBytes:copied.size});check(sameStat(copied,pin()),'sqlite_graph_changed','Copied database changed during progress observation');observerIdentity=undefined;
+  db=new (sqlite())(outputFile,{defensive:true,allowExtension:false});pin();configure(db,false);
+  const reserve=Math.min(MiB,Math.floor(maximum/16));db.exec(`PRAGMA max_page_count=${Math.max(1,Math.floor((maximum-reserve)/(2*4096+8+64)))};`);
+  db.exec('BEGIN IMMEDIATE');transaction=true;
+  const update=db.prepare('UPDATE assets SET json=? WHERE id=? AND path=? AND kind=\'script\'');
+  for(const asset of updates){const result=update.run(encoded(asset,SQLITE_GRAPH_LIMITS.maxRowBytes),asset.id,asset.path);check(Number(result.changes)===1,'sqlite_refresh_invalid','Expected exactly one existing script row');}
+  const metadata={kind:'retoolkit-sqlite-asset-graph',schemaVersion:1,revision:updatedGraph.revision,bindingSha256:fingerprint(updatedGraph.binding),graphSha256:manifestHash(updatedGraph),coverage:updatedGraph.coverage,counts:graph.storage.counts};
+  check(Number(db.prepare('UPDATE metadata SET json=? WHERE id=1').run(encoded(metadata,SQLITE_GRAPH_LIMITS.maxRowBytes)).changes)===1,'sqlite_refresh_invalid','Missing generation metadata');
+  budget();db.exec('COMMIT');transaction=false;budget();db.close();db=null;
+  const stat=pin();observerIdentity=stat;
+  await onProgress({phase:'refresh.sealing',databaseBytes:graph.storage.size,copiedBytes:copied.size});
+  check(sameStat(stat,pin()),'sqlite_graph_changed','Committed database changed during progress observation');fd=fs.openSync(outputFile,'r');let sha256;
+  try{sha256=fileHash(fd);check(sameStat(stat,fs.fstatSync(fd))&&sameStat(stat,pin()),'sqlite_graph_changed','Fresh database changed while sealing');}finally{fs.closeSync(fd);}
+  check(sameStat(original,fileStat(file)),'sqlite_graph_changed','Original database changed before publication');
+  return {receipt:{kind:'sqlite',schemaVersion:1,sha256,size:stat.size,counts:graph.storage.counts,revision:updatedGraph.revision,bindingSha256:metadata.bindingSha256,graphSha256:metadata.graphSha256},identity:{dev:stat.dev,ino:stat.ino,size:stat.size,mtimeMs:stat.mtimeMs,ctimeMs:stat.ctimeMs}};
+ }catch(error){
+  let cleanupFailed=false;
+  try{if(transaction)db?.exec('ROLLBACK');}catch{cleanupFailed=true;}
+  try{db?.close();}catch{cleanupFailed=true;}db=null;
+  // A failed copy without an observed inode is retained, never guessed as ours.
+  if(ownedIdentity&&!cleanupFailed)try{const current=pin();if(observerIdentity)check(sameStat(observerIdentity,current),'sqlite_graph_changed','Observer changed the owned copy; preserve it for inspection');for(const suffix of ['-journal','-wal','-shm']){try{const side=fs.lstatSync(outputFile+suffix);check(side.isFile()&&!side.isSymbolicLink(),'sqlite_graph_changed','Uncertain refresh sidecar');}catch(e){if(e.code!=='ENOENT')throw e;}}for(const suffix of ['-journal','-wal','-shm'])fs.rmSync(outputFile+suffix,{force:true});pin();fs.unlinkSync(outputFile);}catch{cleanupFailed=true;}
+  if(cleanupFailed)error.refreshCleanupPending=true;
+  throw error;
+ }finally{reader.close();}
 }

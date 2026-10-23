@@ -13,6 +13,7 @@ const labels = Object.freeze({
   operationId:'ID thao tác', graphRevision:'Phiên bản graph', scriptId:'ID script',
   components:'Component', references:'Tham chiếu', children:'Đối tượng con',
   storedReceipt:'Receipt đã lưu', storedPlan:'Kế hoạch đã lưu', stagedProject:'Project staging',
+  graphRefresh:'Cập nhật index',strategy:'Cách cập nhật',changedScripts:'Script thay đổi',databaseBytes:'Dung lượng database (byte)',copiedBytes:'Đã sao chép (byte)',elapsedMs:'Thời gian đã chạy (ms)',phase:'Giai đoạn',
   items:'Danh sách', kind:'Loại', guid:'GUID', storage:'Lưu trữ', authentication:'Xác thực',
   network:'Kết nối mạng', behaviorVerified:'Gameplay',
   compilation:'Kết quả biên dịch',scopeBindingsVerified:'Liên kết trong phạm vi',scope:'Phạm vi kiểm chứng',classification:'Phân loại script',traversal:'Tiến độ duyệt',requestedAssets:'Asset yêu cầu',completedAssets:'Asset đã kiểm tra đủ',pendingAssets:'Asset cần kiểm tra tiếp',skippedSubtrees:'Nhánh dữ liệu không chứa reference',stopReason:'Lý do dừng',objectPath:'Đối tượng',componentType:'Loại component',propertyPath:'Property đang duyệt',resumeOperationId:'Operation cần tiếp tục',resume:'Tiếp tục kiểm chứng',
@@ -175,6 +176,7 @@ export function buildResultModel(job,{operationLabel}={}) {
   if(result.error)add('Lỗi kết quả',result.error);
   if(Array.isArray(result.errors)&&result.errors.length)add('Các lỗi kết quả',result.errors);
   if(['running','queued'].includes(envelope.state)&&record(envelope.validationProgress))add('Tiến độ Unity',envelope.validationProgress);
+  if(['running','queued'].includes(envelope.state)&&record(envelope.assetProgress))add('Tiến độ source / index',envelope.assetProgress);
   if(result.kind==='retoolkit-unity-validation'&&record(result.resume))add('Tiếp tục kiểm chứng',{...result.resume,hướngDẫn:'Chọn Kiểm chứng bằng Unity, điền Operation cần tiếp tục. Chỉ tái sử dụng kết quả còn khớp source, Editor và helper.'});
   if(Object.hasOwn(envelope,'result')){
     const isTechnical=([key,value])=>bookkeepingKeys.has(key)&&scalar(value);

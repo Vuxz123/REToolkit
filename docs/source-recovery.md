@@ -10,6 +10,21 @@ Nó cho phép thêm constructor còn thiếu vào đúng class đang có; toàn 
 còn lại, kể cả thân hàm hiện tại, phải giữ nguyên token. Không thêm field,
 backing field, helper method, serialized declaration hoặc tùy tiện đổi initializer.
 
+Class dữ liệu thường thiếu `.meta` đã có route `data-source`: mọi type trong
+file phải là class không generic, không có base clause và không có component
+binding được claim. Vì thế `PooledObjectInfo` dạng class dữ liệu độc lập có thể
+được xét bằng ID `opaque:Assets/.../PooledObjectInfo.cs`. Class có base chưa xác
+minh, kể cả alias, `MonoBehaviour`, `ScriptableObject` hoặc `: object` tường minh
+vẫn bị chặn ở route này. Không tự tạo `.meta`/GUID. Route generic cũ giữ nguyên;
+không thay tên class thành generic để vượt gate.
+
+Constructor vẫn phải có metadata/native proof đúng build; source inventory,
+assembly/full type, ambiguity, token và absence-of-meta được kiểm tra lại ở
+plan/apply/retry. Khởi động lại MCP để nạp code mới, lấy revision và tạo plan mới.
+Job cũ đang chạy không tự chuyển sang implementation mới. Sau apply, toolkit
+[refresh index theo source](assets-storage.md#source-only-apply-refresh) thay vì
+dựng lại toàn bộ YAML/reference khi có baseline đầy đủ còn khớp.
+
 Request dùng full source mới và declaration delta tường minh:
 
 ```json

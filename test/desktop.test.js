@@ -75,6 +75,12 @@ test('desktop only passes Jev credential namespace to explicit Jev send jobs',t=
  const previous=process.env.JEV_DESKTOP_TEST_KEY;process.env.JEV_DESKTOP_TEST_KEY='synthetic-fixture-key';let child,received;
  try{const broker=createDesktopBroker(root,{spawnImpl:(_file,_args,options)=>{received=options.env;child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();return child;}});broker.submit('doctor');assert.equal(received.JEV_DESKTOP_TEST_KEY,undefined);child.emit('close',0);broker.submit('jev.run',{request:'fixture.json',out:'new-result.json'});assert.equal(received.JEV_DESKTOP_TEST_KEY,'synthetic-fixture-key');child.emit('close',0);}finally{if(previous===undefined)delete process.env.JEV_DESKTOP_TEST_KEY;else process.env.JEV_DESKTOP_TEST_KEY=previous;}
 });
+test('desktop Jev send receives private Settings credentials without exposing them to other jobs',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-jev-private-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let received,child;
+ const broker=createDesktopBroker(root,{jevEnvironment:()=>({...process.env,TYPESAFE_API_KEY:'private-settings-key'}),spawnImpl:(_file,_args,options)=>{received=options.env;child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();return child;}});
+ broker.submit('jev.run',{request:'fixture.json',out:'result.json'});assert.equal(received.TYPESAFE_API_KEY,'private-settings-key');child.emit('close',0);
+ broker.submit('doctor');assert.equal(received.TYPESAFE_API_KEY,undefined);child.emit('close',0);assert(!JSON.stringify(broker.snapshot()).includes('private-settings-key'));
+});
 test('desktop launch parses only known flags and supplies original Node executable to Electron',()=>{
  assert.equal(parseDesktopArgs(['gui','--root','C:/Data']).root,'C:/Data');assert.throws(()=>parseDesktopArgs(['gui','--eval','anything']));
  const spec=desktopLaunchSpec('C:/Toolkit','C:/node.exe','C:/electron.exe');assert.equal(spec.file,'C:/electron.exe');assert.ok(spec.args.includes('C:/node.exe'));assert.equal(spec.env.ELECTRON_RUN_AS_NODE,undefined);

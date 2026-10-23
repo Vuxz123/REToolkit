@@ -79,13 +79,19 @@ export async function prepareBodyCandidates({projectDir,graph,changes,editorPath
    if(observed.identitiesComplete===false)check(!observed.identityUncertain&&Array.isArray(observed.identityNames)&&!observed.identityNames.some(name=>names.has(name)),'Uncertain declaration inventory may hide an ambiguous target type');
    check(!observed.types?.some(t=>fullNames.has(t.fullName)),'Ambiguous exported assembly/full type identity');
   }
-  const meta=graph.files.find(file=>file.path===asset.path+'.meta');
+  const meta=graph.files.find(file=>file.path===asset.path+'.meta');let targetKind='asset-source';
   if(!asset.guid){
    const top=types.filter(type=>type.topLevel);
-   check(!meta&&top.length>0&&top.every(type=>type.kind==='class'&&type.arity>0),'A source without meta must declare only existing open generic top-level classes');
+   const generic=top.length>0&&top.every(type=>type.kind==='class'&&type.arity>0);
+   // With no base clause, these nonpartial classes can only inherit System.Object.
+   // Do not guess at external/aliased inheritance or treat a Unity Object as data.
+   const data=top.length>0&&types.every(type=>type.kind==='class'&&type.arity===0&&Array.isArray(type.baseTypes)&&type.baseTypes.length===0);
+   const bindings=scriptBindings(graph,asset);
+   check(!meta&&(generic||data)&&bindings.traversedBindingCount===0,'A source without meta requires open generic classes or nongeneric data classes without base clauses or component bindings');
+   targetKind=generic?'generic-source':'data-source';
   }else check(meta,'Body source GUID requires its existing meta identity');
   const bytes=current.get(asset.path).bytes;
-  candidates.set(change.scriptId,{asset,beforeSha256:hash(bytes),identity:{assembly:asset.script.assembly,targetKind:asset.guid?'asset-source':'generic-source',contract},...(initializationProof?{initializationProof}:{})});
+  candidates.set(change.scriptId,{asset,beforeSha256:hash(bytes),identity:{assembly:asset.script.assembly,targetKind,contract},...(initializationProof?{initializationProof}:{})});
  }
  return candidates;
 }

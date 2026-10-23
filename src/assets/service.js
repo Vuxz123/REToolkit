@@ -4,6 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {assetPaths,selectedAssetBinding,assertAssetPath,assetError,safeAssetExportPath} from './context.js';
 import {indexUnityProject,locateUnityProject,verifyGraphFiles,queryGraph,UNITY_PROJECT_LIMITS} from './graph.js';
 import {createValidationSourceSnapshot} from './validation-snapshot.js';
+import {refreshSourceGraph,assertSourceRefreshFresh,discardSourceRefresh} from './source-refresh.js';
 import {assertGraphManifest,isSqliteGraph,openStoredGraph,verifyStoredGraph,focusStoredScriptGraph} from './graph-storage.js';
 import {buildScriptMap} from '../reconstruction/map.js';
 import {createReconstructionPlan,applyReconstructionPlan,verifyReconstruction} from '../reconstruction/plan.js';
@@ -109,30 +110,69 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
       if(fingerprint(receipt.binding)!==fingerprint(selected.binding))throw assetError('stale_graph','Receipt binding changed');
       return verifyReconstruction({projectDir,receipt});
     }
+    const progressStarted=Date.now(),report=async event=>{
+      const value={phase:event.phase,elapsedMs:Date.now()-progressStarted};
+      for(const key of ['changedScripts','databaseBytes','copiedBytes'])if(Number.isSafeInteger(event[key])&&event[key]>=0)value[key]=event[key];
+      toolkit.onAssetProgress?.(value);toolkit.log(JSON.stringify({kind:'asset-operation-progress',...value}));
+    };
+    const complete=graph=>isSqliteGraph(graph)||graph.assets?.length===graph.coverage?.assets&&graph.nodes?.length===graph.coverage?.nodes&&graph.edges?.length===graph.coverage?.edges;
+    let baseline=isSqliteGraph(saved.graph)?saved.graph:null;
+    if(!baseline&&fs.existsSync(paths.graphFile)){
+      const current=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);assertGraphManifest(current);
+      if(complete(current)&&current.revision===saved.graph.revision&&fingerprint(current.binding)===fingerprint(selected.binding)&&fingerprint(current.files)===fingerprint(saved.graph.files))baseline=current;
+    }
+    await report({phase:'source.validating'});
     const nativeContext=initializationContext({changes:saved.plan?.changes,dump:saved.plan?.changes?.some(change=>change.mode==='initialization')?verifiedDump(toolkit,selected):undefined,expectedBinding:selected.binding,readBinding:()=>selectedAssetBinding(toolkit,name).binding,readDump:()=>verifiedDump(toolkit,selectedAssetBinding(toolkit,name))});
     let receipt,uncertain=false;
     const marker=path.join(paths.workspace,'.retk-lock/assets-write-'+randomUUID()+'.json');
     // Persist a second owner before source mutation. Even process death or a full
     // disk cannot make PID-only reclamation discard an unfinished transaction.
     writeJson(marker,{kind:'assets-write-in-progress',operationId:params.operationId},{exclusive:true});
-    try{receipt=await applyReconstructionPlan({projectDir,graph:focusStoredScriptGraph(saved.graph,paths.graphFile,{scriptIds:saved.plan?.changes?.map(c=>c.scriptId)}),plan:saved.plan,journalDir,editorPath:selected.project.unityEditorPath,...nativeContext,onEvent:async()=>{
+    try{receipt=await applyReconstructionPlan({projectDir,graph:focusStoredScriptGraph(saved.graph,paths.graphFile,{scriptIds:saved.plan?.changes?.map(c=>c.scriptId)}),plan:saved.plan,journalDir,editorPath:selected.project.unityEditorPath,...nativeContext,onEvent:async event=>{
       if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(selected.binding))throw assetError('asset_input_stale','Asset source changed during reconstruction');
+      await report({phase:'source.'+event.phase});
     }});}
     catch(error){uncertain=error.code==='reconstruction_recovery_required';throw error;}
     finally{if(!uncertain)fs.unlinkSync(assertAssetPath(marker,paths.workspace));}
-    // Keep returned receipt stable across retries; graph refresh errors remain visible.
-    let updated;
+    // Keep the durable source receipt stable across retries. graphRefresh is
+    // separate per-invocation observation, not part of that receipt's hash.
+    await report({phase:'source.receipt',changedScripts:receipt.changes.length});
+    let updated,strategy='reuse';const refreshStarted=Date.now();
     if(fs.existsSync(paths.graphFile)){
       const candidate=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);
       // applyReconstructionPlan already verified the receipt's complete current
       // inventory. A retry can reuse that exact sealed graph without generating
       // another multi-million-row database.
-      if(Array.isArray(candidate.files)&&fingerprint(candidate.binding)===fingerprint(selected.binding)&&fingerprint(candidate.files)===fingerprint(receipt.files)&&isSqliteGraph(candidate)===isSqliteGraph(saved.graph)){assertGraphManifest(candidate);verifyStoredGraph(candidate,paths.graphFile);updated=candidate;}
+      if(Array.isArray(candidate.files)&&complete(candidate)&&fingerprint(candidate.binding)===fingerprint(selected.binding)&&fingerprint(candidate.files)===fingerprint(receipt.files)&&isSqliteGraph(candidate)===isSqliteGraph(saved.graph)){assertGraphManifest(candidate);verifyStoredGraph(candidate,paths.graphFile);updated=candidate;}
     }
-    if(!updated){updated=await indexOwnedGraph(projectDir,selected.binding,paths,{storage:isSqliteGraph(saved.graph)?'sqlite':'json',graphLimitBytes:saved.graph.profile?.limits?.maxGraphBytes});writeJson(paths.graphFile,updated,{maxBytes:UNITY_PROJECT_LIMITS.maxStoredGraphBytes,compact:true});}
+    if(!updated){
+      if(baseline){strategy='source-refresh';updated=await refreshSourceGraph({projectDir,graph:baseline,graphFile:paths.graphFile,receipt,onProgress:report});}
+      else{strategy='full-index';const indexProgress=graphProgress(toolkit);await report({phase:'refresh.full-index'});updated=await indexOwnedGraph(projectDir,selected.binding,paths,{storage:isSqliteGraph(saved.graph)?'sqlite':'json',graphLimitBytes:saved.graph.profile?.limits?.maxGraphBytes,onProgress:async event=>{indexProgress(event);await report({phase:'refresh.'+event.phase});}});}
+      try{
+        if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(selected.binding))throw assetError('asset_input_stale','Inputs changed during source graph refresh');
+        assertSourceRefreshFresh(updated,paths.graphFile);
+        writeJson(paths.graphFile,updated,{maxBytes:UNITY_PROJECT_LIMITS.maxStoredGraphBytes,compact:true});
+      }catch(error){
+        // rename can succeed before temp cleanup throws. Never discard a DB
+        // already referenced by the manifest, or when publication is uncertain.
+        let publication='no';
+        if(isSqliteGraph(updated))try{
+          if(fs.existsSync(paths.graphFile)){
+            const stat=fs.lstatSync(paths.graphFile);
+            if(stat.isSymbolicLink())publication='unknown';
+            else if(stat.isFile()){const published=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);if(published.storage?.relativePath===updated.storage.relativePath)publication='yes';}
+          }
+        }catch{publication='unknown';}
+        if(publication==='yes')error.sourceGraphPublished=true;
+        else if(publication==='unknown')error.refreshCleanupPending=true;
+        else try{await discardSourceRefresh(updated,paths.graphFile);}catch{error.refreshCleanupPending=true;}
+        throw error;
+      }
+    }
     await recordAssetState(toolkit,name,selected.binding,{state:'source_applied',source:'applied',graph:'ready',graphRevision:updated.revision,graphStorage:isSqliteGraph(updated)?'sqlite':'json',graphLimitBytes:isSqliteGraph(updated)?null:updated.profile?.limits?.maxGraphBytes,lastOperation:params.operationId});
     const {files,...summary}=receipt;
-    return {...summary,inventoryFiles:files.length,storedReceipt:path.relative(paths.workspace,path.join(journalDir,params.operationId,'receipt.json')).split(path.sep).join('/')};
+    await report({phase:'refresh.published',changedScripts:receipt.changes.length});
+    return {...summary,inventoryFiles:files.length,storedReceipt:path.relative(paths.workspace,path.join(journalDir,params.operationId,'receipt.json')).split(path.sep).join('/'),graphRefresh:{strategy,storage:isSqliteGraph(updated)?'sqlite':'json',changedScripts:receipt.changes.length,elapsedMs:Date.now()-refreshStarted}};
   }
   if(method==='reconstruct.validate'||method==='reconstruct.validation') {
     // Unity needs an exact inventory and selectors, not a successfully parsed

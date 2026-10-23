@@ -30,6 +30,20 @@ test('launcher exports only the four fixed harness choices and reports availabil
  assert.ok((await launcher.list()).every(h=>h.available&&path.isAbsolute(h.executable)));
  const status=await launcher.status('Example','codex');assert.equal(status.name,'Example');assert.equal(status.available,true);
 });
+test('all harness bootstraps and terminal runners omit Jev credentials while retaining harness authentication',async t=>{
+ const {root,workspace,bin}=await fixture(t),{createAgentLauncher}=await import(moduleUrl),{runAgentTerminal}=await import('../src/agents/terminal-runner.js');
+ const env={PATH:bin,TYPESAFE_API_KEY:'private-gui-key',JEV_OLD_KEY:'old-private-key',typesafe_mixed:'mixed-private-key',jev_lower:'lower-private-key',OPENAI_API_KEY:'codex-auth',ANTHROPIC_API_KEY:'claude-auth',GEMINI_API_KEY:'gemini-auth',CODEX_THREAD_ID:'retained-thread',GEMINI_CLI_SYSTEM_SETTINGS_PATH:path.join(root,'system','settings.json')};
+ const bootstrapCalls=[],launcher=createAgentLauncher(root,{node:process.execPath,platform:'win32',env,spawnImpl:(...call)=>{bootstrapCalls.push(call);const child=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('exit',0,null));return child;}});
+ for(const harness of ['codex','claude','gemini','opencode']){
+  const session=await launcher.launch('Example',harness),bootstrapEnv=bootstrapCalls.at(-1)[2].env;
+  for(const key of ['TYPESAFE_API_KEY','JEV_OLD_KEY','typesafe_mixed','jev_lower'])assert.equal(bootstrapEnv[key],undefined,`${harness} bootstrap must omit ${key}`);
+  let terminalEnv;runAgentTerminal(path.join(session.sessionDir,'launch.json'),{env,spawnImpl:(_file,_args,options)=>{terminalEnv=options.env;return new EventEmitter();}});
+  for(const key of ['TYPESAFE_API_KEY','JEV_OLD_KEY','typesafe_mixed','jev_lower'])assert.equal(terminalEnv[key],undefined,`${harness} runner must omit ${key}`);
+  for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','GEMINI_API_KEY','CODEX_THREAD_ID','PATH'])assert.equal(terminalEnv[key],env[key]);
+  for(const file of ['launch.json','mcp.json','context.md'])assert(!fs.readFileSync(path.join(session.sessionDir,file),'utf8').includes('private-gui-key'));
+ }
+ assert.equal(env.TYPESAFE_API_KEY,'private-gui-key');assert(fs.existsSync(workspace));
+});
 
 test('invalid project, missing project and arbitrary harness fail before spawn or session writes',async t=>{
  const {launcher,workspace,calls}=await fixture(t);

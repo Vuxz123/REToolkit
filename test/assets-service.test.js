@@ -34,7 +34,8 @@ test('shared service indexes export, maps scripts and fills a stub with unchange
   const refreshed=JSON.parse(fs.readFileSync(path.join(toolkit.workspace('Game'),'04_Notes/assets/graph.json'),'utf8'));assert.equal(refreshed.profile.limits.maxGraphBytes,512*1024**2);
   assert.deepEqual(fs.readFileSync(fixture.scenePath),scene);assert.deepEqual(fs.readFileSync(fixture.scriptPath+'.meta'),meta);
   assert.equal((await runAssetOperation(toolkit,'Game','reconstruct.verify',{operationId:plan.operationId})).valid,true);
-  assert.deepEqual(await runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:plan.operationId}),receipt);
+  const {graphRefresh:retryRefresh,...retryReceipt}=await runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:plan.operationId}),{graphRefresh:firstRefresh,...firstReceipt}=receipt;
+  assert.deepEqual(retryReceipt,firstReceipt);assert.equal(retryRefresh.strategy,'reuse');assert.equal(firstRefresh.strategy,'source-refresh');
   const noEditor=toolkit.read('Game');noEditor.unityEditorPath=path.join(root,'missing/Unity.exe');toolkit.save('Game',noEditor);
   const validation=await runAssetOperation(toolkit,'Game','reconstruct.validate',{timeoutSeconds:5});assert.equal(validation.state,'blocked');assert.equal(validation.code,'unity_editor_missing');
   assert.equal((await runAssetOperation(toolkit,'Game','reconstruct.validation',{operationId:validation.operationId})).compileReady,false);

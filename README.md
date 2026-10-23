@@ -251,6 +251,10 @@ generic/nested/property. `mode: initialization` dành riêng cho constructor b�
 thiếu, cần dump/native evidence đúng build. Không chuyển khởi tạo tùy ý sang
 `Awake` để vượt gate. Xem [source recovery](docs/source-recovery.md).
 Receipt apply chưa chứng minh logic, compilation hoặc gameplay đúng.
+Class dữ liệu không generic thiếu `.meta` có route riêng khi không có base clause
+và component binding, vẫn cần proof constructor đúng build. Apply source-only
+refresh script/index thay vì dựng lại toàn graph; SQLite vẫn cần copy/hash database.
+Xem `graphRefresh` và `assetProgress` để phân biệt ghi source với cập nhật index.
 
 ## 7. Thư viện Unity và migration
 
@@ -354,7 +358,11 @@ Program. [Python/MCP](docs/python-runtime.md) và
 Trong **Cài đặt → Jev**, lưu model và tên biến môi trường, mặc định
 `TYPESAFE_API_KEY`. Key nhập trong GUI chỉ giữ cho phiên hiện tại;
 `config/jev.json` không chứa key và bị loại khỏi Git. **Kiểm tra kết nối** gửi
-một câu hỏi tổng hợp nhỏ, không gửi nội dung game. CLI:
+một câu hỏi tổng hợp nhỏ, không gửi nội dung game.
+
+Key GUI nằm trong bộ nhớ riêng của Settings, chỉ cấp cho thao tác Jev; terminal
+Agent và job khác không nhận namespace `TYPESAFE_`/`JEV_`. Sau cập nhật cần mở lại
+GUI/Agent để áp dụng cho tiến trình mới. Cấu hình qua CMD:
 
 ```cmd
 retk jev-settings save --request config/jev.example.json

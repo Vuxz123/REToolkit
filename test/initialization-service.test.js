@@ -28,6 +28,7 @@ test('typed initialization plan/apply receives verified native context and retur
  const saved=JSON.parse(fs.readFileSync(path.join(workspace,preview.storedPlan),'utf8'));assert.equal(saved.plan.changes[0].initializationProof.originalSource,original);
  const scene=fs.readFileSync(f.scenePath),meta=fs.readFileSync(f.scriptPath+'.meta');
  const receipt=await runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:preview.operationId});assert.equal(receipt.compileReady,false);assert.equal(fs.readFileSync(f.scriptPath,'utf8'),replacement);assert.deepEqual(fs.readFileSync(f.scenePath),scene);assert.deepEqual(fs.readFileSync(f.scriptPath+'.meta'),meta);
- assert.deepEqual(await runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:preview.operationId}),receipt);
+ const {graphRefresh:retryRefresh,...retryReceipt}=await runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:preview.operationId}),{graphRefresh:firstRefresh,...firstReceipt}=receipt;
+ assert.deepEqual(retryReceipt,firstReceipt);assert.equal(retryRefresh.strategy,'reuse');assert.equal(firstRefresh.strategy,'source-refresh');
  fs.appendFileSync(dumpFile,'// changed receipt content\n');await assert.rejects(runAssetOperation(toolkit,'Game','reconstruct.apply',{operationId:preview.operationId}),{code:'stale_graph'});
 });

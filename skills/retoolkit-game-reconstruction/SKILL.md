@@ -196,8 +196,10 @@ When the legacy scanner rejects generic, nested or property syntax, inspect
 the same plan/apply route. It preserves every non-body declaration token; do not
 simplify declarations or add fields to bypass a rejection. Exact Editor parser,
 assembly inventory and GUID/fileID guards still decide eligibility. Existing
-meta-free open generic sources use their returned opaque IDs without inventing
-GUIDs. See the tool contracts for the syntax contract and remaining limits.
+meta-free open generic sources and classified nongeneric data sources use their
+returned opaque IDs without inventing GUIDs. Data sources require only classes
+with no base clauses and no component claims; uncertain/Unity inheritance is
+not eligible. See the tool contracts for the syntax contract and remaining limits.
 
 For a missing exported static/parameterless instance constructor, use the
 separate `mode: "initialization"` with explicit `constructors` selectors and
@@ -205,6 +207,13 @@ same-build native evidence, not body-mode or initialization moved into callers.
 Preserve all other source tokens. Recreate plans after parser/tool updates;
 apply rechecks fresh dump, source inventory and exact metadata/evidence identity.
 See checkout `docs/source-recovery.md` for the DTO and supported class scope.
+
+After source apply, read `graphRefresh` and job `assetProgress`: source publication
+and graph copy/update/sealing are separate stages. A matching complete graph is
+refreshed without rebuilding serialized structure; SQLite still copies/hashes
+database bytes and checks full inventory. Do not start another index job while
+this apply owns the workspace. Inspect receipt and graph after refresh failure;
+an explicit retry verifies the same source operation instead of replaying writes.
 
 Large SQLite script queries return complete binding counts/digest plus bounded
 samples; `components` is not an exhaustive list when `componentsTruncated` is

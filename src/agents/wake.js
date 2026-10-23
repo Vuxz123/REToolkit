@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import {assertAssetPath,assetError} from '../assets/context.js';
 import {atomicJson} from '../ghidra/runtime.js';
 import {findHarness as resolveHarness,harnesses} from './launcher.js';
+import {withoutJevCredentials} from '../jev-environment.js';
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const threadUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -59,7 +60,7 @@ async function childResult(found,args,{workspace,env,timeoutMs,spawnImpl=spawn})
  return new Promise(resolve=>{
   let child,settled=false,output='',bytes=0,timer;
   const finish=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value);};
-  try{child=spawnImpl(found.command,[...(found.prefix??[]),...args],{cwd:workspace,env:{...env},shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});}
+  try{child=spawnImpl(found.command,[...(found.prefix??[]),...args],{cwd:workspace,env:withoutJevCredentials(env),shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});}
   catch{return finish({state:'spawn-failed'});}
   const releaseHandles=()=>{child.unref?.();child.stdout?.unref?.();child.stderr?.unref?.();};
   const collect=data=>{bytes+=data.length;if(bytes<=32768)output+=data.toString();else {finish({state:'unknown',cleanupPending:true});releaseHandles();}};

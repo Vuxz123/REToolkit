@@ -6,11 +6,23 @@ The API endpoint is fixed to the supported Typesafe endpoint to prevent keys
 being forwarded to an arbitrary URL.
 
 Enter an API key in the password field to use it for this GUI session. It is
-passed directly to the trusted main process, kept in memory and inherited only
-through the environment. It is never saved in the settings JSON or job history.
+passed directly to the trusted main process, kept in a private Settings closure,
+and supplied only to explicit Jev connection tests and send operations. It is
+never placed in the GUI process's shared environment, settings JSON or job history.
 Restarting the GUI requires entering it again, unless its environment already
 contains the configured variable. Clearing the password field leaves the existing
 session/environment key in place. There is no automatic connectivity request.
+
+Agent terminal bootstraps, all four harness runners and Codex wake queue children
+strip the `TYPESAFE_`/`JEV_` namespace case-insensitively. Harness authentication,
+PATH and thread identity remain available. Explicit GUI Jev sends receive only
+the currently selected Jev credential, not keys saved under previous names.
+Other GUI jobs receive no Jev namespace. Windows inherited variable-name lookup
+remains case-insensitive; a GUI-entered key overrides the selected host key only
+for Jev, without changing the host environment.
+
+Restart the GUI and open a new Agent terminal after updating. Existing terminal
+environments are not changed by this fix; running jobs are not stopped or replayed.
 
 **Kiểm tra kết nối** sends one small synthetic typed question. It sends no game
 content, performs no automatic retry and reports authentication/typed-response

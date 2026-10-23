@@ -39,6 +39,48 @@ in-memory node/edge arrays. Publication follows complete source rechecks; a
 failed index leaves the previous manifest in place. Successful older generations
 remain available to saved reconstruction plans.
 
+## Source-only apply refresh
+
+After an authorized source plan applies, the receipt's complete file inventory
+must differ from the baseline only at its exact changed C# paths. GUID/meta,
+assembly, source declarations and script bindings retain the existing plan gates.
+Only those script metadata rows are reparsed. Scenes/prefabs/data tables,
+serialized nodes/edges and hierarchy are reused; compile/binding/gameplay
+readiness is still invalidated until independently checked.
+
+SQLite refresh copies a verified sealed database to a fresh exclusive generation,
+updates selected script JSON and metadata in a transaction, and hashes/seals it.
+The original database remains byte-identical for old plans and receipts. This
+avoids parsing/reinserting millions of unchanged records. It still copies/hashes
+the database and verifies the complete source inventory; it is not zero-copy or
+a guarantee of instant completion. Allow space for another database generation
+and its bounded SQLite journal. File-based copy-on-write is requested where the
+filesystem supports it, with ordinary copy behavior otherwise.
+
+The manifest publishes only after final source and database identity checks.
+Failed refresh/publication removes its owned unchanged unpublished copy. Changed
+or uncertain files and already referenced generations are preserved for review.
+The source receipt survives a graph refresh failure: inspect that exact operation
+before an explicit retry, which verifies the already applied source and reuses
+an exact published graph when available. Do not replay a running/unknown job.
+
+`graphRefresh` in the apply result reports `source-refresh`, `reuse` or `full-index`,
+storage, changed script count and elapsed milliseconds. This describes the
+current invocation and can differ on retry; the source
+receipt payload/hash and its saved artifact remain identical.
+The full-index fallback
+applies when a complete JSON baseline matching the saved plan is unavailable;
+the reduced script graph saved with the plan is never published as complete.
+Non-source inventory changes are rejected rather than folded into a refresh.
+
+Durable MCP jobs expose `assetProgress` and controlled stages such as
+`assets.source.receipt`, `assets.refresh.copying`, `assets.refresh.updating`,
+`assets.refresh.sealing` and `assets.refresh.published`. Source receipt completion
+is separate from overall job completion. The desktop activity detail shows the
+same observations, counts, byte sizes and elapsed time. No ETA/percent is inferred.
+Existing workers keep their already loaded code; this does not upgrade an active
+apply in place. Reopen MCP/GUI for later work and retain the original job ID.
+
 The same Unity parser preserves string fileIDs, GUIDs, null/builtin/missing
 reference statuses, component fields and source-bound bulk payload summaries.
 Readers verify the sealed bytes and metadata before fixed readonly SQL queries.

@@ -9,7 +9,7 @@ function argument(key){const index=process.argv.indexOf(key);if(index<0||process
  app.setPath('userData',path.join(root,'.cache/electron-user'));
  if(!app.requestSingleInstanceLock()){app.quit();return;}
  const {createDesktopBroker}=await import('./jobs.js'),{validateDesktopSender,validateDesktopCopyText,buildDesktopCommand}=await import('./operations.js');let window;
- const broker=createDesktopBroker(root,{node,onChange:job=>{if(window&&!window.isDestroyed())window.webContents.send('desktop:update',job);}});
+ const broker=createDesktopBroker(root,{node,jevEnvironment:()=>settings.jevEnvironment(),onChange:job=>{if(window&&!window.isDestroyed())window.webContents.send('desktop:update',job);}});
  const {createAgentLauncher}=await import('../agents/launcher.js');const agents=createAgentLauncher(root,{node});
  const {createToolkit}=await import('../toolkit.js');const toolkit=createToolkit(root,{log:()=>{}});
  const {createGhidraActivityReader}=await import('./ghidra-activity.js');const ghidraActivity=createGhidraActivityReader(root);

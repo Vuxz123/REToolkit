@@ -7,6 +7,11 @@ const build = (...args) => {
   return api.buildResultModel(...args);
 };
 const done = result => ({id:'fixture-job', operation:'assets.index', state:'succeeded', exitCode:0, result});
+test('running source apply exposes its observed index refresh separately from compile and gameplay',()=>{
+ const model=build({operation:'reconstruct.apply',state:'running',assetProgress:{phase:'refresh.copying',elapsedMs:2000,databaseBytes:9264693248,changedScripts:1}});
+ assert(model.sections.some(section=>section.title==='Tiến độ source / index'));
+ assert(!model.metrics.some(metric=>metric.label==='Gameplay'&&metric.value==='Đã xác minh'));
+});
 test('workspace previews show step and ABI tables directly without nested JSON inspectors',()=>{
  const model=build({operation:'workspace.add',state:'succeeded',storedResult:'C:/saved/result.json',result:{kind:'retoolkit-workspace-preview',schemaVersion:1,name:'Game',steps:{extract:{state:'succeeded'},scan:{state:'awaiting-user'}},inputSelection:{state:'needs-selection',binaries:[{path:'lib/arm64-v8a/libil2cpp.so',abi:'arm64-v8a'},{path:'lib/armeabi-v7a/libil2cpp.so',abi:'armeabi-v7a'}],metadata:[{path:'assets/global-metadata.dat'}],selection:{}},nextSteps:['Choose ABI']}});
  assert.equal(model.status.tone,'warn');assert.equal(model.sections.find(section=>section.title==='Binary / ABI').node.kind,'table');assert.equal(model.sections.find(section=>section.title==='Binary / ABI').node.rows.length,2);assert.equal(model.sections.find(section=>section.title==='Trạng thái các bước').node.kind,'table');assert.equal(model.sections.find(section=>section.title==='Bước tiếp theo').node.kind,'list');

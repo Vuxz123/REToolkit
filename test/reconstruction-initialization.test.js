@@ -160,3 +160,48 @@ test('typed reconstruction schema exposes strict initialization declarations and
  assert.doesNotThrow(()=>validateSchema({request},schema));
  request.changes[0].constructors[0].rva='0x1234';assert.throws(()=>validateSchema({request},schema));
 });
+
+const dataSource='using System.Collections.Generic; namespace Game { public class PoolRow { public List<object> InactiveObjects; public int Count() { return 0; } } }';
+async function dataSetup(t,source=dataSource){
+ const f=await setup(t);if(!f)return;
+ await fs.writeFile(path.join(f.projectDir,'Assets/PoolRow.cs'),source);
+ const graph=await indexUnityProject(f.projectDir,{binding:f.graph.binding}),evidence=[observation(graph.binding,0x1234)];
+ const text='// Image 0: Assembly-CSharp.dll - 0\n// Namespace: Game\npublic class PoolRow // TypeDefIndex: 0\n{\n// RVA: 0x1234 Offset: 0x1234 VA: 0x1234\npublic void .ctor() { }\n}\n';
+ const dump={text,sha256:sha(text),verified:true,build:graph.binding},scriptMap=await buildScriptMap(graph,{projectDir:f.projectDir,dump,evidence});
+ const scriptId='opaque:Assets/PoolRow.cs',replacement=source.replace('public int Count()', 'public PoolRow() { InactiveObjects = new List<object>(); } public int Count()');
+ const request={kind:'retoolkit-reconstruction-request',schemaVersion:1,graphRevision:graph.revision,changes:[{scriptId,mode:'initialization',source:replacement,constructors:[{fullName:'Game.PoolRow',kind:'instance',evidenceId:fingerprint(evidence[0])}]}]};
+ return {...f,graph,scriptMap,dump,evidence,request,replacement};
+}
+test('evidenced nongeneric compiler-only data constructor applies and retries without inventing meta',async t=>{
+ const f=await dataSetup(t);if(!f)return;
+ const plan=await createReconstructionPlan(f);assert.equal(plan.changes[0].identity.targetKind,'data-source');assert.equal(plan.changes[0].guid,null);assert.equal(plan.changes[0].meta,null);
+ const receipt=await applyReconstructionPlan({...f,plan});assert.equal(receipt.compileReady,false);
+ assert.equal(await fs.readFile(path.join(f.projectDir,'Assets/PoolRow.cs'),'utf8'),f.replacement);
+ await assert.rejects(fs.access(path.join(f.projectDir,'Assets/PoolRow.cs.meta')),{code:'ENOENT'});
+ assert.deepEqual(await applyReconstructionPlan({...f,plan}),receipt);
+ const graph=await indexUnityProject(f.projectDir,{binding:f.graph.binding}),scriptMap=await buildScriptMap(graph,{projectDir:f.projectDir});
+ const request={...f.request,graphRevision:graph.revision,changes:[{scriptId:'opaque:Assets/PoolRow.cs',mode:'bodies',source:f.replacement.replace('return 0;','return InactiveObjects.Count;')}]};
+ const bodyPlan=await createReconstructionPlan({...f,graph,scriptMap,request});assert.equal(bodyPlan.changes[0].identity.targetKind,'data-source');
+ await applyReconstructionPlan({...f,graph,plan:bodyPlan});
+});
+test('meta-free data constructor refuses inheritance, missing proof and identity changes',async t=>{
+ const f=await dataSetup(t);if(!f)return;
+ await assert.rejects(createReconstructionPlan({...f,evidence:[]}),/evidence/i);
+ const plan=await createReconstructionPlan(f);
+ await fs.writeFile(path.join(f.projectDir,'Assets/PoolRow.cs.meta'),'guid: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n');
+ await assert.rejects(applyReconstructionPlan({...f,plan}),/meta|inventory|changed|identity/i);
+ await fs.unlink(path.join(f.projectDir,'Assets/PoolRow.cs.meta'));
+ const claimed=structuredClone(f.graph);claimed.edges.push({from:claimed.nodes[0].id,to:'opaque:Assets/PoolRow.cs',kind:'script',field:'m_Script',fileID:'11500000',status:'resolved'});
+ await assert.rejects(createReconstructionPlan({...f,graph:claimed}),/binding|fileID/i);
+ await fs.writeFile(path.join(f.projectDir,'Assets/Duplicate.cs'),dataSource);
+ const duplicate=await indexUnityProject(f.projectDir,{binding:f.graph.binding}),duplicateMap=await buildScriptMap(duplicate,{projectDir:f.projectDir});
+ await assert.rejects(createReconstructionPlan({...f,graph:duplicate,scriptMap:duplicateMap,request:{...f.request,graphRevision:duplicate.revision}}),/ambiguous/i);
+ await fs.unlink(path.join(f.projectDir,'Assets/Duplicate.cs'));
+ for(const base of ['UnityEngine.MonoBehaviour','UnityEngine.ScriptableObject','UnknownBase','object']){
+  const source=dataSource.replace('class PoolRow {',`class PoolRow : ${base} {`);
+  await fs.writeFile(path.join(f.projectDir,'Assets/PoolRow.cs'),source);
+  const graph=await indexUnityProject(f.projectDir,{binding:f.graph.binding}),scriptMap=await buildScriptMap(graph,{projectDir:f.projectDir});
+  const request={...f.request,graphRevision:graph.revision,changes:[{...f.request.changes[0],source:source.replace('public int Count()', 'public PoolRow() { InactiveObjects = new List<object>(); } public int Count()')}]};
+  await assert.rejects(createReconstructionPlan({...f,graph,scriptMap,request}),/meta|data|base|generic/i);
+ }
+});

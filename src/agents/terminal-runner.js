@@ -3,6 +3,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {assertGeminiBinding} from './gemini-binding.js';
+import {withoutJevCredentials} from '../jev-environment.js';
 
 // Run inside the newly opened terminal. Only the main-process launcher writes
 // this bounded manifest; argv and environment values are passed as data.
@@ -14,7 +15,7 @@ export function runAgentTerminal(file,{spawnImpl=spawn,env=process.env}={}){
  if(config.harness==='gemini')assertGeminiBinding(config.cwd,{...env,...config.env});
  const status=path.join(path.dirname(file),'terminal-status.json');
  const record=value=>fs.writeFileSync(status,JSON.stringify({...value,at:new Date().toISOString()},null,2)+'\n',{mode:0o600});
- const child=spawnImpl(config.command,config.args,{cwd:config.cwd,env:{...env,...config.env},shell:false,stdio:'inherit',windowsHide:false});
+ const child=spawnImpl(config.command,config.args,{cwd:config.cwd,env:withoutJevCredentials({...env,...config.env}),shell:false,stdio:'inherit',windowsHide:false});
  child.once('spawn',()=>record({state:'running',pid:child.pid??null}));
  child.once('error',error=>{record({state:'failed',message:String(error.message).slice(0,2000)});process.stderr.write(`AI Agent could not start: ${error.message}\n`);});
  child.once('exit',(code,signal)=>record({state:code===0?'exited':'failed',exitCode:code,signal}));
