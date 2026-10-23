@@ -3,6 +3,7 @@ import {createToolkit} from '../toolkit.js';
 import {invokeAssetApi,validateAssetParams,definitions} from './api.js';
 import {readAssetJson} from './service.js';
 import {serveAssetsMcp} from './mcp.js';
+import {validationProgressPreview} from '../unity/progress.js';
 export const assetUsage=`AssetRipper AI bridge (exported Unity project)
   node re.js assets session start|status|stop <Game>
   node re.js assets export|mcp <Game>
@@ -13,7 +14,7 @@ export const assetUsage=`AssetRipper AI bridge (exported Unity project)
   node re.js assets raw <Game> --format json --bundle 0,1 --collection 0 --path-id <signed64>
   node re.js reconstruct plan <Game> --request <json> [--evidence <json>]
   node re.js reconstruct apply|verify <Game> --operation <UUID>
-  node re.js reconstruct validate <Game> [--timeout-seconds 600]
+  node re.js reconstruct validate <Game> [--timeout-seconds 600] [--resume-operation <UUID>] [--asset-ids <JSON-array>]
   node re.js reconstruct validation <Game> --operation <UUID>
 Global: --root <directory>, --json; paging: --limit 1..1000, --cursor <cursor>
 Stub filling preserves GUID/meta/YAML. Validate in Unity separately; behavior stays unverified.
@@ -27,8 +28,9 @@ export function parseAssetArgs(argv) {
   if(['json','help'].includes(key)){if(equal.length)throw Error(`Invalid --${key}`);options[key]=true;continue;}
   const value=equal.length?equal.join('='):argv[++i];if(!value||value.startsWith('--'))throw Error(`Missing --${key} value`);
   if(['root','request','evidence'].includes(key)){options[key]=value;continue;}
-  const param=key==='max-graph-mib'?'graphMaxMiB':key==='operation'?'operationId':key==='path-id'?'pathID':key==='timeout-seconds'?'timeoutSeconds':key;
-  if(key==='bundle'){if(value==='[]')params[param]=[];else{if(!/^\d+(?:,\d+)*$/.test(value))throw Error('Invalid bundle');params[param]=value.split(',').map(Number);}}
+  const param=key==='resume-operation'?'resumeOperationId':key==='asset-ids'?'assetIds':key==='max-graph-mib'?'graphMaxMiB':key==='operation'?'operationId':key==='path-id'?'pathID':key==='timeout-seconds'?'timeoutSeconds':key;
+  if(key==='asset-ids'){try{params[param]=JSON.parse(value);}catch{throw Error('Invalid --asset-ids JSON array');}}
+  else if(key==='bundle'){if(value==='[]')params[param]=[];else{if(!/^\d+(?:,\d+)*$/.test(value))throw Error('Invalid bundle');params[param]=value.split(',').map(Number);}}
   else if(['limit','depth','collection','timeout-seconds','max-graph-mib'].includes(key)){if(!/^(0|[1-9]\d*)$/.test(value))throw Error(`Invalid --${key}`);params[param]=Number(value);}else params[param]=value;
  }
  if(options.help)return {help:true};
@@ -45,6 +47,7 @@ export function parseAssetArgs(argv) {
 export async function runAssetCli(argv,defaultRoot) {
  const parsed=parseAssetArgs(argv);if(parsed.help){console.log(assetUsage);return;}
  const {name,method,params,options}=parsed,toolkit=createToolkit(path.resolve(options.root??defaultRoot),{log:message=>console.error(message)});
+ if(method==='reconstruct.validate')toolkit.onValidationProgress=event=>{const progress=validationProgressPreview(event);if(progress)process.stderr.write(JSON.stringify({kind:'unity-validation-progress',...progress})+'\n');};
  if(method==='assets.mcp')return serveAssetsMcp(toolkit,name);
  if(options.request)params.request=readAssetJson(path.resolve(options.request),32*1024**2);
  if(options.evidence)params.evidence=readAssetJson(path.resolve(options.evidence),1024**2);

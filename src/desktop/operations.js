@@ -3,7 +3,21 @@ const name=value=>typeof value==='string'&&/^[A-Za-z0-9_.-]{1,64}$/.test(value)&
 const text=value=>typeof value==='string'&&value.length>0&&value.length<=4096&&!/[\x00-\x1f]/.test(value)&&!value.startsWith('-');
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
 const table=[];
+const packageName=value=>typeof value==='string'&&value.length<=255&&/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value);
+const serial=value=>typeof value==='string'&&value.length<=255&&/^[A-Za-z0-9_][A-Za-z0-9_.:\[\]-]*$/.test(value);
+const revision=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+const relative=value=>text(value)&&!/[\\<>:"|?*]/.test(value)&&!value.startsWith('/')&&value.split('/').every(part=>part&&part!=='.'&&part!=='..'&&!/[. ]$/.test(part));
 function add(id,label,group,required,builder,optional={}){table.push({id,label,group,required,optional,builder});}
+const booleanText=value=>['true','false'].includes(value);
+add('workspace.prepare','Chuẩn bị project','workspace',{name},p=>['prepare',p.name,...(p.profile?['--profile',p.profile]:[]),...(p.symbols?['--symbols',p.symbols]:[]),...(p.addressMode?['--address-mode',p.addressMode]:[]),...(p.serial?['--serial',p.serial]:[]),...(p.packageName?['--package',p.packageName]:[]),...(p.autoPull==='false'?['--no-auto-pull']:[]),...(p.includeData==='false'?['--no-include-data']:[]),...(p.baselineValidation==='true'?['--baseline-validation']:[]),...(p.resumeRunId?['--resume-run',p.resumeRunId]:[])],{profile:value=>['native','reconstruction'].includes(value),symbols:value=>['plan','apply','skip'].includes(value),addressMode:value=>['rva','va'].includes(value),serial,packageName,autoPull:booleanText,includeData:booleanText,baselineValidation:booleanText,resumeRunId:uuid});
+add('workspace.preparation','Đọc tiến độ chuẩn bị','workspace',{name},p=>['preparation',p.name,...(p.runId?['--run',p.runId]:[])],{runId:uuid});
+add('project.create','Tạo project từ APK / XAPK','workspace',{name,input:text},p=>['create-project',p.name,p.input]);
+add('project.inputs.select','Chọn binary / ABI và metadata','inputs',{name,binary:relative,metadata:relative,revision},p=>['inputs','select',p.name,'--binary',p.binary,'--metadata',p.metadata,'--revision',p.revision]);
+add('project.inputs.recover','Đưa dữ liệu giải nén về 01_Extracted','inputs',{name,revision},p=>['inputs','recover',p.name,'--revision',p.revision]);
+add('project.inputs.resolve','Tự chọn ABI ưu tiên','inputs',{name},p=>['inputs','resolve',p.name,...(p.policy?['--policy',p.policy]:[])],{policy:value=>['prefer-arm64','manual'].includes(value)});
+add('adb.devices','Danh sách thiết bị LDPlayer / ADB','ldplayer',{},p=>['adb','devices',...(p.adb?['--adb',p.adb]:[])],{adb:text});
+add('adb.packages','Danh sách app đã cài','ldplayer',{serial},p=>['adb','packages','--serial',p.serial,...(p.adb?['--adb',p.adb]:[])],{adb:text});
+add('adb.capture','Pull APK + OBB + dữ liệu ứng dụng','ldplayer',{name,packageName,serial},p=>['pull-ldplayer',p.name,p.packageName,'--serial',p.serial,'--skip-launch','--include-data',...(p.adb?['--adb',p.adb]:[]),...(p.binary?['--binary',p.binary]:[]),...(p.metadata?['--metadata',p.metadata]:[])],{adb:text,binary:text,metadata:text});
 add('doctor','Kiểm tra công cụ','workspace',{},()=>['doctor']);
 for(const [id,label]of [['init','Tạo workspace'],['status','Đọc trạng thái'],['dump','Dump IL2CPP'],['import','Import Ghidra'],['analyze','Phân tích Ghidra'],['open','Mở PyGhidra'],['notes','Tạo ghi chú']])add('workspace.'+id,label,'workspace',{name},p=>[id,p.name]);
 for(const [id,label]of [['add','Nhập APK/XAPK'],['scan','Quét thư mục'],['flow','Chuẩn bị build']])add('workspace.'+id,label,'pipeline',{name,input:text},p=>[id,p.name,p.input,...(id==='flow'?['--no-open']:[]),...(p.binary?['--binary',p.binary]:[]),...(p.metadata?['--metadata',p.metadata]:[])],{binary:text,metadata:text});
@@ -14,15 +28,17 @@ add('assets.index','Lập graph asset','assets',{name},p=>['assets','index',p.na
 for(const [id,label]of [['get','Chi tiết asset'],['tree','Hierarchy'],['refs','Tham chiếu'],['source','Đọc script']])add('assets.'+id,label,'assets',{name,id:text},p=>['assets',id,p.name,'--id',p.id]);
 add('reconstruct.plan','Lập kế hoạch script','reconstruct',{name,request:text},p=>['reconstruct','plan',p.name,'--request',p.request]);
 for(const id of ['apply','verify','validation'])add('reconstruct.'+id,id==='apply'?'Áp dụng kế hoạch':id==='verify'?'Xác minh receipt':'Đọc báo cáo Unity','reconstruct',{name,operation:uuid},p=>['reconstruct',id,p.name,'--operation',p.operation]);
-add('reconstruct.validate','Kiểm chứng bằng Unity','reconstruct',{name},p=>['reconstruct','validate',p.name]);
+const validationAssets=value=>{if(!text(value))return false;try{const ids=JSON.parse(value);return Array.isArray(ids)&&ids.length>0&&ids.length<=1000&&ids.every(id=>text(id)&&id.length<=2048)&&new Set(ids).size===ids.length;}catch{return false;}};
+add('reconstruct.validate','Kiểm chứng bằng Unity','reconstruct',{name},p=>['reconstruct','validate',p.name,...(p.resumeOperationId?['--resume-operation',p.resumeOperationId]:[]),...(p.assetIds?['--asset-ids',p.assetIds]:[])],{resumeOperationId:uuid,assetIds:validationAssets});
 add('migration.plan','Lập kế hoạch rebind/field','migration',{name,request:text,observations:text},p=>['migration','plan',p.name,'--request',p.request,'--observations',p.observations]);
 add('migration.observe','Quan sát script/field bằng Unity','migration',{name},p=>['migration','observe',p.name,...(p.receipt?['--receipt',p.receipt]:[]),...(p.components?['--components',p.components]:[])],{receipt:text,components:text});
 add('migration.apply','Áp dụng migration vào staging','migration',{name,plan:text,observations:text},p=>['migration','apply',p.name,'--plan',p.plan,'--observations',p.observations]);
 add('migration.verify','Xác minh migration','migration',{name,receipt:text},p=>['migration','verify',p.name,'--receipt',p.receipt,...(p.observations?['--observations',p.observations]:[])],{observations:text});
 for(const id of ['scan','list'])add('libraries.'+id,id==='scan'?'Quét ZIP thư viện':'Danh mục thư viện','libraries',{},()=>['libraries',id]);
 add('libraries.roots','Thêm folder ZIP','libraries',{input:text},p=>['libraries','roots','add',p.input]);
-for(const id of ['identify','plan'])add('libraries.'+id,id==='identify'?'Nhận diện thư viện':'Lập kế hoạch import','libraries',{name},p=>['libraries',id,p.name]);
+for(const id of ['identify','plan'])add('libraries.'+id,id==='identify'?'Nhận diện thư viện':'Lập kế hoạch import','libraries',{name},p=>['libraries',id,p.name,...(p.requirements?['--requirements',p.requirements]:[])],{requirements:text});
 for(const id of ['import','verify'])add('libraries.'+id,id==='import'?'Import vào staging':'Xác minh thư viện','libraries',{name,operation:uuid},p=>['libraries',id,p.name,'--operation',p.operation]);
+add('quickstart.plan','Kế hoạch cài đặt nhanh','runtime',{},()=>['quickstart','--plan','--profile','full']);
 add('setup.status','Trạng thái bộ cài','runtime',{},()=>['setup','status']);
 for(const id of ['plan','install'])add('setup.'+id,id==='plan'?'Kế hoạch engine native':'Cài engine native','runtime',{lock:text},p=>['setup',id,'--lock',p.lock]);
 for(const id of ['plan','install'])add('desktop-runtime.'+id,id==='plan'?'Kế hoạch runtime GUI':'Cài runtime GUI/extension/.NET','runtime',{lock:text},p=>['desktop-runtime',id,'--lock',p.lock]);
@@ -41,3 +57,4 @@ export function buildDesktopCommand(operation,payload={}){
  return item.builder(payload);
 }
 export function validateDesktopSender(event,expected){return event?.sender===expected&&event.senderFrame?.url==='retk://app/index.html'&&!event.senderFrame.parent;}
+export function validateDesktopCopyText(text){if(typeof text!=='string'||Buffer.byteLength(text)>65536||text.includes('\0'))fail('Copy requires at most 64 KiB of text without NUL');return text;}

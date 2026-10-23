@@ -1,6 +1,8 @@
 # Diagnostics, evidence and TypeSafe Jev
 
-Use Node.js 24+ and the JavaScript `re.js` entry point. GUI integration is deferred.
+Use Node.js 24+ and the JavaScript `re.js` entry point. The Electron desktop
+provides Evidence / Jev operations, a readable results panel and Settings / Jev;
+see [desktop usage](desktop.md) and [Jev settings](jev-settings.md).
 The modules use the existing schema2 state and persistent Ghidra bridge.
 
 ## Diagnose the intended task

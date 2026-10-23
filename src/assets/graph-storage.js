@@ -1,6 +1,39 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import {assertAssetPath,assetError} from './context.js';
 import {openSqliteGraph} from './sqlite-store.js';
+import {fingerprint} from '../state.js';
+import {summarizeScriptBindings} from '../reconstruction/bindings.js';
+
+const scriptAttestations=new WeakMap();
+const sameStat=(a,b)=>b.isFile()&&!b.isSymbolicLink()&&a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs&&a.ctimeMs===b.ctimeMs;
+/** Only reductions from authenticated bytes enter this private registry. */
+export function assertScriptBindingsFresh(graph){
+ const attestation=scriptAttestations.get(graph);if(!attestation){if(graph?.coverage?.materialization==='streamed-script-bindings')throw assetError('asset_graph_invalid','Authenticated streamed binding attestation is missing; traverse the sealed database again');return;}
+ const {file,stat,identity}=attestation;assertAssetPath(file);
+ if(!sameStat(stat,fs.lstatSync(file))||fingerprint(graph)!==identity)throw assetError('sqlite_graph_changed','Database or streamed graph identity changed after binding traversal');
+ for(const suffix of ['-journal','-wal','-shm'])try{fs.lstatSync(file+suffix);throw assetError('sqlite_graph_changed','Sealed binding database gained a journal');}catch(error){if(error.code!=='ENOENT')throw error;}
+}
+export function storedScriptBindings(graph,asset){
+ assertScriptBindingsFresh(graph);const attestation=scriptAttestations.get(graph);if(!attestation)return null;
+ const summary=attestation.summaries.get(asset.id);
+ if(!summary||fingerprint(asset)!==attestation.assets.get(asset.id))throw assetError('graph_scope_limit','Script was not included in the authenticated binding traversal');
+ return structuredClone(summary);
+}
+
+/** Complete script validation with bounded samples, preserving all inventory.
+ * Every query/plan/apply operation constructs a fresh focus. */
+export function focusStoredScriptGraph(graph,graphFile,{scriptIds}={}){
+ assertGraphManifest(graph);if(!isSqliteGraph(graph))return graph;
+ if(!Array.isArray(scriptIds)||scriptIds.length>1000||scriptIds.some(id=>typeof id!=='string'))throw assetError('graph_scope_limit','Select at most 1000 script assets for complete streamed validation');
+ const file=storedDatabasePath(graph,graphFile),stat=fs.lstatSync(file),reader=openStoredGraph(graph,graphFile),summaries=new Map(),assets=new Map();
+ try{for(const id of new Set(scriptIds)){
+  const matches=graph.assets.filter(a=>a.id===id);if(matches.length!==1)throw assetError('asset_graph_invalid','Missing or ambiguous selected script asset');const asset=matches[0];
+  summaries.set(id,summarizeScriptBindings(asset,reader.readScriptBindings({id:asset.id,guid:asset.guid})));assets.set(id,fingerprint(asset));
+ }}finally{reader.close();}
+ const focused={...graph,schemaVersion:1,storage:undefined,nodes:[],edges:[],coverage:{...graph.coverage,materialization:'streamed-script-bindings'}};
+ scriptAttestations.set(focused,{file,stat,summaries,assets,identity:fingerprint(focused)});assertScriptBindingsFresh(focused);return focused;
+}
 
 export const isSqliteGraph=graph=>graph?.kind==='retoolkit-asset-graph'&&graph.schemaVersion===2&&graph.storage?.kind==='sqlite';
 export function assertGraphManifest(graph,{expectedStorage}={}){

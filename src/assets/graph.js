@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { parseCSharp } from './csharp.js';
+import {readUnityYamlStream} from './unity-yaml-stream.js';
 
 export const UNITY_PROJECT_LIMITS=Object.freeze({maxFiles:250000,maxDirectories:100000,maxNodes:200000,maxEdges:1000000,maxGraphBytes:128*1024*1024,maxStoredGraphBytes:512*1024*1024,hashConcurrency:8});
 const MAX_DIRECTORIES=UNITY_PROJECT_LIMITS.maxDirectories,MAX_NODES=200000,MAX_EDGES=1000000,MAX_TEXT=16*1024*1024,MAX_GRAPH=UNITY_PROJECT_LIMITS.maxGraphBytes;
@@ -94,14 +95,8 @@ function safeYaml(text,label,{classID,summaries=[]}={}){
  return convert(doc.contents);
 }
 function idString(value,label){const text=typeof value==='number'&&Number.isSafeInteger(value)?String(value):value;if(typeof text!=='string'||text.length>20||!decimal.test(text))fail('invalid_file_id',label);const number=BigInt(text);if(number<-(1n<<63n)||number>(1n<<63n)-1n)fail('invalid_file_id',label);return text;}
-function* parseUnity(text,label){
- const lines=text.match(/[^\n]*\n|[^\n]+$/g)??[];let active=null,count=0;
- function finish(document){const {lines,...identity}=document;identity.fileID=idString(identity.fileID,label);const summaries=[],data=safeYaml(lines.join(''),label,{classID:identity.classID,summaries});if(!data||Array.isArray(data)||typeof data!=='object'||Object.keys(data).length!==1)fail('invalid_unity_document',label);const type=Object.keys(data)[0],fields=data[type];if(!fields||Array.isArray(fields)||typeof fields!=='object')fail('invalid_unity_fields',label);return {...identity,type,fields,summaries};}
- for(const rawLine of lines){const line=rawLine.replace(/\r?\n$/,'');if(line.startsWith('%')){if(!/^%YAML 1\.[12]$/.test(line)&&line!=='%TAG !u! tag:unity3d.com,2011:')fail('unsupported_yaml_directive',label);continue;}
-  if(line.startsWith('---')){const match=/^--- !u!(\d+) &(-?(?:0|[1-9]\d*))(?: stripped)?\s*$/.exec(line);if(!match)fail('invalid_unity_header',label);const classID=Number(match[1]);if(!Number.isSafeInteger(classID))fail('invalid_class_id',label);if(active)yield finish(active);active={classID,fileID:match[2],lines:[]};if(++count>MAX_NODES)fail('node_count_limit');}
-  else if(active)active.lines.push(rawLine);else if(line.trim())fail('invalid_unity_yaml',label);
- }
- if(!active)fail('invalid_unity_yaml',label);yield finish(active);
+function parseUnityDocument(document,label){
+ const {lines,bytes,...identity}=document;identity.fileID=idString(identity.fileID,label);const summaries=[],data=safeYaml(lines.join(''),label,{classID:identity.classID,summaries});if(!data||Array.isArray(data)||typeof data!=='object'||Object.keys(data).length!==1)fail('invalid_unity_document',label);const type=Object.keys(data)[0],fields=data[type];if(!fields||Array.isArray(fields)||typeof fields!=='object')fail('invalid_unity_fields',label);return {...identity,type,fields,summaries};
 }
 
 function kindFor(file){const extension=path.posix.extname(file).toLowerCase();return ({'.unity':'scene','.prefab':'prefab','.cs':'script','.dll':'assembly','.asmdef':'assembly','.mat':'material','.controller':'animationController','.anim':'animationClip','.asset':'asset','.png':'texture','.jpg':'texture','.jpeg':'texture','.tga':'texture','.fbx':'mesh','.obj':'mesh'})[extension]??'opaque';}
@@ -136,7 +131,7 @@ export async function describeUnitySourceScript(root,file,{assemblies,asmrefs}){
 export async function readUnityProjectVersion(root,files){const file=files.find(f=>f.path==='ProjectSettings/ProjectVersion.txt'),text=file?await readText(root,file):null;return text?.match(/^m_EditorVersion:\s*(\S+)/m)?.[1]??null;}
 /** Shared records for bounded disk-backed indexing. */
 export function makeUnityAsset(file,{metas}){const guid=metas.get(file.path)??null;return {id:guid?`asset:${guid}`:`opaque:${file.path}`,guid,path:file.path,kind:kindFor(file.path)};}
-export async function readUnitySerializedRecords(root,file){if(!['scene','prefab','asset','material','animationController','animationClip'].includes(kindFor(file.path)))return null;const text=await readText(root,file);return text===null||!/^\s*(?:%YAML|--- !u!)/.test(text)?null:parseUnity(text,file.path);}
+export async function readUnitySerializedRecords(root,file){if(!['scene','prefab','asset','material','animationController','animationClip'].includes(kindFor(file.path)))return null;return readUnityYamlStream(root,file,{noLinks,parseDocument:document=>parseUnityDocument(document,file.path)});}
 export function makeUnityGraphNode(file,asset,parsed){const guid=asset.guid,node={id:guid?`object:${guid}:${parsed.fileID}`:`object:opaque:${file.path}:${parsed.fileID}`,assetId:asset.id,guid,fileID:parsed.fileID,classID:parsed.classID,type:parsed.type,name:typeof parsed.fields.m_Name==='string'?parsed.fields.m_Name:'',fields:parsed.fields};if(parsed.classID===114&&parsed.fields.m_Script){const ref=parsed.fields.m_Script;node.scriptRef={guid:typeof ref.guid==='string'?ref.guid.toLowerCase():ref.guid??null,fileID:idString(ref.fileID,file.path),type:ref.type??null};}if(parsed.summaries.length){node.payloadProjection={kind:'retoolkit-opaque-payload-projection',policy:'unity-bulk-payloads-v1',readOnly:true,dataTrust:'untrusted-target-content',sourcePath:file.path,sourceSha256:file.sha256,fields:parsed.summaries.map(s=>s.field)};}return node;}
 export function* unityReferenceEdges(node,{findAssetGuid,findAssetId,hasNode}){let fields=0;
   function* refs(value,field='',depth=0){if(depth>100||++fields>500000)fail('field_resource_limit');if(!value||typeof value!=='object')return;
@@ -161,8 +156,8 @@ export async function indexUnityProject(projectDir,{binding={},inventoryLimits:r
    if(!asset.script.supported)limitation(`Unsupported script declarations: ${file.path}`);account(asset,'asset');continue;
   }
   if(!['scene','prefab','asset','material','animationController','animationClip'].includes(asset.kind)){account(asset,'asset');continue;}
-  const text=await readText(root,file);if(text===null||!/^\s*(?:%YAML|--- !u!)/.test(text)){asset.kind='opaque';limitation(`Opaque serialized asset: ${file.path}`);account(asset,'asset');continue;}
-  const seen=new Set();for(const parsed of parseUnity(text,file.path)){if(seen.has(parsed.fileID))fail('duplicate_document_id',file.path);seen.add(parsed.fileID);const node=makeUnityGraphNode(file,asset,parsed);if(parsed.summaries.length){summarizedFields+=parsed.summaries.length;summarizedNodes++;summarizedSerializedBytes+=parsed.summaries.reduce((n,s)=>n+s.serializedBytes,0);}nodes.push(node);if(nodes.length>profile.limits.maxNodes)structuralLimit('node_count_limit',diagnostic('node'));account(node,'node');}account(asset,'asset');
+  const records=await readUnitySerializedRecords(root,file);if(records===null){asset.kind='opaque';limitation(`Opaque serialized asset: ${file.path}`);account(asset,'asset');continue;}
+  const seen=new Set();for await(const parsed of records){if(seen.has(parsed.fileID))fail('duplicate_document_id',file.path);seen.add(parsed.fileID);const node=makeUnityGraphNode(file,asset,parsed);if(parsed.summaries.length){summarizedFields+=parsed.summaries.length;summarizedNodes++;summarizedSerializedBytes+=parsed.summaries.reduce((n,s)=>n+s.serializedBytes,0);}nodes.push(node);if(nodes.length>profile.limits.maxNodes)structuralLimit('node_count_limit',diagnostic('node'));account(node,'node');}account(asset,'asset');
  }
  const nodeById=new Map(nodes.map(n=>[n.id,n])),assetByGuid=new Map(assets.filter(a=>a.guid).map(a=>[a.guid,a]));
  for(const node of nodes)for(const edge of unityReferenceEdges(node,{findAssetGuid:guid=>assetByGuid.get(guid),findAssetId:id=>assets.find(a=>a.id===id),hasNode:id=>nodeById.has(id)})){edges.push(edge);if(edges.length>profile.limits.maxEdges)structuralLimit('edge_count_limit',diagnostic('edge'));account(edge,'edge');}

@@ -14,6 +14,23 @@ The desktop's graph operation exposes `storage` (`json` or `sqlite`). The JSON
 memory option `--max-graph-mib 128|256|512` applies only to JSON storage; combining
 it with SQLite is rejected. SQLite requires Node24.15 or newer.
 
+Serialized Unity YAML is read as a stream of documents in both stores. A scene or
+prefab above 16 MiB can be indexed without loading all its text at once, retaining
+references through its last document. Each document remains bounded to 16 MiB;
+an oversized document reports `unity_document_byte_limit` explicitly. Strict YAML,
+64-bit fileIDs, source hashes and file identity checks still apply. Unknown binary
+serialized files remain opaque rather than being interpreted as reference-free.
+
+`retk reconstruct validate Game --json` does not require an asset graph. It uses a
+complete source inventory, copies all source bytes to staging and obtains actual
+compile/binding observations from Unity Editor. Use this route while an individual
+document blocks static indexing. Its inventory leaves serialized-reference
+coverage unverified, and neither indexing nor successful staging proves gameplay.
+
+Unity traversal now records per-asset checkpoints and independent compiler
+status. See [Unity validation and resume](unity-validation.md) for partial
+coverage, explicit resume, exact asset scope and progress fields.
+
 SQLite indexing writes a fresh generation beneath
 `04_Notes/assets/indexes/<UUID>/graph.sqlite`. `graph.json` becomes a version2
 manifest containing the complete source inventory, asset/script declarations,

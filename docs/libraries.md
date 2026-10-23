@@ -5,6 +5,24 @@ requirements, and imports a saved plan into an isolated Unity project. The
 original reconstructed export and source ZIPs stay unchanged. No library roots
 are configured by default; an empty catalog reports `unconfigured`.
 
+## Agent package knowledge and version trials
+
+Agents should read the bundled
+[Unity package map and installation recipe](../skills/retoolkit-game-reconstruction/references/unity-packages.md)
+when a Unity dependency is missing. It covers registry packages, engine modules,
+external libraries and the Editor API route for registry installs. Registry
+downloads are not a capability of the local `libraries_*` MCP tools.
+
+The agent policy is **available version first**: a library need not match the
+game's original release before a staging trial. Select an actual catalog release,
+pass that version explicitly through `requirements`, import a ready plan and
+verify the stage. Keep the original requirement and chosen trial separately in
+the reconstruction ledger. If compile/integration errors reveal a version
+mismatch, obtain the exact release next. Collision, dependency, Editor, payload
+and freshness checks still apply; DLL/stub replacement is separate work.
+Default manifest requirements remain unchanged, so the agent must send explicit
+trial requirements instead of repeatedly retrying the original version.
+
 ## Configure and inspect
 
 Register the folders containing your library ZIPs through the CLI:
@@ -33,6 +51,39 @@ The policy permits an agent to import a unique compatible saved plan into stagin
 It does not trigger downloads or infer an installation from a compile error.
 Scanning stores the content-bound catalog under `.cache/libraries/`. Rescan after
 changing roots or ZIP contents. ZIP names alone do not establish a release.
+
+## Shared DOTween source from Yarn Fever!
+
+The optional local shared snapshot in `libraries/dotween/` comes from
+`C:/Users/DPC00176/RiderProjects/threadscrew`, whose Unity product name is
+`Yarn Fever!`. It contains DOTween core **1.2.335**: runtime and Editor DLLs,
+modules, documentation, resources and original `.meta` files. DOTween Pro,
+DemiLib, examples and the game's DOTween settings are excluded. The source
+project was read only; no game export was changed and no Unity import ran.
+
+The snapshot ZIP and its private provenance are local inputs, not distributed in
+this source repository. Fresh checkouts can register their own authorized library
+folders. The two snapshot-specific tests skip when the local archive is absent;
+descriptor and synthetic catalog/import regression tests still run.
+
+The release was read from the runtime DLL's static constructor IL using
+reflection-only metadata inspection. Its assembly version is separately
+`1.0.0.0`. The snapshot receipt binds all 37 source paths and hashes, records
+the static identity evidence, and verifies the ZIP through fresh extraction
+and a second source inventory. Original copyright/license notices are retained.
+
+The built-in DOTween descriptor pins only archive SHA-256
+`e50be4124b46cfcbceb300c8cc6b6cdaad8ca7f7a9365179979190cd4d2f26e0`,
+root `Assets`, release `1.2.335`. The current machine registers this repository's
+`libraries/` directory through the standard roots API. Other checkouts can
+register their own absolute `libraries/` path with `libraries roots add` and
+scan it normally. A different archive hash does not inherit the release pin.
+
+This establishes an available shared package and exact release recognition.
+The catalog still reports uninspected managed DLL metadata, unverified plugin
+importer settings and conditional C# module declarations. Those compatibility
+gates remain in force for integration; the package has not been imported,
+compiled or verified against a reconstructed game.
 
 ## Identify requirements and save a plan
 
@@ -72,8 +123,10 @@ node re.js libraries plan MyGame --requirements requirements.json --json
 ```
 
 The DTO allows only these fields, with at most 64 package requirements. Use the
-catalog's `libraryId` as the requirement ID. Exact versions and supported simple
-compatible ranges can be resolved; the resolver never chooses latest. It checks
+catalog's `libraryId` as the requirement ID. Use the selected available version
+for a trial even if the original manifest names another release. Exact selected
+versions and supported simple compatible ranges can be resolved; the resolver
+never chooses latest implicitly. It checks
 the full dependency closure and blocks missing, ambiguous, incompatible or
 conflicting candidates, unsupported ranges, dependency cycles, and path, GUID,
 type or assembly collisions. Existing source/DLL replacements require separate
@@ -155,9 +208,9 @@ An Assets metadata record uses this strict schema:
 Place `.retk-library.json` within the actual `Assets` payload; it supplies data,
 never executable adapters. Built-in descriptors cover names such as DOTween,
 UniTask, Newtonsoft.Json, TextMesh Pro, Cinemachine, Input System, URP, Spine,
-Odin and FairyGUI. These are recognition hints, not bundled libraries or proof of
-an exact version. A verified exact-content descriptor pin can establish otherwise
-missing release metadata.
+Odin and FairyGUI. Namespaces and assembly names are recognition hints, not proof
+of an exact version. A verified exact-content descriptor pin can establish
+otherwise missing release metadata, as with the local DOTween snapshot above.
 
 Nested ZIPs are not recursively searched. Inner `.unitypackage` tar/GUID/path
 inspection is unsupported, including one found inside an otherwise recognized
@@ -187,5 +240,6 @@ The source-owned acceptance test used actual Unity **2022.3.62f2**: UPM staging
 import, package resolution, compilation and binding verification succeeded, with
 one requested script and zero prefabs. Original ZIP/export hashes remained
 unchanged. Run `npm run test:libraries -- 2022.3.62f2` to repeat the fixture. No
-actual vendor ZIP was supplied or qualified; this result does not establish
-vendor-library, real-game, UI or gameplay compatibility.
+actual vendor ZIP was qualified by that Unity acceptance fixture; the later
+DOTween source snapshot above has only archive and static identity verification.
+Neither establishes vendor-library, real-game, UI or gameplay compatibility.

@@ -11,14 +11,15 @@ import {createToolkit} from '../src/toolkit.js';
 import {withToolchainWrite} from '../src/toolchain/lease.js';
 
 const entry=path.resolve('re.js');
-async function fixture(t,{ambiguous=false,failPull=false}={}){
+async function fixture(t,{ambiguous=false,duplicateAbi=false,failPull=false}={}){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-adb-cli-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const adb=path.join(root,'adb.exe');fs.writeFileSync(adb,'inert executable placeholder; transport injected');
  const sources=path.join(root,'owned');fs.mkdirSync(sources);
  const elf=Buffer.alloc(64);elf.set([127,69,76,70,2,1]);elf.writeUInt16LE(183,18);
  async function zip(name,files){const z=new yazl.ZipFile();for(const [p,b]of files)z.addBuffer(b,p);z.end();await pipeline(z.outputStream,fs.createWriteStream(path.join(sources,name)));}
  await zip('base.apk',[['assets/bin/Data/Managed/Metadata/global-metadata.dat',Buffer.from('source-owned metadata')]]);
- await zip('split.apk',[['lib/arm64-v8a/libil2cpp.so',elf],...(ambiguous?[['lib/armeabi-v7a/libil2cpp.so',elf]]:[])]);
+ const otherElf=Buffer.from(elf);if(!duplicateAbi)otherElf.writeUInt16LE(40,18);
+ await zip('split.apk',[['lib/arm64-v8a/libil2cpp.so',elf],...(ambiguous?[['lib/armeabi-v7a/libil2cpp.so',otherElf]]:[])]);
  const calls=[];let checked=false;
  const run=async(file,args,options)=>{
   assert.equal(file,adb,'ADB capture must not invoke PowerShell');calls.push(args);
@@ -55,6 +56,10 @@ test('native capture holds leases, preserves split APKs and imports through Node
  assert.equal(calls.some(args=>args.includes('monkey')),false);assert.equal(fs.existsSync(path.join(toolkit.workspace('Game'),'.retk-lock')),false);assert.deepEqual(fs.readdirSync(path.join(root,'.cache/toolchain/readers')),[]);
  assert.equal(result.capture.serial,'emulator-5554');
 });
+test('fresh multi-ABI capture selects ARM64 by header policy without launching analysis',async t=>{
+ const {adb,toolkit}=await fixture(t,{ambiguous:true}),result=await toolkit.pullLdPlayer('Game','com.example.game',{adb,skipLaunch:true});
+ assert.equal(result.state,'prepared');assert.equal(result.project.steps.extract.state,'succeeded');assert.equal(result.project.steps.scan.state,'succeeded');assert.equal(result.project.inputSelection.source.location,'canonical');assert.equal(result.project.selection.abi,'arm64-v8a');assert.equal(result.project.selection.reason,'abi-preference');assert.notEqual(result.project.steps.import.state,'succeeded');
+});
 test('partial pull preserves existing project bytes and extracted data',async t=>{
  const {adb,toolkit}=await fixture(t,{failPull:true});await toolkit.init('Game');const projectFile=toolkit.projectPath('Game'),before=fs.readFileSync(projectFile);const old=path.join(toolkit.workspace('Game'),'01_Extracted/retained.bin');fs.writeFileSync(old,'old valid source');
  await assert.rejects(toolkit.pullLdPlayer('Game','com.example.game',{adb,skipLaunch:true}),/fixture pull failure/);assert.deepEqual(fs.readFileSync(projectFile),before);assert.equal(fs.readFileSync(old,'utf8'),'old valid source');
@@ -65,7 +70,7 @@ test('capture refuses linked workspace ancestors before initialization or ADB ca
  assert.deepEqual(calls,[]);assert.deepEqual(fs.readdirSync(outside),[]);
 });
 test('ambiguous ABI is explicit and saved bundle remains available for re-selection',async t=>{
- const {adb,toolkit}=await fixture(t,{ambiguous:true});await toolkit.init('Game');const previous=path.join(toolkit.workspace('Game'),'01_Extracted/retained.bin');fs.writeFileSync(previous,'previous extraction');await assert.rejects(toolkit.pullLdPlayer('Game','com.example.game',{adb,skipLaunch:true}),/Ambiguous binary/);assert.equal(fs.readFileSync(previous,'utf8'),'previous extraction');
+ const {adb,toolkit}=await fixture(t,{ambiguous:true,duplicateAbi:true});await toolkit.init('Game');const previous=path.join(toolkit.workspace('Game'),'01_Extracted/retained.bin');fs.writeFileSync(previous,'previous extraction');await assert.rejects(toolkit.pullLdPlayer('Game','com.example.game',{adb,skipLaunch:true}),/Ambiguous binary/);assert.equal(fs.readFileSync(previous,'utf8'),'previous extraction');
  const bundles=fs.readdirSync(path.join(toolkit.workspace('Game'),'00_OriginalBuild'));assert.equal(bundles.length,1);
  const selected=await toolkit.pullLdPlayer('Game','com.example.game',{adb,skipLaunch:true,binary:'split/lib/arm64-v8a/libil2cpp.so'});assert.equal(selected.project.selection.binary,path.join('split','lib','arm64-v8a','libil2cpp.so'));
 });

@@ -27,3 +27,8 @@ node_modules/
 
 # Local Jev settings (environment reference only)
 /config/jev.json
+
+# Local game evidence, library payloads and personal harness settings
+/exports/
+/libraries/
+/.claude/

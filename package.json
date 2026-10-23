@@ -11,6 +11,7 @@
     "retk": "./re.js"
   },
   "scripts": {
+    "setup:quick": "node scripts/quickstart.mjs",
     "cli:install": "npm link --offline --ignore-scripts --no-audit --no-fund",
     "gui:install": "node scripts/install-gui.mjs",
     "test:desktop": "node test/real-desktop.mjs",

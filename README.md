@@ -1,456 +1,424 @@
 # REToolkit
 
-AssetRipper AI access and controlled Unity stub reconstruction are available in
-the JavaScript CLI: `retk assets --help` and
-`retk reconstruct --help`. See [the workflow and MCP setup](docs/assetripper-ai.md).
-Reconstructed exports can now be [validated in an isolated Unity staging project](docs/unity-validation.md)
-with `retk reconstruct validate <Game>`.
-Local library ZIPs can be [cataloged, planned and imported into staging](docs/libraries.md)
-with `retk libraries --help`; library roots start empty.
+REToolkit là bộ công cụ Node.js để chuẩn bị build Unity IL2CPP, phân tích native
+bằng Ghidra, đọc asset qua AssetRipper và tái dựng script trên project Unity export.
+CLI `retk`, GUI Electron và MCP dùng chung lõi xử lý, workspace và receipt.
 
-REToolkit prepares Unity IL2CPP Android builds for Ghidra. Query an imported
-project through the persistent headless Java bridge, or use GhidraMCP with the
-live Ghidra/PyGhidra GUI. The recommended
-command line is `retk <command>`, registered through npm after installing
-Node.js 24+. Direct `node re.js <command>` and `re.cmd <command>` also work.
+Luồng chính: **cài toolkit → nhập APK → chuẩn bị project → mở AI Agent → tái dựng
+source/binding → kiểm chứng Unity, gameplay và hình ảnh**. Setup hoặc compile
+thành công chưa xác nhận game chơi được.
 
-The workspace pipeline, native setup, Ghidra/PyGhidra launch and Electron desktop
-use JavaScript. Run `npm run gui:install`, then `retk gui` for the desktop.
-The PowerShell installer remains a thin Node adapter; the previous Windows GUI
-is retained as legacy. See [desktop, runtime, visual and migration setup](docs/desktop.md).
-Jev now has a local configuration file and a **Settings · Jev** screen; see
-[Jev configuration](docs/jev-settings.md).
+Chỉ sử dụng build và dữ liệu bạn có quyền phân tích. Không phân phối lại source,
+asset hoặc thư viện khi chưa có quyền tương ứng.
 
-Use builds you are allowed to inspect. Do not bypass DRM, anti-cheat,
-payment/licensing, or redistribute source/assets you do not own.
+## 1. Cài nhanh trên máy mới
 
-## Start
+Trên Windows x64, clone hoặc giải nén repo vào thư mục cố định, ngắn, ví dụ
+`C:\REToolkit`. Mở CMD tại thư mục đó:
 
-Install Node.js 24+, open CMD in this REToolkit checkout and register the command:
+```cmd
+install.cmd
+```
+
+Bộ cài dùng Node.js >=24 kèm npm nếu đã có; nếu chưa có sẽ tải Node portable đã
+khóa phiên bản và kiểm tra checksum. Profile mặc định `full` cài dependency,
+Electron, JDK/Ghidra, Il2CppDumper, AssetRipper, Python/MCP và runtime desktop/.NET
+cục bộ. Sau đó tạo shim `retk` và thêm thư mục shim vào **User PATH**.
+Không cần cài sẵn Git/winget nếu dùng bản ZIP.
+
+Mở **CMD mới** sau khi cài:
+
+```cmd
+where retk
+retk --version
+retk gui
+```
+
+Các lựa chọn khác:
+
+```cmd
+install.cmd --plan --json
+install.cmd --profile desktop
+install.cmd --profile cli
+install.cmd --cache D:\RETK-packages
+install.cmd --no-path
+```
+
+| Profile | Thành phần |
+|---|---|
+| `full` | CLI, GUI và engine/runtime |
+| `desktop` | CLI + GUI, chưa cài engine |
+| `cli` | CLI, chưa cài GUI hoặc engine |
+
+`--plan` không tải hoặc ghi file. `--no-path` tạo shim nhưng không sửa PATH;
+chạy trực tiếp `.cache\quickstart\bin\retk.cmd`. Giữ nguyên vị trí checkout vì
+lệnh trỏ về đó. Báo cáo cài đặt: `.cache/quickstart/latest.json` và log từng bước.
+Chạy lại bộ cài để kiểm tra/tái sử dụng thành phần hợp lệ; transaction chưa rõ
+kết quả cần kiểm tra trước khi tiếp tục. Xem [cài nhanh và phục hồi](docs/quick-install.md).
+
+Unity Editor/module/license phù hợp game, LDPlayer, CLI và đăng nhập của Agent,
+Jev API key, thư viện ZIP, ảnh/video game gốc cần cấu hình riêng.
+
+### Cài thủ công khi đã có Node.js
 
 ```cmd
 npm ci
 npm run cli:install
-retk --version
-retk --help
+npm run gui:install
+retk setup install --lock config/native-windows-x64.lock.json --json
+retk desktop-runtime install --lock config/desktop-windows-x64.lock.json
+retk doctor
+retk gui
 ```
 
-`cli:install` uses [npm link](https://docs.npmjs.com/cli/v11/commands/npm-link/)
-to register `retk`/`retk.cmd` in npm's global prefix. You can then run `retk`
-from any CMD directory; engines and workspaces stay in this linked checkout.
-Keep the checkout at its current path, or rerun registration after moving it.
-No npm registry publication or engine download happens during registration.
-This project has not been published as a public npm package by this workflow;
-install from this checkout rather than an unverified registry name.
+`cli:install` dùng npm link, đăng ký vào npm global prefix có sẵn; riêng lệnh này
+không sửa PATH hay tải engine. Kiểm tra `npm prefix -g` nếu CMD chưa tìm thấy lệnh.
+Để cài đồng thời cả Python/MCP CLI theo lock, dùng `retk quickstart --profile full`.
+Không cần cài một package REToolkit chưa xác minh từ npm registry.
+`node re.js <command>` và `re.cmd <command>` vẫn dùng được từ checkout.
 
-If CMD cannot find `retk`, run `npm prefix -g` and check that directory is on
-your user PATH, then open a new CMD. Registration does not edit PATH itself.
-To unregister the command, run `npm unlink --global retoolkit --ignore-scripts`;
-the source checkout and its workspace data stay in place.
+## 2. Tạo và chuẩn bị project
 
-Then plan and install the four toolkit-local native engines:
+Mở `retk gui`, chọn **Tạo project từ APK**:
+
+1. Chọn APK/XAPK và đặt tên workspace mới.
+2. Chọn chính sách chuẩn bị; mặc định chạy sau khi nhập. Chọn cách xử lý symbol
+   và address mode phù hợp (`rva` hoặc `va`).
+3. Xem lại rồi tạo project. Nếu cần lấy split, chọn đúng serial/package LDPlayer.
+
+Archive gốc được giữ trong `00_OriginalBuild`; lần giải nén đầu tiên hoàn chỉnh
+nằm trong `01_Extracted`. APK nhiều ABI tự ưu tiên **ARM64 → ARMv7 → x86_64 → x86**
+khi binary ở ABI ưu tiên và metadata là duy nhất. Lựa chọn thủ công/đang lưu được
+giữ lại. Trùng binary hoặc nhiều metadata vẫn cần chọn chính xác.
+
+CLI tương đương:
 
 ```cmd
-retk setup plan --lock config/native-windows-x64.lock.json --json
-retk setup install --lock config/native-windows-x64.lock.json --json
-retk doctor
-retk flow FoodHunt "D:\Builds\FoodHunt.apk" --no-open
-retk status FoodHunt
-retk open FoodHunt
+retk create-project MyGame "D:\Builds\game.xapk" --json
+retk prepare MyGame --symbols plan --address-mode rva --json
+retk preparation MyGame --json
 ```
 
-Relative build, lock and output paths resolve from the current CMD directory.
-For a command run elsewhere, pass absolute paths or use metadata-based native
-setup: `retk setup install --all --native-only --json`.
+`rva` trong ví dụ cần khớp bằng chứng địa chỉ của build. `--symbols plan` tạo plan;
+`--symbols apply` cho phép apply qua backup/transaction/receipt;
+`--symbols skip` bỏ bước symbol. `--profile native` chỉ chuẩn bị nhánh native.
 
-This first setup stage covers JDK21, Ghidra, Il2CppDumper and AssetRipper ZIPs.
-Exact defaults are JDK 21.0.11, Ghidra 12.1.2, Dumper 6.7.48 net8.0 and
-AssetRipper 1.3.14; Ghidra selection includes JDK. `setup resolve` emits a lock,
-`setup plan` resolves metadata without writing, `setup install` uses the existing
-staged transaction, and `setup status` reads the receipt and version metadata.
-Resolution uses publisher release metadata and fails if the exact asset lacks a
-published checksum. The shipped [native Windows x64 lock](config/native-windows-x64.lock.json)
-records these four exact releases and their publisher checksums. To resolve other
-exact versions, use `--components` and the matching `--*-version` options. For a
-separate reviewed lock:
+Worker chạy nền: prerequisite/Android/input → dump → import/analysis Ghidra →
+symbol → export AssetRipper → SQLite index → mapping script ban đầu.
+Unity baseline là tùy chọn. Đóng GUI không dừng worker. Lệnh enqueue thoát thành
+công chỉ có nghĩa đã giao việc; xem domain report để biết đã xong hay bị chặn.
 
-```powershell
-retk setup plan --lock config/my-toolchain.lock.json --json
-retk setup install --lock config/my-toolchain.lock.json --cache D:\RetkPackages --json
-retk setup status --json
+```cmd
+retk preparation MyGame --run <runId> --json
+retk prepare MyGame --resume-run <runId> --json
+retk inputs MyGame --json
+retk inputs resolve MyGame --json
 ```
 
-`--lock` skips metadata networking; planning is offline and installation uses a
-verified prepopulated cache without downloads. Missing cache entries download
-only the locked archives. Metadata-based `resolve` and `plan` do access the
-network. `resolve --out <fresh.json>` writes a new lock without overwriting one.
-Downloads have bounded retries and Range resumption within the same invocation;
-there is no cross-run partial-download resume. Progress goes to stderr.
+Resume giữ policy và chỉ tái sử dụng bằng chứng còn khớp input/tool.
+Panel **Binary / ABI và metadata** hỗ trợ project cũ chờ ABI và phục hồi extraction
+hoàn chỉnh về `01_Extracted`. `inputs select`/`inputs recover` yêu cầu revision
+vừa kiểm tra; không chuyển staging thủ công. Xem
+[chuẩn bị và freshness](docs/project-preparation.md), [đầu vào/recovery](docs/project-agent.md).
 
-The equivalent Windows PowerShell 5.1 adapter is
-`.\install-re-toolkit.ps1 -All -NativeOnly`; with no flags it reads status.
-`-All` without `-NativeOnly` fails before metadata downloads or engine writes
-because GUI Python, GhidraMCP extensions and global .NET need separate reviewed
-profiles. `-InstallRuntime` also requests GUI Python and is blocked for the same
-reason. Use `-InstallGhidra` (includes JDK) or
-`retk setup install --components jdk,ghidra` for native Java/Ghidra setup.
-GUI Python, extension and global .NET installation have not been ported. Runtime
-files stay under `runtime/` and `tools/`; do not change global Python, Java or PATH
-to work around a missing toolkit runtime.
+`retk flow MyGame "D:\Builds\game.apk" --dry-run` là đường ngắn để xem kế hoạch
+dump/import; `--resume --no-open` chạy mà không mở Ghidra. `flow` không thay
+pipeline chuẩn bị đầy đủ; import `-noanalysis` chưa xác nhận analysis đã chạy.
 
-For reviewed archive versions, use the new locked installation path:
+## 3. Dùng GUI và theo dõi tiến trình
 
-```powershell
-retk toolchain plan config/my-toolchain.lock.json --json
-retk toolchain install config/my-toolchain.lock.json --cache D:\RetkPackages --json
-retk toolchain verify --json
-```
-
-It verifies SHA256/size, stages all selected packages, refuses busy engines,
-backs up previous trees, and rolls back failures. Supported archives are JDK21,
-Ghidra, Il2CppDumper and AssetRipper. The separate `python-runtime` lock installs
-CPython 3.12 x64 and all MCP wheels into an immutable generation:
-
-```powershell
-retk python-runtime plan config/my-python.lock.json --json
-retk python-runtime install config/my-python.lock.json --cache D:\RetkPackages --json
-retk python-runtime verify --json
-```
-
-Python installation executes the reviewed locked interpreter/pip locally and uses
-offline wheels with exact hashes. MCP verifies the selected file inventory before
-launch; no selection retains the legacy bridge. `-PythonManifest` preserves this
-MCP CLI route in the adapter, and `-LockedManifest` preserves the native lock
-route. These routes cannot be mixed with native selection/version flags. Neither
-installs GUI Python, extensions or .NET. See [Python/MCP locks](docs/python-runtime.md).
-
-Windows MCP dependencies now include a narrow adapter for the reviewed
-pywin32312 CPython312 x64 wheel. `npm run test:vendor-mcp -- <lock> <cache>
-<extension.zip> <ghidra>` checks offline installation, MCP transport and extension
-metadata in Temp. The locally tested bridge6.0.0 set passes CLI qualification;
-GUI/plugin activation remains a separate check.
-
-Locks must contain actual release URLs and checksums. The shipped native lock
-covers four engine ZIPs; Python/MCP uses its separate wheel lock. See
-[toolchain and release checks](docs/toolchain-and-release.md).
-
-`flow` accepts APK/XAPK/AAB/ZIP files or an extracted directory. Its default
-resume behavior preserves valid work. Use `--dry-run` to inspect the plan before
-running engines, and `--no-open` to prepare without launching the GUI:
-
-```powershell
-retk flow FoodHunt "D:\Builds\FoodHunt.apk" --dry-run
-retk flow FoodHunt "D:\Builds\FoodHunt.apk" --resume --no-open
-```
-
-A successful flow means **prepared**, not **analysis-ready**. Import uses
-`-noanalysis`; run explicit `analyze` or use GUI Auto Analysis before relying on
-decompilation. Symbols have a separate plan/apply workflow below. A detached
-GUI launch does not prove that the intended program opened.
-Verify the program, completed analysis, required symbols and MCP connection
-before reporting analysis readiness.
-
-## Diagnostics And Jev Handoff
-
-```powershell
-retk doctor FoodHunt --task prepare --json
-retk doctor FoodHunt --task headless --json
-retk doctor FoodHunt --task mcp --probe --json
-retk status FoodHunt --json
-```
-
-Readiness is task-specific: `ready`, `available`, `unknown`, or `blocked`.
-Installed files establish availability; a matching live Program establishes
-query readiness. Analysis and symbols have independent evidence. Doctor exits
-1 for a blocked task, and returns stable diagnostic codes with next actions.
-`--probe` explicitly starts a bounded MCP discovery child; it does not connect
-to a guessed instance or query target contents. Diagnostics do not start native
-sessions, repair state, or migrate project files. Status retains its existing
-state refresh behavior. The legacy GUI does not yet consume this model.
-
-Capture narrow observations from an already-running native session, then stop
-the session before taking a portable handoff snapshot:
-
-```powershell
-retk session start FoodHunt
-retk evidence capture FoodHunt --kind functions --selector Board --limit 20
-retk evidence capture FoodHunt --kind decompile --selector Board_Update --limit 100
-retk session stop FoodHunt
-retk handoff create FoodHunt --evidence exports/evidence/FoodHunt --out exports/FoodHunt.zip
-retk handoff verify exports/FoodHunt.zip
-retk jev request exports/FoodHunt.zip --questions config/jev-questions.example.json --out exports/request.json
-```
-
-Handoff defaults to dump metadata, authored notes, and explicitly supplied
-captured evidence. Large reconstructed output, assets, and binaries require
-individual opt-ins. Request creation is offline and defaults to notes/evidence
-text under a 64 KiB state budget; it fails instead of truncating evidence.
-`--against <bundle>` adds a second build for questions you define in Jev.
-Inspect the generated JSON before sending it. Set `TYPESAFE_API_KEY` in your
-environment and run `retk jev run exports/request.json --out exports/result.json`
-to submit explicitly. The adapter follows the documented
-[TypeSafe HTTP API](https://docs.typesafe.ai/api); live service acceptance has
-not been tested. See [the CLI guide](docs/diagnostics-and-jev.md) and
-[portable schema](docs/handoff-schema.md) for selection and limits.
-
-## Inputs, State And Repeated Runs
-
-Every workspace is stored in `workspaces/<GameName>/`, with `project.re.json`
-and the existing `00_OriginalBuild` through `05_ReconstructedSource` folders.
-Schema version 2 records content identity and step state. Legacy project JSON
-remains readable; an old boolean alone does not establish current readiness.
-Unverified legacy progress stays unknown until evidence supports it. Preserve
-unknown fields and the pre-migration backup when moving a workspace forward.
-
-The selected native binary and metadata are identified by SHA-256 and size.
-Changed content invalidates dependent results even if a filename stays the
-same. Metadata candidates are not proved compatible by their names. When a
-scan finds multiple candidates, select paths explicitly instead of accepting
-an arbitrary first match:
-
-```powershell
-retk scan FoodHunt "D:\Builds\Extracted" --binary "D:\Builds\Extracted\lib\arm64-v8a\libil2cpp.so" --metadata "D:\Builds\Extracted\assets\bin\Data\Managed\Metadata\global-metadata.dat"
-```
-
-`add` and `flow` accept `--binary` / `--metadata` too. Resume checks input
-identity and output validity; a file's existence or an old flag is not enough.
-Reusing a Ghidra import opens the selected program read-only to verify its
-identity; close its GUI project first, or use the already-open GUI's MCP server.
-Extraction and dump outputs are staged so a later failure keeps prior valid
-work. Workspace mutation is serialized to avoid two commands racing.
-
-Existing Ghidra programs are protected against silent overwrite. If inputs
-change, choose a new workspace or deliberately request `--reimport`. Reimport
-creates a backup before replacing the existing project; save and close that
-project in Ghidra first. Review `--dry-run` before making this choice:
-
-```powershell
-retk flow FoodHunt "D:\Builds\FoodHunt.apk" --reimport --no-open
-```
-
-GUI analysis and manual symbols remain awaiting user action or unknown until verified.
-A successful headless import does not confirm those separate steps.
-
-## Persistent Ghidra CLI
-
-Close the workspace's GUI project before starting a session. Read sessions are
-the default; queries reuse one JVM, loaded Program and decompiler. Session start
-does not import or run Auto Analysis.
-
-```powershell
-retk session start FoodHunt
-retk function list FoodHunt --query Board --limit 50
-retk decompile FoodHunt 0x123456 --json
-retk session stop FoodHunt
-```
-
-Editing requires an explicitly started write session. A verified full project
-backup precedes launch. Each data-changing operation creates a packed `.gzf`
-snapshot and saves its transaction before returning success.
-
-```powershell
-retk session start FoodHunt --write
-retk function rename FoodHunt 0x123456 Board_Update --dry-run
-retk function rename FoodHunt 0x123456 Board_Update
-retk comment set FoodHunt 0x123456 --type plate --text "Update board state"
-retk symbols plan FoodHunt --address-mode rva
-retk symbols apply FoodHunt --plan "<plan path returned above>"
-retk session stop FoodHunt
-retk open FoodHunt
-```
-
-Plans require verified current dump outputs. Choose address mode explicitly:
-`rva` adds the Program image base; `va` uses absolute virtual addresses. Inspect
-conflict/skipped counts before apply. USER_DEFINED names are kept unless a new
-plan uses `--replace-user-names`; managed comments preserve surrounding text.
-Function creation needs `--create-functions` and a verified instruction.
-Partial coverage does not set symbolsApplied. Full C types/signatures are outside v1.
-
-Use `retk session start --help` for bridge commands and
-[the bridge guide](docs/ghidra-bridge.md) for retry/recovery and limits.
-This is experimental v1. Qualification uses source-owned fixtures, not every IL2CPP build. ARM/Thumb
-symbol mapping is currently unqualified; use the retained GUI path there.
-
-## Commands
-
-Run `retk help` for current argument details. `re.cmd` is a Windows
-convenience wrapper for the same JavaScript entry point.
-
-| Command | Purpose |
+| Khu vực | Dùng để |
 |---|---|
-| `doctor` | Check toolkit runtime and engine paths. |
-| `setup resolve / plan / install / status` | Resolve exact native releases, inspect/install a lock, or read installed receipt state. |
-| `init <GameName>` | Create a workspace. |
-| `scan <GameName> <directory>` | Locate/select native binary and metadata. |
-| `add <GameName> <archive>` | Extract the build and scan it. |
-| `dump <GameName>` | Generate Il2CppDumper outputs. |
-| `import <GameName>` | Import the selected binary into Ghidra without analysis. |
-| `flow <GameName> <source>` | Plan and run preparation; safe resume is the default. |
-| `open <GameName>` / `path <GameName>` | Launch the workspace GUI / print project paths. |
-| `status <GameName>` | Inspect persisted identity and progress. |
-| `analyze <GameName>` | Explicit headless analysis with the GUI project closed. |
-| `symbols <GameName>` | Print the manual Il2CppDumper script handoff. |
-| `notes <GameName>` / `context <GameName>` / `candidates <GameName>` | Generate local analysis context from available outputs. |
-| `export <GameName> [file.re]` | Export a workspace ZIP using the `.re` extension. |
-| `import <file.re> [GameName] [--force]` | Restore a workspace archive and rebase paths. |
-| `mcp` | Start the Python GhidraMCP bridge directly from JavaScript over stdio. |
-| `libraries <operation>` | Catalog local Unity library ZIPs, resolve requirements and verify staging imports. |
+| Tổng quan | Bước tiếp theo và readiness từng nhánh |
+| Tái dựng | Plan/apply source, binding và workflow Agent |
+| Tài nguyên | Input, chuẩn bị, LDPlayer, Ghidra và asset/index |
+| Kiểm chứng | Source integrity, Unity, migration và ảnh/video |
+| Tác vụ & bằng chứng | Tiến trình, kết quả, lỗi và log của GUI/worker/MCP |
+| Kho thư viện | Folder ZIP, catalog, plan/import vào staging |
+| Cài đặt | Công cụ/runtime, Agent và Jev |
 
-`flow` supports `--resume`, `--dry-run`, `--no-open`, `--binary`, `--metadata`
-and `--reimport`. Import into an occupied Ghidra project also requires deliberate
-reimport. Archive import refuses an existing workspace unless `--force` was
-explicitly supplied; replacement creates a backup first. Preserve that backup
-until the restored workspace has been checked.
+Kết quả hiển thị bằng bảng, trạng thái và trường có nhãn; JSON kỹ thuật được thu
+gọn. Kết quả lớn có đường dẫn file đầy đủ. Mở job trong **Tác vụ & bằng chứng** để
+xem stage, elapsed time, log và receipt. **Làm mới/Kiểm tra bằng chứng** xác minh
+freshness tại thời điểm bấm.
 
-```powershell
-retk export FoodHunt
-retk import .\exports\FoodHunt.re FoodHuntCopy
+Thẻ **Ghidra · Tác vụ và tiến độ** quan sát cả job CLI/Agent, owner/PID và log gần
+nhất. Log yên lặng hoặc PID còn sống chưa đủ kết luận tiến triển hay bị treo.
+Không có phần trăm/ETA giả cho engine không cung cấp tổng khối lượng.
+Xem [GUI và giới hạn quan sát](docs/desktop.md).
+
+## 4. Mở AI Agent và MCP
+
+Cài và đăng nhập harness trước. Trong header project, chọn **Codex CLI**, **Claude
+Code**, **Gemini CLI** hoặc **OpenCode**, rồi bấm **Mở AI Agent**.
+Terminal mở tại đúng workspace với context, workflow và MCP riêng phiên:
+
+- `retoolkit_assets`: asset, source reconstruction, validation, thư viện, ADB và job.
+- `retoolkit_ghidra`: bridge tới Ghidra GUI đang mở; cần runtime, đúng Program
+  và server GhidraMCP đang chạy để truy vấn live.
+
+Phiên lưu trong `04_Notes/agent-sessions/<UUID>/`. Terminal mở chưa xác nhận
+đăng nhập/MCP thành công. Agent đọc `preparation_status` và checklist/task đã lưu
+trước, dùng bằng chứng hiện hành rồi xử lý blocker, không lặp setup. Ví dụ giao việc:
+
+> Tiếp tục project theo workflow đi kèm. Đọc task ledger và preparation status;
+> tái dựng cụm item–slot, lập plan source có evidence, kiểm tra integrity rồi
+> validation đúng các asset liên quan. Báo riêng compile, binding và gameplay.
+
+Thao tác dài dùng `jobs_start`; lưu `jobId`, đọc bằng `jobs_get`/`jobs_wait`.
+Kết quả có stage, log giới hạn và result/`resultReference`. Job tiếp tục khi MCP
+ngắt kết nối. Ba lời gọi MCP riêng:
+
+```json
+{"name":"jobs_start","arguments":{"operation":"workspace.dump","params":{}}}
 ```
 
-The following compatibility commands temporarily invoke a legacy PowerShell
-adapter: `ghidra-gui`, `pyghidra-gui`, `il2cppdumper`, `assetripper`
-(`asset-ripper`), and `assetripper-cli`. They require Windows
-PowerShell 5.1. AssetRipper exports do not establish that original source was recovered.
-`open` and the optional GUI handoff at the end of `flow` use the retained
-PyGhidra launcher adapter too.
-Core workspace/state/scan/archive/flow operations do not fall back to PowerShell.
+```json
+{"name":"jobs_get","arguments":{"jobId":"<UUID>"}}
+```
 
-ADB discovery and LDPlayer capture are native JavaScript:
+```json
+{"name":"jobs_wait","arguments":{"jobId":"<UUID>","timeoutSeconds":25}}
+```
 
-```powershell
+Codex CLI có `agent.wake_after` để gửi tiếp việc vào **đúng thread** sau job.
+Agent phải xác nhận watcher `running`, `wakeProgress.state: waiting` và
+`transportReady: true` trước khi kết thúc lượt. `queued` chưa chứng minh Agent đã
+thức dậy. Ba harness còn lại chưa có adapter tự đánh thức; lời nhắn “Next…” không
+tự tạo continuation. Xem [Agent/MCP](docs/project-agent.md),
+[continuation và delivery](docs/agent-continuations.md).
+
+### Agent Skills And Older Installations
+
+[Workflow tái dựng](skills/retoolkit-game-reconstruction/SKILL.md) chứa mapping
+asset/script, native evidence, plan/apply, thư viện, migration và các gate kiểm chứng.
+Các skill khác: [cài đặt](skills/retoolkit-install/SKILL.md),
+[chuẩn bị build](skills/retoolkit-flow/SKILL.md),
+[Ghidra/MCP](skills/retoolkit-mcp-analysis/SKILL.md).
+Launcher đóng gói workflow từng phiên, không tự ghi đè skill/config toàn máy.
+Cấu hình MCP thủ công và cập nhật integration cũ theo
+[hướng dẫn cài skill](prompts/install-ghidra-skill.md).
+
+## 5. Thiếu split hoặc dữ liệu tải thêm
+
+Toolkit đọc manifest/dependency split. Thiếu `libil2cpp.so` chưa đủ chứng minh thiếu
+split. Với serial/package đã chọn, pipeline kiểm tra package/version/base hash/
+chữ ký trước khi phục hồi từ LDPlayer; không trộn build khác. Input đã có kết quả
+downstream cần review trước khi thay.
+
+```cmd
 retk adb devices --adb C:\LDPlayer\LDPlayer9\adb.exe --json
-retk pull-ldplayer FoodHunt com.example.game --serial emulator-5554 --skip-launch --json
+retk adb packages --serial emulator-5554 --json
+retk pull-ldplayer MyGame com.example.game --serial emulator-5554 --skip-launch --include-data --json
 ```
 
-Use `--adb <adb.exe>` if ADB is not on PATH or in a known LDPlayer location.
-An explicit serial is required when several devices are ready. Capture keeps
-base/split APKs and OBBs, checks remote/local sizes and records SHA256 before
-importing through the Node pipeline. Without `--skip-launch`, an interactive
-terminal launches the game and waits for Enter after its downloads finish.
-JSON/Agent calls require `--skip-launch`. See [ADB capture and recovery](docs/adb-capture.md).
+Nếu ADB chưa được tìm thấy, truyền `--adb <đường-dẫn-adb.exe>` cho lệnh tương ứng.
+Chọn serial/package thật từ discovery. Hoàn thành download trong game trước khi
+capture; GUI/MCP không mở game. APK/split/OBB vào XAPK; external/private data có
+quyền đọc vào ZIP riêng. Bị từ chối quyền được báo partial. Không thể chứng minh
+offline toàn bộ PAD/CDN đã tải. Xem [capture và coverage](docs/adb-capture.md).
 
-## Ghidra And MCP Handoff
+## 6. Đọc asset và tái dựng source
 
-1. Open the correct project and program in CodeBrowser.
-2. Run Auto Analysis and wait for completion.
-3. Run `ghidra.py` or `ghidra_with_struct.py` from the `tools/Il2CppDumper`
-   Script Bundle; select this workspace's `02_Il2CppDumperOutput/script.json`.
-4. Enable `File > Configure > Configure All Plugins > GhidraMCP`.
-5. Start `Tools > GhidraMCP > Start MCP Server`.
-6. In the AI client, discover instances, connect, and verify the intended program.
+Nếu chưa dùng preparation, chạy nhánh AssetRipper riêng:
 
-The GUI extension runs the HTTP server. The separate Python bridge in
-`tools/ghidra-mcp/.venv` connects AI-client stdio to that server. Configure your
-client to launch the bridge through JavaScript:
-
-```toml
-[mcp_servers.ghidra]
-command = "node"
-args = ["C:\\Users\\DPC00176\\REToolkit\\re.js", "mcp"]
-
-[mcp_servers.ghidra.env]
-RETOOLKIT_ROOT = "C:\\Users\\DPC00176\\REToolkit"
+```cmd
+retk assets session start MyGame --json
+retk assets session status MyGame --json
+retk assets export MyGame --json
+retk assets index MyGame --json
+retk assets scripts MyGame --query Namespace.Type --json
+retk assets session stop MyGame
 ```
 
-Replace the absolute root with your checkout. See `config/` for Codex and
-OpenCode fragments. Merge them into existing configuration; do not replace
-unrelated settings.
+Chờ load/export job thực sự hoàn tất. Project Unity export nằm dưới
+`05_ReconstructedSource`. Có export rồi thì index trực tiếp. Export lớn dùng
+SQLite theo [hướng dẫn lưu trữ](docs/assets-storage.md); Agent đọc query/trang
+có giới hạn thay vì đưa cả graph vào context. SQLite cần Node.js 24.15 trở lên;
+Node portable của bộ cài nhanh đã đáp ứng điều kiện này.
 
-```text
-list_instances
-connect_instance <GameName>
-list_tool_groups
-load_tool_group function
-load_tool_group listing
+Source request dùng revision/script ID hiện tại; xem
+[schema và ví dụ](docs/assetripper-ai.md). Sau khi xem xét plan:
+
+```cmd
+retk reconstruct plan MyGame --request request.json --json
+retk reconstruct apply MyGame --operation <UUID> --json
+retk reconstruct verify MyGame --operation <UUID> --json
 ```
 
-Use connected MCP tools for decompilation, functions, strings, xrefs, symbols,
-types and comments. The old `ghidra` / `ghidra-cli` query backend is disabled.
-Legacy `summary`, `strings`, `functions` and `stats` aliases only give guidance.
+`mode: bodies` thay thân hàm hiện có và giữ declaration, hỗ trợ nhiều source có
+generic/nested/property. `mode: initialization` dành riêng cho constructor bị
+thiếu, cần dump/native evidence đúng build. Không chuyển khởi tạo tùy ý sang
+`Awake` để vượt gate. Xem [source recovery](docs/source-recovery.md).
+Receipt apply chưa chứng minh logic, compilation hoặc gameplay đúng.
 
-## Agent Skills And Older Installations
+## 7. Thư viện Unity và migration
 
-Use repo-local `skills/retoolkit-install`, `skills/retoolkit-flow` and
-`skills/retoolkit-mcp-analysis`. An installed `ghidra-reverse-engineering-cli`
-skill can still recommend obsolete commands. Search installed skill roots:
+Đăng ký folder chứa ZIP thư viện; mặc định chưa có root:
 
-```powershell
-$retkSkillRoots = @((Join-Path $HOME '.codex\skills'), (Join-Path $HOME '.agents\skills'))
-if ($env:CODEX_HOME) { $retkSkillRoots += Join-Path $env:CODEX_HOME 'skills' }
-$retkSkillRoots = @($retkSkillRoots | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
-if ($retkSkillRoots.Count -gt 0) {
-    rg -n -g SKILL.md 'ghidra-reverse-engineering-cli|ghidra-cli|re\.ps1 ghidra\b' $retkSkillRoots
-}
+```cmd
+retk libraries roots add "D:\UnityLibraries"
+retk libraries scan --json
+retk libraries list --query dotween --limit 20 --json
+retk libraries identify MyGame --section requirements --limit 100 --json
+retk libraries plan MyGame --json
 ```
 
-Include any other roots configured by your agent. Inspect matches: warnings
-about disabled aliases are expected; instructions to execute them are stale.
-Updating personal installed skills is separate, explicitly requested work.
-Back up complete folders outside active skill roots, review customizations,
-then install current instructions and archive conflicting legacy copies. See
-[the install prompt](prompts/install-ghidra-skill.md#installed-skill-updates).
-The toolkit does not rewrite global skills automatically.
+Agent ưu tiên thử **phiên bản thực có trong catalog**, ghi riêng requirement gốc
+và version thử. Khi lỗi compile/integration do version mới tìm bản đúng. Import
+saved plan vào staging rồi verify, vẫn kiểm tra dependency/collision/binding.
+UPM/engine module dùng đường cài riêng; xem
+[bản đồ package](skills/retoolkit-game-reconstruction/references/unity-packages.md)
+và [catalog/import](docs/libraries.md). Thư viện ZIP local không đi kèm source repo.
 
-## Tests And Verification Limits
+DLL stub không thành implementation thật chỉ vì compile pass. Đổi DLL, rebinding
+hoặc rename field cần migration có Editor observation, plan, staging và verify;
+không xóa DLL/sửa GUID để né lỗi. Chưa hỗ trợ tự chuyển toàn bộ DLL sang C#,
+arrays/nested/managed-reference field hoặc đổi kiểu tùy ý. Xem
+[phạm vi migration](docs/desktop.md#script-and-field-migration).
 
-```powershell
+## 8. Kiểm chứng Unity, gameplay và giao diện
+
+Validation dùng bản sao staging và Editor khớp project, giữ export gốc:
+
+```cmd
+retk reconstruct validate MyGame --json
+retk reconstruct validation MyGame --operation <UUID> --section assets --limit 20 --json
+retk reconstruct validate MyGame --resume-operation <UUID> --json
+```
+
+Scope nhận scene `.unity`, prefab `.prefab` và bảng `.asset`, gồm main/subasset.
+Chọn đúng ID từ index qua trường `assetIds` trong GUI/MCP. Mọi source vẫn tham gia
+compile; `scopeBindingsVerified` chỉ xác nhận binding scope, không phải toàn project.
+Giới hạn/lỗi load giữ asset pending và báo partial. Resume chỉ tái sử dụng
+checkpoint khớp source/Editor/helper/scope.
+
+Sau cập nhật helper hỗ trợ `.asset`, **khởi động lại MCP/GUI và tạo validation mới
+với policy cũ**, giữ các file bảng; không resume receipt của helper cũ.
+Xem [validation và resume](docs/unity-validation.md).
+
+| Bằng chứng | Điều được xác minh |
+|---|---|
+| Source integrity | File áp dụng khớp plan/receipt |
+| Compile | Compiler Unity thành công |
+| Binding | Script/reference hợp lệ trong scope đã kiểm tra |
+| Gameplay | Hành vi chạy thực qua ca kiểm thử được ghi nhận |
+| Visual | Ảnh/frame khớp baseline gốc đúng profile và trạng thái |
+
+Request ảnh/video cần baseline, candidate, screen/state, resolution/profile,
+vùng kiểm tra và ngưỡng:
+
+```cmd
+retk visual compare MyGame --request visual-request.json --json
+retk visual report MyGame --operation <UUID> --json
+```
+
+Video cần ffmpeg được chọn rõ và timestamp căn chỉnh. Không có ảnh/video gốc thì
+visual fidelity vẫn `unverified`; fixture chỉ kiểm tra cơ chế so sánh.
+Xem [schema ảnh/video và diff](src/visual/README.md).
+
+## 9. Ghidra, symbol và native evidence
+
+Chọn một owner: GUI hoặc headless. Lưu/đóng project GUI trước khi mở write session;
+không chạy cạnh tranh hai đường trên cùng project.
+
+```cmd
+retk session start MyGame
+retk function list MyGame --query Board --limit 20
+retk decompile MyGame 0x123456 --json
+retk session stop MyGame
+```
+
+Địa chỉ trên là ví dụ; dùng địa chỉ thật từ query. Apply symbol thủ công:
+
+```cmd
+retk session start MyGame --write
+retk symbols plan MyGame --address-mode rva
+retk symbols apply MyGame --plan "<saved-plan-path>"
+retk session stop MyGame
+retk open MyGame
+```
+
+Xem plan/conflict/coverage trước khi apply. Write có backup/transaction;
+`USER_DEFINED` giữ theo policy. Partial coverage chưa xác nhận toàn bộ symbol.
+MCP typed job yêu cầu đúng plan/hash/operation ID. Xem [bridge](docs/ghidra-bridge.md).
+
+Đường GUI: mở đúng Program, hoàn thành Auto Analysis, áp script Il2CppDumper nếu
+dùng quy trình thủ công, enable GhidraMCP và Start MCP Server rồi kết nối Agent.
+`retk doctor MyGame --task mcp --probe --json` kiểm tra discovery; không tự chọn
+Program. [Python/MCP](docs/python-runtime.md) và
+[toolchain lock](docs/toolchain-and-release.md) mô tả profile cài nâng cao.
+
+## 10. Cấu hình Jev và bàn giao
+
+Trong **Cài đặt → Jev**, lưu model và tên biến môi trường, mặc định
+`TYPESAFE_API_KEY`. Key nhập trong GUI chỉ giữ cho phiên hiện tại;
+`config/jev.json` không chứa key và bị loại khỏi Git. **Kiểm tra kết nối** gửi
+một câu hỏi tổng hợp nhỏ, không gửi nội dung game. CLI:
+
+```cmd
+retk jev-settings save --request config/jev.example.json
+set TYPESAFE_API_KEY=<your-key>
+retk jev-settings test --json
+```
+
+Tạo handoff nội dung đã chọn, xem request trước khi gọi dịch vụ:
+
+```cmd
+retk handoff create MyGame --out exports/MyGame.zip
+retk handoff verify exports/MyGame.zip
+retk jev request exports/MyGame.zip --questions config/jev-questions.example.json --out exports/request.json
+retk jev run exports/request.json --out exports/result.json
+```
+
+Mặc định không kèm toàn bộ binary/asset. Native evidence cần capture rồi chọn thêm
+bằng `--evidence`; so sánh build dùng `--against`. Jev không bắt buộc cho Agent/MCP.
+Xem [settings](docs/jev-settings.md), [handoff](docs/diagnostics-and-jev.md) và
+[schema](docs/handoff-schema.md).
+
+## Dữ liệu, chuyển máy và lỗi thường gặp
+
+Workspace nằm tại `workspaces/<Game>/`, gồm `project.re.json` và các thư mục số.
+Task ledger, job, plan, backup, receipt và evidence nằm dưới `04_Notes`.
+Không xóa chúng khi sửa gate. Workspace, cache/runtime, exports và ZIP thư viện
+local không phải thành phần source cần push lên Git.
+
+```cmd
+retk path MyGame
+retk status MyGame --json
+retk export MyGame
+retk import "D:\Transfers\MyGame.re" MyGameCopy
+```
+
+`.re` là archive workspace; `handoff` là gói evidence đã chọn. Import vào tên có
+sẵn cần `--force` và tạo backup. Đổi binary cần xem lại downstream/reimport;
+không giữ evidence cũ như hiện hành.
+
+| Triệu chứng | Cách xử lý |
+|---|---|
+| CMD không thấy `retk`/mở bản cũ | Mở CMD mới, xem `where retk`, dùng shim trong báo cáo; kiểm tra PATH/npm prefix |
+| GUI không hiện hoặc giao diện cũ | Xem checkout qua `where retk`; cài `npm run gui:install` nếu thiếu Electron rồi mở lại `retk gui` |
+| Workspace is busy | Xem owner/job/log, chờ đúng job; không xóa lock hoặc chạy lại write |
+| Job `unknown`/`cleanup_pending` | Kiểm tra receipt, lease và child gốc trước khi retry mutation |
+| Compile pass nhưng validation partial | Xem pending/traversal; resume checkpoint hợp lệ hoặc tạo mới khi helper/source đổi |
+| Policy có `.asset` bị từ chối | Nạp MCP/GUI mới rồi validation mới, giữ nguyên scope |
+| Agent nói “Next…” rồi đứng | Active `jobs_wait` hoặc watcher Codex đã sẵn sàng; kiểm tra đúng thread/delivery |
+| Claude nhận chuỗi prompt làm MCP config | Đóng phiên lỗi, mở GUI/Agent mới để nạp launcher mới |
+| Thiếu RAM Ghidra | Xem diagnostics/heap/RAM trống; preparation chọn heap theo RAM, tôn trọng cấu hình tường minh |
+
+## Phát triển và kiểm thử
+
+```cmd
 npm test
-npm run test:legacy
+node re.js --help
 ```
 
-`npm test` uses Node's built-in `node:test` runner for `test/*.test.js`.
-`test:legacy` is optional and runs the original standalone PowerShell suites;
-keep Windows PowerShell 5.1 compatibility when changing the retained adapters.
-Tests using disposable files or fake engine processes check orchestration and
-state, not Ghidra/Il2CppDumper correctness. GUI helper/source tests do not test
-a live WinForms wizard.
+Suite Node dùng fixture/workspace tạm. Helper C# có fixture API Unity; không thay
+nghiệm thu trong Editor thật. Hai test ZIP DOTween local được bỏ qua nếu chưa có
+archive; các test descriptor/catalog bằng fixture vẫn chạy. Các lệnh `test:ghidra`, `test:mcp`,
+`test:unity-validation`, `test:desktop` và acceptance script có prerequisite/phạm
+vi riêng; đọc tài liệu tương ứng trước khi chạy. `npm run test:legacy` dành cho
+adapter PowerShell cũ.
 
-`npm run test:setup-download` explicitly downloads the four locked native ZIPs
-into an isolated `.cache` toolkit and verifies installed inventories. It requires
-at least 5 GiB free, retains its evidence, and executes no vendor binary. See
-[native setup verification](docs/superpowers/specs/2026-10-20-node-setup-verification.md).
-
-`npm run test:adb` compiles and runs a source-owned fake ADB executable against
-owned base/split/OBB ZIPs. It checks the actual CLI, supervised child processes,
-leases and partial-pull preservation without connecting to a device or emulator.
-
-Real-engine acceptance must separately cover a fresh authorized build, an
-existing analyzed workspace, `.re` transfer/reopen and a verified MCP query.
-Do not report these as passed from synthetic fixtures. The optional
-`npm run test:ghidra -- C:\\path\\to\\installed-toolkit` builds its own tiny PE
-fixture and checks real import and read-only attestation. This was verified
-locally with Ghidra 12.1.2 and JDK 21; it does not establish IL2CPP dumping,
-game analysis, a live GUI session or an MCP query.
-`npm run test:ghidra-session -- C:\path\to\installed-toolkit` checks the new
-persistent Java bridge, durable mutations and recovery on synthetic fixtures.
-`npm run test:ghidra-symbols -- C:\path\to\installed-toolkit` also covers
-synthetic ELF64 ARM64 and PE64 AMD64 loaders. See
-[verification scope](docs/superpowers/specs/2026-10-19-ghidra-bridge-verification.md).
-The separate read-only bridge check is
-`npm run test:mcp -- C:\\path\\to\\installed-toolkit`; local initialization
-and `tools/list` succeeded with the installed bridge (30 advertised tools).
-This does not verify a connection to a particular game/program.
-`npm run test:handoff -- C:\path\to\installed-toolkit` checks a source-owned
-seeded PE through real Ghidra evidence capture, ZIP transfer verification, and
-offline Jev request creation. It does not test IL2CPP dumping or send to Jev.
-
-## Troubleshooting And Legacy GUI
-
-For a project lock, query the already-open GUI through MCP, or save and close
-that project in all Ghidra/PyGhidra windows before headless work. Let active
-headless jobs finish. Do not delete locks or stop unrelated processes. There
-is no working legacy stop alias.
-
-If GhidraMCP is missing, install `tools/ghidra-mcp/GhidraMCP-<version>.zip` via
-`File > Install Extensions > Add`, restart Ghidra, then enable the plugin. If
-Script Manager cannot see `ghidra.py`, fully close all Ghidra/PyGhidra windows
-and reopen so the Script Bundle config reloads.
-
-The existing `scripts/retk-gui.ps1` / `REToolkit-GUI.exe` remains the legacy
-PowerShell GUI. Rebuild with `.\scripts\build-gui.ps1` after changing its source.
-Module installation now needs explicit `-InstallPs2Exe`; replacement needs `-Force`.
-Builds publish a provenance sidecar with source revision/hashes and EXE identity.
-GUI migration comes later; use JavaScript CLI for the new resume and state
-behavior. [Tutorial.md](Tutorial.md) describes the older PowerShell workflow
-and detailed installation screens; its CLI examples are legacy, not the
-recommended JavaScript entry point.
+GUI chính là Electron/Node. `re.ps1`, WinForms và [Tutorial.md](Tutorial.md) được
+giữ cho tương thích; ví dụ PowerShell cũ không phải luồng khuyến nghị.

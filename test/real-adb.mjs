@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {pipeline} from 'node:stream/promises';
 import yazl from 'yazl';
 import {fileIdentity} from '../src/state.js';
+import {extractZip} from '../src/archive.js';
 if(process.platform!=='win32')throw Error('The ADB executable fixture requires Windows PowerShell/.NET Framework');
 const repository=path.resolve(import.meta.dirname,'..'),root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-adb-smoke-'));
 const owned=path.join(root,'owned'),toolkit=path.join(root,'toolkit'),workspace=path.join(toolkit,'workspaces/OwnedFixture');fs.mkdirSync(owned);fs.mkdirSync(toolkit);
@@ -23,6 +24,7 @@ try{
  await zip('base.apk',[['assets/bin/Data/Managed/Metadata/global-metadata.dat',Buffer.from('source-owned metadata fixture')]]);
  await zip('split_config.arm64.apk',[['lib/arm64-v8a/libil2cpp.so',elf]]);
  await zip('main.1.com.example.fixture.obb',[['assets/owned.txt',Buffer.from('owned OBB fixture')]]);
+ fs.writeFileSync(path.join(owned,'external.bin'),Buffer.from([0,255,13,10]));fs.writeFileSync(path.join(owned,'private.bin'),Buffer.from([128,0,1,254]));
  const identities=Object.fromEntries(fs.readdirSync(owned).filter(name=>/\.(apk|obb)$/.test(name)).map(name=>[name,fileIdentity(path.join(owned,name)).sha256]));
  assert.equal(command(['adb','devices','--adb',executable]).devices[0].state,'device');fs.writeFileSync(path.join(owned,'events.txt'),'');
  const args=['pull-ldplayer','OwnedFixture','com.example.fixture','--adb',executable,'--serial','emulator-5554','--skip-launch'];
@@ -34,7 +36,11 @@ try{
  const projectFile=path.join(workspace,'project.re.json'),previous=fs.readFileSync(projectFile),captureHash=fileIdentity(result.capture.bundle).sha256;
  assert.equal(command(args,1,'partial').ok,false);assert.deepEqual(fs.readFileSync(projectFile),previous);assert.equal(fileIdentity(result.capture.bundle).sha256,captureHash);assert.equal(fs.readdirSync(path.join(workspace,'00_OriginalBuild')).length,1);
  for(const [name,sha256]of Object.entries(identities))assert.equal(fileIdentity(path.join(owned,name)).sha256,sha256);
- success=true;console.log(JSON.stringify({passed:true,fixture:'source-owned compiled ADB executable and base/split/OBB ZIPs',deviceAccess:false,psPipeline:false,supervisedAdbCalls:events.length,capturedFiles:3,partialPull:'refused; prior project and bundle unchanged',vendorExecution:false}));
+ const full=command([...args,'--include-data']);assert.equal(full.capture.applicationData.coverage,'complete');assert.equal(full.capture.applicationData.files,2);assert.equal(full.state,'prepared');assert(fs.existsSync(full.capture.applicationData.bundle));
+ const dataCheck=path.join(root,'data-check');await extractZip(full.capture.applicationData.bundle,dataCheck);assert.deepEqual(fs.readFileSync(path.join(dataCheck,'private/com.example.fixture/private.bin')),fs.readFileSync(path.join(owned,'private.bin')));assert.deepEqual(fs.readFileSync(path.join(dataCheck,'Android/data/com.example.fixture/external.bin')),fs.readFileSync(path.join(owned,'external.bin')));assert.equal(fs.existsSync(path.join(workspace,'01_Extracted/private')),false);
+ const denied=command([...args,'--include-data'],0,'private-denied');assert.equal(denied.state,'partial');assert.equal(denied.capture.applicationData.coverage,'partial');assert.equal(denied.capture.applicationData.scopes.find(scope=>scope.id==='private').state,'denied');
+ const fullEvents=fs.readFileSync(path.join(owned,'events.txt'),'utf8').trim().split('\n').map(line=>{const [pid,lease,encoded]=line.split(' ');return {pid:Number(pid),lease,args:Buffer.from(encoded,'base64').toString('utf8').split('\0')};});assert(fullEvents.every(event=>event.lease==='locked'));assert(!fullEvents.some(event=>event.args.includes('monkey')||event.args[0]==='root'||event.args[0]==='remount'));
+ success=true;console.log(JSON.stringify({passed:true,fixture:'source-owned compiled ADB executable with APK/split/OBB and binary app data',deviceAccess:false,psPipeline:false,supervisedAdbCalls:fullEvents.length,capturedFiles:3,appDataFiles:2,privateDenied:'partial',partialPull:'refused; prior project and bundle unchanged',vendorExecution:false}));
 }finally{
  assert.equal(path.dirname(root).toLowerCase(),os.tmpdir().toLowerCase());
  if(success&&!process.env.RETK_KEEP_FIXTURE)fs.rmSync(root,{recursive:true,force:true});else console.error('ADB fixture diagnostics retained: '+root);

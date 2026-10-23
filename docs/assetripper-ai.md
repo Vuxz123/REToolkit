@@ -92,11 +92,57 @@ Uncertain rollback preserves ownership and reports
 
 This slice fills existing supported `.cs` stubs, keeping scene/prefab YAML and
 `.meta` byte-identical. DLL rebinding, assembly/namespace/serialized-field
-migration, Editor code and uncertain C# declarations are rejected. Native
+migration and Editor code are rejected. Native
 pseudocode is evidence for a manual reconstruction, never original C# source.
 Source-apply receipts have `compileReady:false` and logic `unverified`. The
 [Unity validation workflow](unity-validation.md) supplies independent compilation
 and binding evidence on a staging copy; gameplay verification remains separate.
+
+### Generic, nested and property-bearing existing sources
+
+For an existing file the legacy declaration scanner cannot model, add
+`"mode": "bodies"` to that change in the same request. `assets scripts` exposes
+`sourceCapabilities.bodyReplacement`; `requires-plan-validation` is a candidate,
+not permission to bypass the plan. The legacy `state.identity: "unsupported"`
+can coexist with this capability.
+
+```json
+{
+  "scriptId": "opaque:Assets/Scripts/Singleton.cs",
+  "mode": "bodies",
+  "source": "<complete source with only existing executable bodies changed>",
+  "evidenceIds": []
+}
+```
+
+Use the exact returned script ID (GUID assets still use `asset:<guid>`).
+Body mode parses source as data using Roslyn bundled with the exact installed
+project Editor. It does not launch Unity or compile/load game assemblies. Its
+syntax contract preserves imports, attributes, generic parameters/constraints,
+ordered generic bases, all field/property initializers, accessor visibility,
+explicit-interface signatures, constructor initializers and nested declarations.
+Only existing method/constructor/operator/accessor bodies and expression-property
+or indexer expressions can change. Body forms stay the same: an arrow property
+cannot silently become an auto-property, and a block method stays a block method.
+Adding members/backing fields or changing declarations needs a separate route.
+Missing native constructors now have an explicit guarded `initialization` route;
+see [source recovery and large binding sets](source-recovery.md). It preserves
+body-mode and requires same-build constructor metadata plus native evidence.
+Partial declarations, directives, malformed syntax and uncertain overlapping
+declaration inventories remain blocked.
+
+An existing source without `.meta` is accepted only when all top-level types are
+open generic classes. Its target is bound to the complete inventory, exact
+path/hash, assembly and generic/nested metadata names. No GUID or `.meta` is
+created. Other meta-free sources remain unsupported. Existing GUID/local-fileID
+checks still apply to asset-backed sources.
+
+Plans bind the declaration skeleton and exact parser/helper/runtime identity;
+apply re-derives these from current files. Bounds are 1 MiB per source, 10000
+source documents, 64 MiB aggregate input and 2 MiB analyzer output. Stale graph
+inventory requires a fresh index before planning. Source integrity does not
+prove compilation, serialized bindings or gameplay; run the independent checks
+after applying an authorized plan.
 
 `assets scripts` and `reconstruct plan` accept `--evidence evidence.json` containing
 an array of existing REToolkit evidence envelopes. These must match the selected

@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { initializeState, syncLegacyStatus, fileIdentity, fingerprint, outputManifest, validManifest, setStep, invalidateSteps, reusable, recoverSteps, withWorkspaceLock,ownsWorkspaceLock } from './state.js';
-import { candidates, selectInputs, updateIdentity, stepFingerprint, optionalIdentity, within, walk } from './inputs.js';
+import { candidates, selectInputs, updateIdentity, stepFingerprint, optionalIdentity, within, walk, inputPolicy } from './inputs.js';
 import { extractBuild, exportWorkspace } from './archive.js';
 import { runProcess } from './process.js';
 import { restoreWorkspace } from './workspace-archive.js';
-import { activeSession,assertNoSession } from './ghidra/runtime.js';
+import { activeSession,assertNoSession,atomicJson as publishJson } from './ghidra/runtime.js';
 import { sessionStatus } from './ghidra/provider.js';
 import {acquireToolchainRead} from './toolchain/lease.js';
 import {inspectManagedPython} from './python-runtime/verify.js';
@@ -16,14 +16,13 @@ import {parseAdbArgs} from './adb/options.js';
 import {rejectOutputLinks} from './artifacts.js';
 import {startDesktopLauncher} from './desktop-launch/index.js';
 import {inspectDesktopRuntime,verifyDesktopRuntime,desktopRuntimeEnvironment} from './desktop-runtime/index.js';
+import {inspectInputSelection,inputResolutionSummary,inputError,isInputSelectionError,emptyDirectory,hasPriorInputs,validateStage,verifyRevision,verifyChoice} from './input-selection.js';
 
 const directories = ['00_OriginalBuild','01_Extracted','02_Il2CppDumperOutput','03_GhidraProject','04_Notes','05_ReconstructedSource'];
 const id = () => `${new Date().toISOString().replace(/[:.]/g,'-')}-${crypto.randomUUID()}`;
 const json = file => JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 function atomicJson(file, value) {
-  fs.mkdirSync(path.dirname(file),{recursive:true}); const temporary = `${file}.tmp-${crypto.randomUUID()}`;
-  try { fs.writeFileSync(temporary,JSON.stringify(value,null,2)+'\n',{flag:'wx'}); fs.renameSync(temporary,file); }
-  finally { fs.rmSync(temporary,{force:true}); }
+  fs.mkdirSync(path.dirname(file),{recursive:true});publishJson(file,value);
 }
 function publish(stage,destination) {
   const previous = `${destination}.previous-${id()}`; const existed = fs.existsSync(destination);
@@ -60,11 +59,20 @@ export function createToolkit(root, dependencies = {}) {
     return directory;
   }
   const projectPath = name => path.join(workspace(name),'project.re.json');
-  function fresh(name) { return initializeState({ name, platform:null,extractedPath:null,nativeBinary:null,metadata:null,
+  function fresh(name) { return initializeState({ name, inputPolicy:inputPolicy(dependencies.inputPolicy),platform:null,extractedPath:null,nativeBinary:null,metadata:null,
     il2cppDumperOutput:path.join(workspace(name),'02_Il2CppDumperOutput'),
     ghidraProjectDir:path.join(workspace(name),'03_GhidraProject'),ghidraProjectName:name,ghidraProgramName:null,
     reconstructedSourceDir:path.join(workspace(name),'05_ReconstructedSource'),status:{} }); }
   function read(name) { return initializeState(json(projectPath(name))); }
+  function inspectInputs(name) { const project=read(name);return inspectInputSelection({name,project,workspace:workspace(name),policy:project.inputPolicy??dependencies.inputPolicy}); }
+  function attachInputs(name,project) { project.inputSelection=inspectInputSelection({name,project,workspace:workspace(name),policy:project.inputPolicy??dependencies.inputPolicy});return project; }
+  function awaitInputs(project,message) {
+    project.extractedPath=path.join(workspace(project.name),'01_Extracted');
+    project.nativeBinary=null;project.metadata=null;project.platform=null;project.ghidraProgramName=null;delete project.selection;
+    delete project.identities.native;delete project.identities.metadata;
+    invalidateSteps(project,['dump','import','analyze','symbols','notes','assetripper']);
+    setStep(project,'scan','awaiting-user',null,[],message);project.inputError=message;
+  }
   function saveNow(name,project) {
     const file = projectPath(name);
     if(fs.existsSync(file)) { const old=json(file); if(!old.schemaVersion||old.schemaVersion<2) fs.copyFileSync(file,`${file}.bak.${id()}`,fs.constants.COPYFILE_EXCL); }
@@ -72,6 +80,7 @@ export function createToolkit(root, dependencies = {}) {
   }
   const locked = async(name,action) => {
     const directory=workspace(name);
+    rejectOutputLinks(directory);
     const toolLease=acquireToolchainRead(root);
     try{if(fs.existsSync(directory)&&!ownsWorkspaceLock(directory))assertNoSession({root,workspace},name);return await withWorkspaceLock(directory,action);}
     finally{toolLease.release();}
@@ -97,7 +106,7 @@ export function createToolkit(root, dependencies = {}) {
     }
   }
   async function scan(name,source,options={}) { return locked(name,async()=>{
-    await init(name); const project=read(name); selectInputs(project,source,options); saveNow(name,project);
+    await init(name); const project=read(name); selectInputs(project,source,options);delete project.pendingExtraction; attachInputs(name,project); saveNow(name,project);
     log(`Selected ${project.platform}: ${project.nativeBinary}\nMetadata: ${project.metadata}\nPair compatibility is not independently verified.`);
     return project;
   }); }
@@ -109,32 +118,97 @@ export function createToolkit(root, dependencies = {}) {
       try { refresh(project); }
       catch(error) { invalidateSteps(project,['scan','dump','import','analyze','symbols','notes']); project.inputError=error.message; }
     }
-    saveNow(name,project); return project;
+    attachInputs(name,project);saveNow(name,project); return project;
   }); }
   async function add(name,source,options={}) { return locked(name,async()=>{
     source=path.resolve(source); if(fs.statSync(source).isDirectory()) return scan(name,source,options);
     await init(name); let project=read(name); recoverSteps(project);
     const archive=fileIdentity(source); const fp=fingerprint({archive:archive.sha256,extractor:1});
-    const destination=path.join(workspace(name),'01_Extracted');
-    const selection={binary:options.binary??project.selection?.binary,metadata:options.metadata??project.selection?.metadata};
-    if(reusable(project,'extract',fp)) { project.identities.archive=archive; saveNow(name,project); return scan(name,destination,selection); }
+    const destination=path.join(workspace(name),'01_Extracted');rejectOutputLinks(destination);
+    const firstImport=emptyDirectory(destination)&&!hasPriorInputs(project,workspace(name));
+    const selection={binary:options.binary??project.selection?.binary,metadata:options.metadata??project.selection?.metadata,policy:options.policy??project.inputPolicy??dependencies.inputPolicy};
+    if(reusable(project,'extract',fp)) {
+      project.identities.archive=archive;
+      const prior=project.selection;
+      try{selectInputs(project,destination,selection);}catch(error){if(isInputSelectionError(error)&&!project.nativeBinary&&!project.metadata)awaitInputs(project,error.message);else throw error;}
+      if(!options.binary&&prior?.binary&&prior.binary===project.selection?.binary)project.selection.reason=prior.reason??'current';
+      attachInputs(name,project);saveNow(name,project);return project;
+    }
     const stage=path.join(workspace(name),`.extract-${id()}`); fs.mkdirSync(stage);
+    delete project.pendingExtraction;delete project.inputSelection;
     setStep(project,'extract','running',fp); saveNow(name,project);
     try {
       const result=await extractBuild(source,stage); for(const warning of result.warnings??[]) log(warning);
-      // Validate candidate selection before publishing. Ambiguous stages remain
-      // available for explicit folder selection; previous extraction is retained.
-      selectInputs(project,stage,selection);
+      // Extraction and choosing an IL2CPP pair are separate operations. A fresh
+      // import keeps the complete extraction in its canonical location.
+      let selectionError;const selected=structuredClone(project);
+      try{selectInputs(selected,stage,selection);}catch(error){if(!isInputSelectionError(error))throw error;selectionError=error;}
+      if(!options.binary&&project.selection?.binary&&project.selection.binary===selected.selection?.binary)selected.selection.reason=project.selection.reason??'current';
       if(fileIdentity(source).sha256!==archive.sha256) throw new Error('Archive changed during extraction');
+      if(selectionError&&!firstImport){
+        project.pendingExtraction={stage,archive,fingerprint:fp,error:selectionError.message};
+        setStep(project,'extract','failed',fp,[],`${selectionError.message}; staging: ${stage}`);attachInputs(name,project);saveNow(name,project);
+        throw Object.assign(selectionError,{inputSelection:project.inputSelection});
+      }
       publish(stage,destination);
-      selectInputs(project,destination,{binary:project.selection.binary,metadata:project.selection.metadata});
+      delete project.pendingExtraction;
+      if(selectionError)awaitInputs(project,selectionError.message.replaceAll(stage,destination));
+      else {selectInputs(project,destination,{binary:selected.selection.binary,metadata:selected.selection.metadata,policy:selected.inputPolicy});project.selection={...selected.selection};}
       project.identities.archive=archive;
-      setStep(project,'extract','succeeded',fp,outputManifest([destination])); saveNow(name,project);
+      setStep(project,'extract','succeeded',fp,outputManifest([destination]));attachInputs(name,project); saveNow(name,project);
       return project;
     } catch(error) {
-      project=read(name); setStep(project,'extract','failed',fp,[],`${error.message}; staging: ${stage}`); saveNow(name,project);
-      throw new Error(`${error.message}\nExtracted staging (if available): ${stage}`);
+      project=read(name);if(!project.pendingExtraction||project.pendingExtraction.stage!==stage){setStep(project,'extract','failed',fp,[],`${error.message}; staging: ${stage}`);saveNow(name,project);}
+      throw Object.assign(new Error(`${error.message}\nExtracted staging (if available): ${stage}`),{...(error.code?{code:error.code}:{}),...(error.inputSelection?{inputSelection:error.inputSelection}:{})});
     }
+  }); }
+  async function selectBuildInputs(name,options={}) { return applyInputSelection(name,options); }
+  async function applyInputSelection(name,options={},provenance) { return locked(name,()=>{
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['binary','metadata','revision'].includes(key)))throw inputError('INPUT_OPTIONS_INVALID','Invalid input selection options');
+    let project=read(name);const view=inspectInputs(name);verifyRevision(view,options.revision);verifyChoice(view,options.binary,options.metadata);
+    if(!view.canSelect)throw inputError('INPUT_RECOVERY_REQUIRED','Recover the recorded first-import staging before selecting inputs');
+    const selected=structuredClone(project);selectInputs(selected,view.source.path,options);
+    // Identity hashing above is authoritative; reject changes while it ran.
+    verifyRevision(inspectInputs(name),options.revision);
+    if(view.source.location==='staging'){
+      const pending=project.pendingExtraction;
+      if(!pending||validateStage(workspace(name),pending.stage)!==view.source.path)throw inputError('INPUT_STAGE_CHANGED','Pending extraction changed');
+      if(pending.archive?.path&&fileIdentity(pending.archive.path).sha256!==pending.archive.sha256)throw inputError('INPUT_ARCHIVE_CHANGED','Source archive changed; import it again');
+      verifyRevision(inspectInputs(name),options.revision);
+      const destination=path.join(workspace(name),'01_Extracted');rejectOutputLinks(destination);publish(view.source.path,destination);
+      selectInputs(project,destination,options);project.identities.archive=pending.archive;delete project.pendingExtraction;
+      setStep(project,'extract','succeeded',pending.fingerprint,outputManifest([destination]));
+    }else project=selected;
+    if(provenance){project.selection.reason=provenance.reason;project.selection.policy=provenance.policy;}
+    attachInputs(name,project);saveNow(name,project);return project;
+  }); }
+  async function recoverInputs(name,options={}) { return locked(name,()=>{
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>key!=='revision'))throw inputError('INPUT_OPTIONS_INVALID','Invalid recovery options');
+    const project=read(name),view=inspectInputs(name);verifyRevision(view,options.revision);
+    if(!view.canRecover)throw inputError('INPUT_RECOVERY_UNSAFE','Recorded first-import staging cannot be recovered over canonical or selected project inputs');
+    const destination=path.join(workspace(name),'01_Extracted');
+    if(!emptyDirectory(destination)||hasPriorInputs(project,workspace(name))||validateStage(workspace(name),view.source.path)!==view.source.path)throw inputError('INPUT_RECOVERY_UNSAFE','Recovery preconditions changed');
+    const backup=`${projectPath(name)}.before-input-recovery-${id()}`;fs.copyFileSync(projectPath(name),backup,fs.constants.COPYFILE_EXCL);
+    const previousExtract=structuredClone(project.steps.extract),previousCanonical=publish(view.source.path,destination);
+    project.recoveryReceipt={kind:'retoolkit-input-recovery',schemaVersion:1,recoveredAt:new Date().toISOString(),source:view.source.path,destination,revision:view.revision,projectBackup:backup,previousCanonical,previousExtractError:previousExtract.error,previousExtract};
+    awaitInputs(project,'Choose an IL2CPP binary and metadata from the recovered extraction');
+    setStep(project,'extract','succeeded',previousExtract.fingerprint,outputManifest([destination]));attachInputs(name,project);saveNow(name,project);
+    const receipt=path.join(workspace(name),'04_Notes',`input-recovery-${id()}.json`);atomicJson(receipt,project.recoveryReceipt);
+    return project;
+  }); }
+  async function resolveInputs(name,options={}) { return locked(name,async()=>{
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>key!=='policy'))throw inputError('INPUT_OPTIONS_INVALID','Invalid input resolution options');
+    let project=read(name);
+    if(options.policy!==undefined){const policy=inputPolicy(options.policy);if(project.inputPolicy!==policy){project.inputPolicy=policy;saveNow(name,project);}}
+    let view=inspectInputs(name);
+    if(view.canRecover){await recoverInputs(name,{revision:view.revision});project=read(name);view=inspectInputs(name);}
+    // Existing selected inputs always win, including when another ABI appears.
+    if(view.state!=='selected'&&view.canSelect&&view.recommendation.resolvable){
+      const reason=view.recommendation.reason==='current'?(project.selection?.reason??'current'):view.recommendation.reason;
+      project=await applyInputSelection(name,{binary:view.recommendation.binary,metadata:view.recommendation.metadata,revision:view.revision},{reason,policy:view.policy});
+      view=inspectInputs(name);
+    }
+    return inputResolutionSummary(view,project);
   }); }
   async function dump(name) { return locked(name,async()=>{
     let project=read(name); if(!project.nativeBinary||!project.metadata) throw new Error('Scan inputs before dump');
@@ -307,31 +381,35 @@ export function createToolkit(root, dependencies = {}) {
   }
   async function pullLdPlayer(name,packageName,options={}){
     rejectOutputLinks(workspace(name));validatePackageName(packageName);
-    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['adb','serial','skipLaunch','binary','metadata','confirm'].includes(key)))throw new Error('Invalid ADB capture options');
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['adb','serial','skipLaunch','binary','metadata','confirm','includeData'].includes(key)))throw new Error('Invalid ADB capture options');
     if(options.serial!==undefined)validateSerial(options.serial);
     if(options.skipLaunch!==undefined&&typeof options.skipLaunch!=='boolean')throw new Error('Invalid skip-launch flag');
+    if(options.includeData!==undefined&&typeof options.includeData!=='boolean')throw new Error('Invalid include-data flag');
     if(!options.skipLaunch&&typeof options.confirm!=='function')throw Object.assign(new Error('Interactive launch requires confirmation; use --skip-launch for unattended capture'),{code:'ADB_INTERACTIVE_REQUIRED'});
     for(const key of ['binary','metadata'])if(options[key]!==undefined&&(typeof options[key]!=='string'||!options[key]||options[key].length>4096||/[\x00-\x1f]/.test(options[key])))throw new Error('Invalid explicit input selection');
     const file=resolveAdbPath(options.adb);
     return locked(name,async()=>{
       await init(name);
-      const client=createAdbClient({file,run,runOptions:{cwd:root,env,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root}});
+      const runOptions={cwd:root,env,leaseDirectory:path.join(workspace(name),'.retk-lock'),toolchainRoot:root};
+      const client=createAdbClient({file,run,runOptions});
+      const dataClient=options.includeData?(await import('./adb/data-client.js')).createAdbDataClient({file,run,runOptions}):undefined;
       const serial=await client.selectDevice(options.serial);
-      const capture=await captureBundle({workspace:workspace(name),packageName,serial,client,skipLaunch:Boolean(options.skipLaunch),confirm:options.confirm});
+      const capture=await captureBundle({workspace:workspace(name),packageName,serial,client,skipLaunch:Boolean(options.skipLaunch),confirm:options.confirm,includeData:Boolean(options.includeData),dataClient});
       try{
         const project=await add(name,capture.bundle,{binary:options.binary,metadata:options.metadata});
-        project.ldplayerCapture={runId:capture.runId,packageName,serial,bundle:capture.bundle,manifest:capture.manifest,sha256:capture.archive.sha256};saveNow(name,project);
-        return {kind:'retoolkit-adb-result',schemaVersion:1,state:'prepared',capture,project,notice:'Captured inputs are selected; binary/metadata compatibility, dumping and Ghidra analysis remain unverified.'};
+        project.ldplayerCapture={runId:capture.runId,packageName,serial,bundle:capture.bundle,manifest:capture.manifest,sha256:capture.archive.sha256,...(capture.applicationData?{applicationData:capture.applicationData}:{})};saveNow(name,project);
+        const needsSelection=project.steps.scan.state!=='succeeded';
+        return {kind:'retoolkit-adb-result',schemaVersion:1,state:needsSelection?'needs-input':capture.applicationData?.coverage==='partial'?'partial':'prepared',capture,project,notice:needsSelection?'Captured archive is extracted in 01_Extracted; select the binary / ABI and metadata before analysis. App-data coverage is reported separately.':'Captured build inputs are selected. App-data coverage is reported separately; an atomic snapshot, Android restore and game readiness are not established.'};
       }catch(error){error.message+=`\nSaved capture: ${capture.bundle}\nSelect inputs with add <Game> <bundle> --binary <path> --metadata <path>.`;throw error;}
     });
   }
   async function flow(name,source,options={}) {
     if(options.dryRun) return plan(name,source,options);
     const prepared=await locked(name,async()=>{
-      await init(name); await add(name,source,options); await dump(name); await importProgram(name,options); await notes(name);
+      await init(name);const added=await add(name,source,options);if(added.steps.scan.state!=='succeeded'){log('Extraction completed. Select IL2CPP inputs before continuing.');return added;} await dump(name); await importProgram(name,options); await notes(name);
       log('Prepared. Auto Analysis, symbols and the MCP connection still require verification.'); return read(name);
     });
-    if(!options.noOpen)await open(name);return prepared;
+    if(prepared.steps.scan.state==='succeeded'&&!options.noOpen)await open(name);return prepared;
   }
   async function exportArchive(name,out) { return locked(name,async()=>{
     const destination=path.resolve(out??path.join(root,'exports',`${name}.re`));
@@ -344,5 +422,5 @@ export function createToolkit(root, dependencies = {}) {
     return restoreWorkspace({root,workspaces,archivePath:archive,name,force,initializeState,invalidateSteps,saveProject:saveNow,log});
   }
 
-  return {root,tools,legacyBridge,workspace,projectPath,read,save,init,status,scan,add,dump,importProgram,analyze,plan,flow,notes,open,compat,pullLdPlayer,exportArchive,importArchive,candidates,env,run,log};
+  return {root,tools,legacyBridge,workspace,projectPath,read,save,init,status,scan,add,inspectInputs,resolveInputs,selectBuildInputs,recoverInputs,dump,importProgram,analyze,plan,flow,notes,open,compat,pullLdPlayer,exportArchive,importArchive,candidates,env,run,log};
 }

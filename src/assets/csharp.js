@@ -21,6 +21,24 @@ function tokenize(source) {
  return out;
 }
 const modifiers=new Set(['public','private','protected','internal','static','readonly','const','volatile','new','virtual','override','abstract','sealed','partial','extern','async']);
+/** Conservative prerequisite for compiler-only source classification. This is
+ * never evidence of a type identity: directives and unsupported lexical forms
+ * stay unknown, and a class with a base/constraint or split declaration still
+ * requires reflected identity. Comments and literals cannot hide its header. */
+export function sourceExcludesComponentInheritance(source){
+ try{
+  const tokens=tokenize(source);if(tokens.includes('partial')||tokens.some(token=>token.includes('\\')||/\p{Cf}/u.test(token)))return false;
+  for(let i=0;i<tokens.length;i++)if(tokens[i]==='class'){
+   let body=false;
+   for(let j=i+1;j<tokens.length;j++){
+    if(tokens[j]===':'||tokens[j]===';'||tokens[j]==='}')return false;
+    if(tokens[j]==='{'){body=true;break;}
+   }
+   if(!body)return false;
+  }
+  return true;
+ }catch{return false;}
+}
 function joinType(t){return t.join('');}
 export function parseCSharp(source,{fileName}={}) {
  const types=[],limitations=['Declaration scan only; compilation and behavior are unverified.'];

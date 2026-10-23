@@ -110,7 +110,7 @@ export function createAdbClient({ file, run = runProcess, runOptions = {} }) {
   async function invoke(args) {
     let result;
     try { result = await run(file, args, runOptions); }
-    catch (error) { throw fail('ADB_PROCESS_FAILED', `ADB command failed: ${error.message}`, error); }
+    catch (error) { if(error?.code==='cleanup_pending')throw fail('cleanup_pending','Owned ADB process cleanup is unverified; inspect leases before retrying.');throw fail('ADB_PROCESS_FAILED', `ADB command failed: ${error.message}`, error); }
     if (!result || result.exitCode !== 0) throw fail('ADB_PROCESS_FAILED', `ADB command failed (${result?.exitCode ?? 'unknown status'}): ${result?.stderr || result?.stdout || ''}`, result);
     const stdout = boundedText(result.stdout ?? '');
     const stderr = boundedText(result.stderr ?? '');
@@ -120,6 +120,13 @@ export function createAdbClient({ file, run = runProcess, runOptions = {} }) {
   const deviceArgs = serial => ['-s', validateSerial(serial)];
   const client = {
     async devices() { return parseDevices((await invoke(['devices', '-l'])).stdout); },
+    async packages(serial) {
+      const result=await invoke([...deviceArgs(serial),'shell','pm','list','packages','-3']);
+      if(result.stderr)throw fail('ADB_METADATA_INVALID','Unexpected package listing diagnostic');
+      const packages=lines(result.stdout).map(line=>{if(!line.startsWith('package:'))throw fail('ADB_METADATA_INVALID','Malformed installed package list');return validatePackageName(line.slice(8));});
+      if(new Set(packages).size!==packages.length)throw fail('ADB_METADATA_INVALID','Duplicate installed package identity');
+      return packages.map(packageName=>({packageName}));
+    },
     async selectDevice(serial) {
       if (serial !== undefined) validateSerial(serial);
       const devices = await client.devices();

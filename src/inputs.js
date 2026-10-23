@@ -56,6 +56,24 @@ export function binaryAbi(file) {
   } finally { fs.closeSync(fd); }
 }
 
+export const ABI_PRIORITY = Object.freeze(['arm64-v8a','armeabi-v7a','x86_64','x86']);
+export function inputPolicy(value = 'prefer-arm64') {
+  if (!['prefer-arm64','manual'].includes(value)) throw Object.assign(new Error('Input policy must be prefer-arm64 or manual'),{code:'INPUT_POLICY_INVALID'});
+  return value;
+}
+export function recommendInputs(binaries, metadata, selection = {}, policy = 'prefer-arm64') {
+  policy=inputPolicy(policy);
+  let binary=binaries.find(item=>item.path===selection.binary),reason=binary?'current':null;
+  const meta=metadata.find(item=>item.path===selection.metadata)??(metadata.length===1?metadata[0]:null);
+  if(!binary&&binaries.length===1){binary=binaries[0];reason='unique';}
+  if(!binary&&policy!=='manual'&&binaries.length>1&&binaries.every(item=>ABI_PRIORITY.includes(item.abi))){
+    const preferred=ABI_PRIORITY.find(abi=>binaries.some(item=>item.abi===abi));
+    const choices=binaries.filter(item=>item.abi===preferred);
+    if(choices.length===1){binary=choices[0];reason='abi-preference';}
+  }
+  return {binary:binary?.path??null,metadata:meta?.path??null,abi:binary?.abi??null,reason:reason??(!binaries.length||!metadata.length?'missing-input':policy==='manual'?'manual-selection-required':'ambiguous-inputs'),resolvable:Boolean(binary&&meta)};
+}
+
 export function updateIdentity(project) {
   const native = { ...fileIdentity(project.nativeBinary), abi: binaryAbi(project.nativeBinary) };
   const metadata = fileIdentity(project.metadata);
@@ -69,12 +87,18 @@ export function updateIdentity(project) {
 export function selectInputs(project, folder, options = {}) {
   folder = path.resolve(folder);
   const found = candidates(folder);
-  const binary = selectInput(folder, found.binaries, options.binary, project.nativeBinary, 'binary');
+  const policy=inputPolicy(options.policy??project.inputPolicy);
+  const retained=options.binary?selectInput(folder,found.binaries,options.binary,null,'binary'):found.binaries.includes(project.nativeBinary)?project.nativeBinary:null;
+  const recommendation=retained?{binary:retained,reason:options.binary?'explicit':'current'}:recommendInputs(found.binaries.map(file=>({path:file,abi:binaryAbi(file)})),found.metadata.map(file=>({path:file})),{},policy);
+  const binary = selectInput(folder, found.binaries, options.binary, recommendation.binary, 'binary');
   const metadata = selectInput(folder, found.metadata, options.metadata, project.metadata, 'metadata');
+  const previous=project.selection, priorBinary=project.nativeBinary;
   project.extractedPath = folder; project.nativeBinary = binary; project.metadata = metadata;
   delete project.inputError;
   project.ghidraProgramName = path.basename(binary);
-  project.selection = { binary: path.relative(folder,binary), metadata: path.relative(folder,metadata) };
+  const reason=options.binary?'explicit':binary===priorBinary?(previous?.reason??'current'):recommendation.reason;
+  project.inputPolicy=policy;
+  project.selection = { binary: path.relative(folder,binary), metadata: path.relative(folder,metadata), abi:binaryAbi(binary), reason, policy };
   updateIdentity(project);
   setStep(project, 'scan', 'succeeded', fingerprint({native: project.identities.native.sha256, metadata: project.identities.metadata.sha256}), outputManifest([binary,metadata]));
 }

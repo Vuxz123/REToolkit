@@ -10,12 +10,22 @@ import java.io.*;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.DigestInputStream;
+import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.util.*;
+import com.sun.jna.Memory;
+import com.sun.jna.Platform;
+import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.platform.win32.WinBase;
+import com.sun.jna.platform.win32.WinDef.DWORD;
+import com.sun.jna.platform.win32.WinNT.HANDLE;
 
 /** IL2CPP plain-script planner. Transaction, snapshot, ledger and save belong to RetkMutations. */
 public final class RetkSymbols {
     private static final Gson JSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().create();
+    private static final long MAX_PLAN_BYTES = 512L * 1024 * 1024;
     private static final String START = "[REToolkit IL2CPP]\n", END = "\n[/REToolkit IL2CPP]";
     private static final Set<String> GROUPS = new LinkedHashSet<>(Arrays.asList("ScriptMethod", "ScriptString", "ScriptMetadata", "ScriptMetadataMethod", "Addresses"));
     private final Program program;
@@ -37,12 +47,48 @@ public final class RetkSymbols {
         Path normalized=p.toAbsolutePath().normalize();
         if(!normalized.startsWith(workspace))throw fail("plan_invalid","Path must be inside workspace");
         Path cursor=workspace;
-        for(Path component:workspace.relativize(normalized)) { cursor=cursor.resolve(component);if(Files.isSymbolicLink(cursor))throw fail("plan_invalid","Linked paths are unsupported"); }
+        for(Path component:workspace.relativize(normalized)) { cursor=cursor.resolve(component);if(Files.exists(cursor,LinkOption.NOFOLLOW_LINKS)){BasicFileAttributes a=Files.readAttributes(cursor,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);if(a.isSymbolicLink()||a.isOther())throw fail("plan_invalid","Linked paths are unsupported");} }
         if(Files.exists(normalized)&&!normalized.toRealPath().startsWith(workspace))throw fail("plan_invalid","Resolved path escapes workspace");
         return normalized;
     }
-    private static String hash(byte[] bytes) throws Exception { StringBuilder s=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))s.append(String.format("%02x",b&255));return s.toString(); }
     private static String hash(Path p) throws Exception { MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=Files.newInputStream(p)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)d.update(b,0,n);}StringBuilder s=new StringBuilder();for(byte b:d.digest())s.append(String.format("%02x",b&255));return s.toString(); }
+    private static void singleLink(Path p)throws IOException {
+        if(Platform.isWindows()) {
+            // Java's Windows BasicFileAttributes omits the hard-link count.
+            // JNA ships with Ghidra; FILE_STANDARD_INFO.NumberOfLinks is at 16.
+            HANDLE h=Kernel32.INSTANCE.CreateFile(p.toString(),0x80,7,null,3,0x00200000,null);
+            if(WinBase.INVALID_HANDLE_VALUE.equals(h))throw fail("plan_invalid","Cannot inspect plan links");
+            try(Memory info=new Memory(24)) {if(!Kernel32.INSTANCE.GetFileInformationByHandleEx(h,1,info,new DWORD(24))||info.getInt(16)!=1)throw fail("plan_invalid","Linked plan files are unsupported");}
+            finally {Kernel32.INSTANCE.CloseHandle(h);}
+        } else if(((Number)Files.getAttribute(p,"unix:nlink",LinkOption.NOFOLLOW_LINKS)).longValue()!=1)throw fail("plan_invalid","Linked plan files are unsupported");
+    }
+    private BasicFileAttributes planAttributes(Path p)throws IOException {
+        inside(p);BasicFileAttributes a=Files.readAttributes(p,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!a.isRegularFile()||a.isSymbolicLink()||a.isOther()||a.size()>MAX_PLAN_BYTES)throw fail("plan_invalid","Plan must be a regular file no larger than 512 MiB");singleLink(p);return a;
+    }
+    private void unchanged(Path p,BasicFileAttributes before,long count)throws IOException {
+        BasicFileAttributes after=planAttributes(p);
+        if(count!=before.size()||after.size()!=before.size()||!Objects.equals(before.fileKey(),after.fileKey())||!before.lastModifiedTime().equals(after.lastModifiedTime())||!before.creationTime().equals(after.creationTime()))throw fail("plan_invalid","Plan source changed while reading");
+    }
+    private static final class BoundedInput extends FilterInputStream {
+        long count;
+        BoundedInput(InputStream in){super(in);}
+        private void consumed(int n){if(n>0&&(count+=n)>MAX_PLAN_BYTES)throw fail("plan_invalid","Plan exceeds 512 MiB");}
+        public int read()throws IOException {int b=in.read();consumed(b<0?0:1);return b;}
+        public int read(byte[] b,int off,int len)throws IOException {int n=in.read(b,off,len);consumed(n);return n;}
+    }
+    private static final class BoundedOutput extends FilterOutputStream {
+        long count;
+        BoundedOutput(OutputStream out){super(out);}
+        private void reserve(int n){if(n>MAX_PLAN_BYTES-count)throw fail("plan_invalid","Plan exceeds 512 MiB");count+=n;}
+        public void write(int b)throws IOException {reserve(1);out.write(b);}
+        public void write(byte[] b,int off,int len)throws IOException {reserve(len);out.write(b,off,len);}
+    }
+    private String verifiedHash(Path p)throws Exception {
+        BasicFileAttributes a=planAttributes(p);MessageDigest d=MessageDigest.getInstance("SHA-256");
+        try(BoundedInput in=new BoundedInput(new DigestInputStream(Files.newInputStream(p,LinkOption.NOFOLLOW_LINKS),d))){byte[] b=new byte[65536];while(in.read(b)!=-1)monitor.checkCancelled();unchanged(p,a,in.count);}
+        return HexFormat.of().formatHex(d.digest());
+    }
     private JsonObject binding() throws Exception {
         JsonObject profile=config.has("profile")&&config.get("profile").isJsonObject()?config.getAsJsonObject("profile"):new JsonObject();
         if(!flag(profile,"dumpVerified"))throw fail("input_changed","Dump provenance is unverified; rerun dump before symbols plan");
@@ -77,11 +123,20 @@ public final class RetkSymbols {
         switch(r.peek()) {
             case BEGIN_OBJECT: JsonObject o=new JsonObject();r.beginObject();while(r.hasNext()){String k=r.nextName();if(o.has(k))throw fail("plan_invalid","Duplicate JSON key "+k);o.add(k,readExact(r));}r.endObject();return o;
             case BEGIN_ARRAY: JsonArray a=new JsonArray();r.beginArray();while(r.hasNext())a.add(readExact(r));r.endArray();return a;
-            case NUMBER: case STRING: return new JsonPrimitive(r.nextString());
+            // Preserve the raw lexeme: source addresses must still reject -0
+            // and exponents, and numeric source values/profile fields must not
+            // acquire different text or canonical hashes while streaming.
+            case NUMBER: return JsonParser.parseString(r.nextString()).getAsJsonPrimitive();
+            case STRING: return new JsonPrimitive(r.nextString());
             case BOOLEAN:return new JsonPrimitive(r.nextBoolean());
             case NULL:r.nextNull();return JsonNull.INSTANCE;
             default:throw fail("plan_invalid","Malformed JSON");
         }
+    }
+    private static void skipExact(JsonReader r)throws IOException {
+        if(r.peek()==JsonToken.BEGIN_OBJECT){Set<String> keys=new HashSet<>();r.beginObject();while(r.hasNext()){String k=r.nextName();if(!keys.add(k))throw fail("plan_invalid","Duplicate JSON key "+k);skipExact(r);}r.endObject();}
+        else if(r.peek()==JsonToken.BEGIN_ARRAY){r.beginArray();while(r.hasNext())skipExact(r);r.endArray();}
+        else {switch(r.peek()){case STRING:case NUMBER:r.nextString();break;case BOOLEAN:r.nextBoolean();break;case NULL:r.nextNull();break;default:throw fail("plan_invalid","Malformed JSON");}}
     }
     private static String sanitize(String name) {
         String s=name.trim().replaceAll("[^A-Za-z0-9_.$]","_");if(s.isEmpty())s="il2cpp_empty";if(Character.isDigit(s.charAt(0)))s="_"+s;
@@ -148,47 +203,76 @@ public final class RetkSymbols {
         return e;
     }
     public JsonObject plan(JsonObject params,long revision) {
+        Path spool=null,temporary=null;
         try {
             JsonObject bound=binding();String mode=params.has("addressMode")?required(params,"addressMode"):null;
             // No installed Il2CppDumper profile has yet been qualified for automatic mapping.
             if(!"rva".equals(mode)&&!"va".equals(mode))throw fail("plan_invalid","Unqualified dumper profile requires addressMode rva or va");
             JsonObject policy=new JsonObject();policy.addProperty("addressMode",mode);for(String k:Arrays.asList("createFunctions","replaceUserNames","replaceUserComments"))policy.addProperty(k,flag(params,k));
-            JsonArray entries=new JsonArray();Map<String,String> reserved=new HashMap<>();Set<String> touched=new HashSet<>();Set<String> seen=new HashSet<>();
-            try(JsonReader r=new JsonReader(Files.newBufferedReader(script,StandardCharsets.UTF_8))) {
-                r.setLenient(false);r.beginObject();while(r.hasNext()){String group=r.nextName();if(!seen.add(group))throw fail("plan_invalid","Duplicate group "+group);
-                    if(!GROUPS.contains(group)){r.skipValue();continue;}r.beginArray();int i=0;while(r.hasNext()){monitor.checkCancelled();entries.add(entry(group,++i,readExact(r),mode,policy,reserved,touched));}r.endArray();}
+            Map<String,String> reserved=new HashMap<>();Set<String> touched=new HashSet<>();Set<String> seen=new HashSet<>();
+            JsonObject counts=new JsonObject();for(String k:Arrays.asList("planned","noop","conflict","skipped"))counts.addProperty(k,0);
+            inside(plans);Files.createDirectories(plans);inside(plans);spool=Files.createTempFile(plans,".entries-",".tmp");
+            try(Writer entries=new BufferedWriter(new OutputStreamWriter(new BoundedOutput(Files.newOutputStream(spool)),StandardCharsets.UTF_8));JsonReader r=new JsonReader(Files.newBufferedReader(script,StandardCharsets.UTF_8))) {
+                boolean first=true;r.setStrictness(Strictness.STRICT);r.beginObject();while(r.hasNext()){String group=r.nextName();if(!seen.add(group))throw fail("plan_invalid","Duplicate group "+group);
+                    if(!GROUPS.contains(group)){skipExact(r);continue;}r.beginArray();int i=0;while(r.hasNext()){monitor.checkCancelled();JsonObject e=entry(group,++i,readExact(r),mode,policy,reserved,touched);if(!first)entries.write(',');first=false;JSON.toJson(e,entries);String k=required(e,"status");counts.addProperty(k,counts.get(k).getAsInt()+1);}r.endArray();}
                 r.endObject();if(r.peek()!=JsonToken.END_DOCUMENT)throw fail("plan_invalid","Trailing JSON content");
             }
             // Revalidate after streaming to catch changes while reading.
             if(!bound.equals(binding()))throw fail("input_changed","Inputs changed during planning");
-            JsonObject counts=new JsonObject();for(String k:Arrays.asList("planned","noop","conflict","skipped"))counts.addProperty(k,0);
-            for(JsonElement v:entries){String k=v.getAsJsonObject().get("status").getAsString();counts.addProperty(k,counts.get(k).getAsInt()+1);}
             JsonArray missingGroups=new JsonArray();for(String group:GROUPS)if(!seen.contains(group))missingGroups.add(group);
             JsonObject coverage=new JsonObject();boolean full=counts.get("conflict").getAsInt()==0&&counts.get("skipped").getAsInt()==0&&missingGroups.isEmpty();coverage.addProperty("status",full?"complete":"partial");coverage.add("counts",counts.deepCopy());coverage.add("missingGroups",missingGroups);
-            JsonObject plan=new JsonObject();plan.addProperty("version",1);plan.addProperty("revision",revision);plan.add("binding",bound);plan.add("policy",policy);plan.add("entries",entries);plan.add("coverage",coverage);plan.addProperty("symbolsApplied",full);
-            byte[] bytes=(JSON.toJson(plan)+"\n").getBytes(StandardCharsets.UTF_8);String digest=hash(bytes);inside(plans);Files.createDirectories(plans);inside(plans);
-            Path file=inside(plans.resolve(digest+".json"));if(Files.exists(file)){if(!hash(file).equals(digest))throw fail("plan_invalid","Existing immutable plan was modified");}else Files.write(file,bytes,StandardOpenOption.CREATE_NEW);
+            // Preserve the exact legacy v1 Gson field order and trailing LF,
+            // without materializing the entries tree, String or UTF-8 byte[].
+            temporary=Files.createTempFile(plans,".plan-",".tmp");MessageDigest d=MessageDigest.getInstance("SHA-256");
+            try(Writer out=new BufferedWriter(new OutputStreamWriter(new BoundedOutput(new DigestOutputStream(Files.newOutputStream(temporary),d)),StandardCharsets.UTF_8));Reader entries=Files.newBufferedReader(spool,StandardCharsets.UTF_8)) {
+                out.write("{\"version\":1,\"revision\":"+revision+",\"binding\":");JSON.toJson(bound,out);out.write(",\"policy\":");JSON.toJson(policy,out);out.write(",\"entries\":[");entries.transferTo(out);out.write("],\"coverage\":");JSON.toJson(coverage,out);out.write(",\"symbolsApplied\":"+full+"}\n");
+            }
+            String digest=HexFormat.of().formatHex(d.digest());Path file=inside(plans.resolve(digest+".json"));
+            if(Files.exists(file,LinkOption.NOFOLLOW_LINKS)){if(!verifiedHash(file).equals(digest))throw fail("plan_invalid","Existing immutable plan was modified");}
+            else try {Files.move(temporary,file);}catch(FileAlreadyExistsException race){if(!verifiedHash(file).equals(digest))throw fail("plan_invalid","Existing immutable plan was modified");}
             JsonObject result=new JsonObject();result.addProperty("plan",file.toString());result.addProperty("planHash",digest);result.add("summary",counts);result.add("coverage",coverage.deepCopy());result.addProperty("symbolsApplied",false);return result;
         }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw fail("plan_invalid",e.getMessage());}
+        finally {for(Path p:new Path[]{spool,temporary})if(p!=null)try{Files.deleteIfExists(p);}catch(IOException ignored){}}
     }
     public JsonObject validate(JsonObject params,long revision) {
         try {
             Path file=inside(Paths.get(required(params,"plan")));if(!file.getParent().equals(inside(plans)))throw fail("plan_invalid","Plan must be in fixed symbol-plans directory");
-            byte[] bytes=Files.readAllBytes(file);String digest=hash(bytes);
-            if(!digest.equals(required(params,"planHash"))||!file.getFileName().toString().equals(digest+".json"))throw fail("plan_invalid","Plan bytes/hash do not match preview");
-            JsonObject plan=JsonParser.parseString(new String(bytes,StandardCharsets.UTF_8)).getAsJsonObject();
+            BasicFileAttributes attrs=planAttributes(file);String expected=required(params,"planHash");
+            if(!expected.matches("[0-9a-f]{64}")||!file.getFileName().toString().equals(expected+".json"))throw fail("plan_invalid","Plan bytes/hash do not match preview");
+            MessageDigest d=MessageDigest.getInstance("SHA-256");JsonObject plan=new JsonObject();Set<String> seen=new HashSet<>();
+            JsonArray changes=new JsonArray(),oldValues=new JsonArray(),newValues=new JsonArray();
+            try(BoundedInput in=new BoundedInput(new DigestInputStream(Files.newInputStream(file,LinkOption.NOFOLLOW_LINKS),d));JsonReader r=new JsonReader(new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT))))) {
+                r.setStrictness(Strictness.STRICT);r.beginObject();while(r.hasNext()) {
+                    String key=r.nextName();if(!seen.add(key))throw fail("plan_invalid","Duplicate JSON key "+key);
+                    if(key.equals("entries")){r.beginArray();while(r.hasNext()){monitor.checkCancelled();skipExact(r);}r.endArray();}
+                    else if(Arrays.asList("version","revision","binding","policy","coverage","symbolsApplied").contains(key))plan.add(key,readExact(r));else skipExact(r);
+                }
+                r.endObject();if(r.peek()!=JsonToken.END_DOCUMENT)throw fail("plan_invalid","Trailing JSON content");unchanged(file,attrs,in.count);
+            }
+            String digest=HexFormat.of().formatHex(d.digest());if(!digest.equals(expected))throw fail("plan_invalid","Plan bytes/hash do not match preview");
+            if(!seen.containsAll(Arrays.asList("version","revision","binding","policy","entries","coverage","symbolsApplied")))throw fail("plan_invalid","Missing plan fields");
             if(plan.get("version").getAsInt()!=1)throw fail("plan_invalid","Unknown plan version");
             if(plan.get("revision").getAsLong()!=revision)throw fail("revision_conflict","Plan revision is stale; create a new plan");
             if(!plan.getAsJsonObject("binding").equals(binding()))throw fail("input_changed","Plan inputs/profile/program identity changed");
-            JsonArray changes=new JsonArray(),oldValues=new JsonArray(),newValues=new JsonArray();
-            for(JsonElement v:plan.getAsJsonArray("entries")) {
-                monitor.checkCancelled();JsonObject entry=v.getAsJsonObject();if(!entry.has("before"))continue;
+            // Hash/strict syntax/revision/binding retain their original priority
+            // over Program old-state checks. A second bounded pass retains only
+            // actual changes; verify its exact bytes and source identity too.
+            attrs=planAttributes(file);d=MessageDigest.getInstance("SHA-256");
+            try(BoundedInput in=new BoundedInput(new DigestInputStream(Files.newInputStream(file,LinkOption.NOFOLLOW_LINKS),d));JsonReader r=new JsonReader(new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT))))) {
+                r.setStrictness(Strictness.STRICT);r.beginObject();while(r.hasNext()) {
+                    if(r.nextName().equals("entries")){r.beginArray();while(r.hasNext()){monitor.checkCancelled();validateEntry(readExact(r).getAsJsonObject(),changes,oldValues,newValues);}r.endArray();}else skipExact(r);
+                }
+                r.endObject();if(r.peek()!=JsonToken.END_DOCUMENT)throw fail("plan_invalid","Trailing JSON content");unchanged(file,attrs,in.count);
+            }
+            if(!HexFormat.of().formatHex(d.digest()).equals(expected))throw fail("plan_invalid","Plan source changed while validating");
+            JsonObject result=new JsonObject();result.add("changes",changes);result.add("before",oldValues);result.add("after",newValues);result.add("coverage",plan.get("coverage"));result.add("binding",plan.get("binding"));result.add("policy",plan.get("policy"));result.addProperty("symbolsApplied",plan.get("symbolsApplied").getAsBoolean());result.addProperty("planHash",digest);result.addProperty("noop",changes.isEmpty());return result;
+        }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw fail("plan_invalid",e.getMessage());}
+    }
+    private void validateEntry(JsonObject entry,JsonArray changes,JsonArray oldValues,JsonArray newValues) {
+                if(!entry.has("before"))return;
                 Address a=address(required(entry,"address"),"va");
                 if(!entry.getAsJsonObject("before").equals(before(a)))throw fail("revision_conflict","Plan before values changed at "+hex(a));
-                if(entry.has("change")){JsonObject change=entry.getAsJsonObject("change");if(change.has("createFunction")){Instruction ins=program.getListing().getInstructionAt(a);if(ins==null||!hex(ins.getMaxAddress()).equals(required(change,"bodyEnd"))||!program.getMemory().getBlock(a).isExecute()||program.getFunctionManager().getFunctionsOverlapping(new AddressSet(a,ins.getMaxAddress())).hasNext())throw fail("revision_conflict","Instruction/function mapping changed");}changes.add(change.deepCopy());oldValues.add(entry.get("before").deepCopy());newValues.add(change.deepCopy());}
-            }
-            JsonObject result=new JsonObject();result.add("changes",changes);result.add("before",oldValues);result.add("after",newValues);result.add("coverage",plan.get("coverage").deepCopy());result.add("binding",plan.get("binding").deepCopy());result.add("policy",plan.get("policy").deepCopy());result.addProperty("symbolsApplied",plan.get("symbolsApplied").getAsBoolean());result.addProperty("planHash",digest);result.addProperty("noop",changes.isEmpty());return result;
-        }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw fail("plan_invalid",e.getMessage());}
+                if(entry.has("change")){JsonObject change=entry.getAsJsonObject("change");if(change.has("createFunction")){Instruction ins=program.getListing().getInstructionAt(a);if(ins==null||!hex(ins.getMaxAddress()).equals(required(change,"bodyEnd"))||!program.getMemory().getBlock(a).isExecute()||program.getFunctionManager().getFunctionsOverlapping(new AddressSet(a,ins.getMaxAddress())).hasNext())throw fail("revision_conflict","Instruction/function mapping changed");}changes.add(change);oldValues.add(entry.get("before"));newValues.add(change);}
     }
     public void apply(JsonObject validated) {
         try {

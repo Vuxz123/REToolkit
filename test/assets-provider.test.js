@@ -119,11 +119,14 @@ test('publication failure after state save restores exact original project JSON 
  await startAssetSession(toolkit,'Fixture',{timeoutMs:10000},{...dependencies,exportFault:'after-state-save'});
  await assert.rejects(requestAssetSession(toolkit,'Fixture','assets.export'),/publication failure/);assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.readFileSync(path.join(project.reconstructedSourceDir,'keep.txt'),'utf8'),'keep');
 });
-test('uncertain reconstruction closes the owned engine and preserves every ownership gate',async t=>{
+test('uncertain reconstruction refuses concurrent reads, closes the owned engine and preserves every ownership gate',async t=>{
  const {toolkit,dependencies}=await setup(t,'normal',true);await startAssetSession(toolkit,'Fixture',{timeoutMs:10000},{...dependencies,operationFault:'reconstruction_recovery_required'});
  const recovery=requestAssetSession(toolkit,'Fixture','operation',{method:'assets.index',params:{}});const settled=recovery.catch(error=>error);await delay(10);
- const queued=requestAssetSession(toolkit,'Fixture','assets.raw',{format:'json',bundle:[],collection:0,pathID:'1'}).catch(error=>error);
- assert.equal((await settled).code,'reconstruction_recovery_required');assert.equal((await queued).code,'session_stopping');
+ // Binding verification precedes connection. Under load this request can reach
+ // the owner after shutdown; no queue admission was acknowledged. Both the
+ // controlled refusal and transport closure must leave the read unexecuted.
+ const concurrent=requestAssetSession(toolkit,'Fixture','assets.raw',{format:'json',bundle:[],collection:0,pathID:'1'}).catch(error=>error);
+ assert.equal((await settled).code,'reconstruction_recovery_required');assert.ok(['session_stopping','connection_lost'].includes((await concurrent).code));
  assert.equal(readJson(path.join(toolkit.workspace('Fixture'),'04_Notes/asset-engine-fixture.json')).reads,0);
  for(let i=0;i<100;i++){const record=readJson(runtimePaths(toolkit,'Fixture').current);if(record.engineClosed){assert.equal(record.phase,'cleanup-pending');break;}await delay(20);}
  assert.equal(readJson(runtimePaths(toolkit,'Fixture').current).engineClosed,true);assert.ok(fs.existsSync(runtimePaths(toolkit,'Fixture').gate));assert.equal(fs.readdirSync(path.join(toolkit.root,'.cache/toolchain/readers')).length,1);

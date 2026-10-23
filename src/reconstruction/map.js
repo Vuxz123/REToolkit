@@ -3,17 +3,17 @@ import {fingerprint} from '../state.js';
 import {validateEvidence} from '../evidence-schema.js';
 import {verifyGraphFiles} from '../assets/graph.js';
 import {scriptBindings} from './bindings.js';
+import {dumpImageRanges} from './dump-images.js';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
 const fail = message => {throw Object.assign(new Error(message),{code:'reconstruction_invalid'});};
 function sameBuild(a,b){return ['native','metadata'].every(k=>a?.[k]?.sha256===b?.[k]?.sha256&&Number.isSafeInteger(a?.[k]?.size)&&a[k].size===b?.[k]?.size);}
-function dumpTypes(text){
-  const images=[...text.matchAll(/^\/\/ Image \d+: (.+?)\.dll - (\d+)\s*$/gm)].map(m=>({assembly:m[1],start:Number(m[2])})).sort((a,b)=>a.start-b.start);
+function dumpTypes(text,images){
   const types=[];let namespace='',type=null,rva=null;
   for(const line of text.split(/\r?\n/)){
     const ns=line.match(/^\/\/ Namespace:\s*(.*)$/);if(ns){namespace=ns[1].trim();type=null;}
     const cls=line.match(/^\s*(?:public|private|internal|protected|abstract|sealed|static|partial|\s)*\b(class|struct|enum|interface)\s+([\w`]+)[^\r\n]*\/\/ TypeDefIndex:\s*(\d+)/);
-    if(cls){const index=Number(cls[3]),image=images.findLast(i=>i.start<=index);type={assembly:image?.assembly??null,fullName:namespace?`${namespace}.${cls[2]}`:cls[2],methods:[]};types.push(type);rva=null;}
+    if(cls){const index=Number(cls[3]),matches=images.filter(i=>i.start<=index&&(i.count===undefined||index<i.start+i.count)),image=matches.length===1?matches[0]:images.every(i=>i.count===undefined)?matches.at(-1):null;type={assembly:image?.assembly??null,fullName:namespace?`${namespace}.${cls[2]}`:cls[2],methods:[]};types.push(type);rva=null;}
     const address=line.match(/\/\/ RVA:\s*(0x[0-9a-fA-F]+)/);if(address)rva=address[1];
     const method=line.match(/^\s*(?!\/\/)(?:[\w.<>,?\[\]]+\s+)+([\w]+)\s*\(([^)]*)\)/);
     if(type&&method){type.methods.push({name:method[1],signature:line.trim().replace(/\s*\{.*$/,''),rva,provenance:'il2cpp-metadata-declaration'});rva=null;}
@@ -31,7 +31,7 @@ export async function buildScriptMap(graph,{projectDir,dump,evidence=[],scriptId
     if(typeof dump.text!=='string'||Buffer.byteLength(dump.text)>128*1024*1024||sha(dump.text)!==dump.sha256)fail('Invalid dump text/hash');
     verified=dump.verified===true&&sameBuild(dump.build,graph.binding);
     if(dump.verified===true&&!verified)fail('Dump build binding does not match graph');
-    if(verified)metadata=dumpTypes(dump.text);
+    if(verified)metadata=dumpTypes(dump.text,dumpImageRanges(dump));
   }
   const selected=graph.binding.programIdentity??graph.binding;
   const observed=evidence.map(value=>{
@@ -47,7 +47,7 @@ export async function buildScriptMap(graph,{projectDir,dump,evidence=[],scriptId
     const duplicateIdentity=type&&graph.assets.filter(a=>a.script?.assembly===identity.assembly&&a.script.types?.some(t=>t.fullName===identity.fullName)).length>1;
     const candidates=metadata.filter(t=>t.assembly===identity.assembly&&t.fullName===identity.fullName);
     const match=candidates.length===1?candidates[0]:null;
-    const {components,unresolvedBindings}=scriptBindings(graph,asset);
+    const bindings=scriptBindings(graph,asset),{componentCount,unresolvedBindingCount}=bindings;
     const methods=(match?.methods??[]).map(method=>{
       const matches=observed.filter(({value:e})=>{
         if(e.query.method!=='functions.decompile'||!method.rva)return false;
@@ -55,7 +55,8 @@ export async function buildScriptMap(graph,{projectDir,dump,evidence=[],scriptId
       }).map(({id,value})=>({id,kind:'native-pseudocode',runId:value.runId,revision:value.revision,programIdentity:value.programIdentity,query:value.query}));
       return {...method,evidence:matches};
     });
-    return {scriptId:asset.id,guid:asset.guid,path:asset.path,identity,components,unresolvedBindings,serializedFields:(type?.fields??[]).filter(f=>f.serialized),state:{identity:!asset.guid?'opaque':types.length>1||duplicateIdentity?'ambiguous':!info?.supported||!type?'unsupported':'resolved',bindings:unresolvedBindings.length?'unresolved':components.length?'resolved':'unreferenced',metadata:!verified?'unverified':candidates.length>1?'ambiguous':match?'matched':'unmatched',logic:'unverified',source:'exported-stub'},methods,evidence:methods.flatMap(m=>m.evidence),limitations:[...info?.limitations??[],...(unresolvedBindings.length?['Unresolved local fileID script bindings prevent source replacement']:[]),...(!asset.path.endsWith('.cs')?['DLL replacement requires a separate migration']:[])]};
+    const bodyCandidate=asset.path.startsWith('Assets/')&&asset.path.endsWith('.cs')&&info?.assembly&&!/editor/i.test(info.assembly)&&!asset.path.split('/').some(part=>part.toLowerCase()==='editor')&&bindings.traversalComplete&&!unresolvedBindingCount;
+    return {scriptId:asset.id,guid:asset.guid,path:asset.path,identity,...bindings,serializedFields:(type?.fields??[]).filter(f=>f.serialized),sourceCapabilities:{bodyReplacement:bodyCandidate?{mode:'bodies',state:'requires-plan-validation',parser:'exact-unity-bundled-roslyn',meta:asset.guid?'preserve':'generic-source-only'}:{state:'unsupported'},missingInitialization:bodyCandidate?{mode:'initialization',state:'requires-native-proof-and-plan-validation',constructors:'missing-static-or-parameterless-instance',preserves:'all-other-source-tokens',metadata:'fresh-same-build-dump',logic:'unverified'}:{state:'unsupported'}},state:{identity:!asset.guid?'opaque':types.length>1||duplicateIdentity?'ambiguous':!info?.supported||!type?'unsupported':'resolved',bindings:unresolvedBindingCount?'unresolved':componentCount?'resolved':'unreferenced',metadata:!verified?'unverified':candidates.length>1?'ambiguous':match?'matched':'unmatched',logic:'unverified',source:'exported-stub'},methods,evidence:methods.flatMap(m=>m.evidence),limitations:[...info?.limitations??[],...(unresolvedBindingCount?['Unresolved local fileID script bindings prevent source replacement']:[]),...(!asset.path.endsWith('.cs')?['DLL replacement requires a separate migration']:[])]};
   });
   return {kind:'retoolkit-script-map',schemaVersion:1,graphRevision:graph.revision,binding:structuredClone(graph.binding),scripts,limitations:['Native pseudocode is untrusted evidence, not original C# source.','Compilation and behavior have not been verified.']};
 }

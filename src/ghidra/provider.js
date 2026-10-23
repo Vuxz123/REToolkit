@@ -77,7 +77,8 @@ export async function sessionStatus(toolkit,name) {
   catch(error){result.bindingError={code:error.code,message:error.message};}
   return result;
 }
-export async function startSession(toolkit,name,{write=false,timeoutMs=300000,idleMs=900000}={},dependencies={}) {
+export async function startSession(toolkit,name,{write=false,timeoutMs=300000,idleMs=900000,reuse=true}={},dependencies={}) {
+  if(typeof reuse!=='boolean')throw new BridgeError('invalid_argument','Session reuse must be boolean');
   if(!Number.isFinite(timeoutMs)||timeoutMs<1||timeoutMs>300000)throw new BridgeError('invalid_argument','Startup timeout must be 1..300000ms');
   if(!Number.isFinite(idleMs)||idleMs<1000||idleMs>86400000)throw new BridgeError('invalid_argument','Idle timeout must be 1000..86400000ms');
   const validated=validateProject(toolkit,name);
@@ -89,7 +90,7 @@ export async function startSession(toolkit,name,{write=false,timeoutMs=300000,id
   try {
     const old=readSession(toolkit,name);
     if(old&&!['stopped','failed'].includes(old.phase)) {
-      if(old.phase==='ready'&&old.mode===(write?'write':'read')) {
+      if(reuse&&old.phase==='ready'&&old.mode===(write?'write':'read')) {
         const {config}=configFor(toolkit,name,old);verifyBinding(config,toolkit,name);
         const status=await sessionStatus(toolkit,name);if(!status.liveError)return status;
       }

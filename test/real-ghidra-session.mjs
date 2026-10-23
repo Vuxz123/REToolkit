@@ -12,7 +12,10 @@ import { startSession,stopSession,querySession,mutateSession } from '../src/ghid
 const root=path.resolve(fileURLToPath(new URL('..',import.meta.url)));
 const engines=process.argv[2]; if(!engines) throw Error('Usage: node test/real-ghidra-session.mjs <toolkit-with-engines>');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'retk-session-')); let success=false;
-const toolkit=createToolkit(temp), installed=createToolkit(engines); Object.assign(toolkit.tools,installed.tools); Object.assign(toolkit.env,installed.env);
+const toolkit=createToolkit(temp), installed=createToolkit(engines);
+// The legacy bridge is a read-only derived getter; this fixture uses direct JVM sessions.
+for(const key of Object.keys(installed.tools))if(key!=='bridge')toolkit.tools[key]=installed.tools[key];
+Object.assign(toolkit.env,installed.env);
 Object.assign(toolkit.env,{APPDATA:temp,LOCALAPPDATA:temp,USERPROFILE:temp,XDG_CONFIG_HOME:temp,_JAVA_OPTIONS:`-Dapplication.settingsdir=${temp} -Dapplication.cachedir=${temp} -Dapplication.tempdir=${temp} -Duser.home=${temp}`});
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));

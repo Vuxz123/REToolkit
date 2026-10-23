@@ -113,6 +113,14 @@ export function openSqliteGraph({file,receipt,graph}={}){
  // Separate fixed statements keep selective focus reads on their indexes.
  const nodeRows=[prepare('SELECT json FROM nodes ORDER BY ordinal'),prepare('SELECT json FROM nodes WHERE id IN (SELECT value FROM json_each(?)) ORDER BY ordinal'),prepare('SELECT json FROM nodes WHERE script_guid IN (SELECT lower(value) FROM json_each(?)) ORDER BY ordinal'),prepare('SELECT json FROM nodes WHERE id IN (SELECT value FROM json_each(?)) AND script_guid IN (SELECT lower(value) FROM json_each(?)) ORDER BY ordinal')];
  const edgeRows=[prepare('SELECT json FROM edges ORDER BY ordinal'),prepare('SELECT json FROM edges WHERE from_id IN (SELECT value FROM json_each(?)) ORDER BY ordinal'),prepare('SELECT json FROM edges WHERE guid IN (SELECT lower(value) FROM json_each(?)) ORDER BY ordinal'),prepare('SELECT json FROM edges WHERE from_id IN (SELECT value FROM json_each(?)) AND guid IN (SELECT lower(value) FROM json_each(?)) ORDER BY ordinal')];
+ // Incoming claimed bindings also select their source node. A wrong/missing
+ // scriptRef must not disappear by selecting another script_guid index entry.
+ const bindingNodes=prepare(`SELECT json FROM nodes WHERE ordinal IN (
+  SELECT ordinal FROM nodes WHERE script_guid=lower(?)
+  UNION SELECT n.ordinal FROM edges e JOIN nodes n ON n.id=e.from_id WHERE e.guid=lower(?) AND (e.kind='script' OR e.field='m_Script')
+  UNION SELECT n.ordinal FROM edges e JOIN nodes n ON n.id=e.from_id WHERE e.to_id=? AND (e.kind='script' OR e.field='m_Script')
+ ) ORDER BY ordinal`);
+ const bindingEdges=prepare("SELECT json FROM edges WHERE from_id=? AND (kind='script' OR field='m_Script') ORDER BY ordinal");
  function guard(){check(!closed,'sqlite_graph_closed','Graph reader is closed');check(sameStat(stat,fileStat(file))&&sameStat(stat,fs.fstatSync(fd)),'sqlite_graph_changed','Database identity changed during graph read');}
  function decode(row){check(row&&Buffer.byteLength(row.json)<=SQLITE_GRAPH_LIMITS.maxRowBytes,'sqlite_graph_row_limit','Invalid graph row size');return JSON.parse(row.json);}
  function get(id){const row=getNode.get(id)??getAsset.get(id);return row?decode(row):null;}
@@ -151,6 +159,15 @@ export function openSqliteGraph({file,receipt,graph}={}){
   },
   *readNodes(selectors={}){guard();filters(selectors,['scriptGuids','ids']);const guids=selection(selectors.scriptGuids,10000),ids=selection(selectors.ids,50000),args=[ids,guids].filter(value=>value!==null);let count=0;try{for(const row of nodeRows[(ids!==null?1:0)+(guids!==null?2:0)].iterate(...args)){if(++count%BATCH===0)guard();yield decode(row);}}finally{guard();}},
   *readEdges(selectors={}){guard();filters(selectors,['fromIds','scriptGuids']);const ids=selection(selectors.fromIds,50000),guids=selection(selectors.scriptGuids,10000),args=[ids,guids].filter(value=>value!==null);let count=0;try{for(const row of edgeRows[(ids!==null?1:0)+(guids!==null?2:0)].iterate(...args)){if(++count%BATCH===0)guard();yield decode(row);}}finally{guard();}},
+  *readScriptBindings({guid,id}={}){guard();check((guid===undefined||guid===null||text(guid))&&text(id),'invalid_query_parameter','Exact script asset ID and optional GUID required');let count=0,edgeReads=0;
+   // SQL NULL equality selects nothing; generic source only selects explicit to
+   // claims, never all nodes whose script_guid happens to be absent.
+   try{for(const row of bindingNodes.iterate(guid??null,guid??null,id)){if(++count%BATCH===0)guard();const node=decode(row);
+    // Consume immediately: even duplicate edge floods never form an array.
+    const edges=(function*(){for(const edge of bindingEdges.iterate(node.id)){if(++edgeReads%BATCH===0)guard();yield decode(edge);}})();
+    yield {node,edges};
+   }}finally{guard();}
+  },
   close(){if(closed)return;try{db.close();}finally{fs.closeSync(fd);closed=true;}}
  };
  return reader;

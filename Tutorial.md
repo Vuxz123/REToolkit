@@ -1,5 +1,13 @@
 # REToolkit Tutorial: MCP-First Ghidra Workflow
 
+For a new machine, use [quick installation with `install.cmd`](docs/quick-install.md)
+to prepare Node, CLI/GUI and locked runtimes.
+
+This is the retained PowerShell compatibility tutorial. For current Node.js,
+Electron, MCP configuration and runtime setup, use [README](README.md),
+[desktop setup](docs/desktop.md) and [agent setup](prompts/install-ghidra-skill.md).
+Do not use the installer or GUI build instructions below for a new installation.
+
 This tutorial prepares a Unity IL2CPP project, opens it in Ghidra/PyGhidra, and
 uses GhidraMCP for AI-assisted queries.
 

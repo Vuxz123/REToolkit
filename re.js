@@ -19,8 +19,13 @@ import {isDesktopLaunchCommand,runDesktopLaunchCli} from './src/desktop-launch/c
 import {isVisualCommand,runVisualCli} from './src/visual/cli.js';
 import {isMigrationCommand,runMigrationCli} from './src/reconstruction/migration-cli.js';
 import {isJevSettingsCommand,runJevSettingsCli} from './src/jev-settings-cli.js';
+import {isInputCommand,runInputCli} from './src/input-cli.js';
+import {isPreparationCommand,runPreparationCli} from './src/preparation/cli.js';
+import {isWakeCommand,runWakeCli} from './src/agents/wake-cli.js';
+import {runQuickstartCli} from './src/bootstrap/cli.js';
 
 const usage = `REToolkit JavaScript CLI (Node.js 24+)
+  retk quickstart [--profile full|desktop|cli] [--plan] [--no-path] [--cache <folder>]
   retk --version
   retk gui [--root <toolkit>]
   retk desktop-runtime plan|install --lock <lock.json> [--cache <folder>]
@@ -31,6 +36,15 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   retk migration observe|plan|apply|verify <Game> ...
   node re.js doctor [Game] [--task prepare|headless|mcp|assetripper] [--probe]
   node re.js init <Game>
+  node re.js create-project <Game> <APK/XAPK/APKS/ZIP>
+  retk prepare <Game> [--profile native|reconstruction] [--symbols plan|apply|skip]
+  retk preparation <Game> [--run <UUID>]
+  retk jobs wait <Game> --job-id <UUID> [--timeout-seconds 25]
+  retk agents wake-after <Game> --job-id <UUID> --thread-id <UUID> --task observe-job
+  node re.js inputs <Game>
+  node re.js inputs resolve <Game> [--policy prefer-arm64|manual]
+  node re.js inputs select <Game> --binary <relative-path> --metadata <relative-path> --revision <hash>
+  node re.js inputs recover <Game> --revision <hash>
   node re.js scan <Game> <folder> [--binary <relative-path>] [--metadata <relative-path>]
   node re.js add <Game> <APK/XAPK/AAB/ZIP-or-folder> [--binary <path>] [--metadata <path>]
   node re.js flow <Game> <source> [--resume] [--dry-run] [--no-open] [--reimport]
@@ -49,7 +63,9 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   node re.js python-runtime plan|install <lock.json> [--cache <folder>]
   node re.js python-runtime verify
   node re.js adb devices [--adb <adb.exe>] [--json]
+  node re.js adb packages --serial <id> [--adb <adb.exe>] [--json]
   node re.js pull-ldplayer <Game> <package> [--serial <id>] [--adb <adb.exe>] --skip-launch
+                  [--include-data]
   node re.js handoff create <Game> [--out <folder|zip>] [--evidence <folder>]
   node re.js handoff verify <folder|zip>
   node re.js evidence capture <Game> --kind decompile|xrefs|functions [--selector <name/address>]
@@ -92,6 +108,10 @@ function parse(argv) {
 
 async function main() {
   const raw=process.argv.slice(2);
+  if(raw[0]==='quickstart')return runQuickstartCli(raw.slice(1),path.dirname(fileURLToPath(import.meta.url)));
+  if(isPreparationCommand(raw))return runPreparationCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isWakeCommand(raw))return runWakeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isInputCommand(raw))return runInputCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(raw[0]==='gui')return runDesktopCli(raw);
   if(isDesktopRuntimeCommand(raw))return runDesktopRuntimeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isDesktopLaunchCommand(raw))return runDesktopLaunchCli(raw,path.dirname(fileURLToPath(import.meta.url)));
@@ -126,7 +146,7 @@ async function main() {
   if(noArgs.has(command)&&name) throw new Error(`Too many arguments for ${command}`);
   if(!noArgs.has(command)&&!name) throw new Error(`${command} requires a workspace name or archive path`);
   if(extra.length) throw new Error(`Too many arguments for ${command}`);
-  const sourceCommands=new Set(['scan','add','flow']);
+  const sourceCommands=new Set(['scan','add','flow','create-project']);
   if(sourceCommands.has(command)&&!source) throw new Error(`${command} requires an input path`);
   const allowed={flow:['resume','dryRun','noOpen','reimport','binary','metadata'],scan:['binary','metadata'],add:['binary','metadata'],import:['force','reimport']};
   for(const key of Object.keys(options)) if(!['root','json','help',...(allowed[command]??[])].includes(key)) throw new Error(`Option ${key} is not supported by ${command}`);
@@ -137,6 +157,10 @@ async function main() {
       print({node:process.version,root,checks,notice:'Tool presence does not establish analysis or MCP readiness'}); break;
     }
     case 'init': print(await toolkit.init(name)); break;
+    case 'create-project': {
+      const {createApkProject}=await import('./src/desktop/projects.js');
+      const result=await createApkProject(toolkit,name,source);print(result);if(result.state==='failed')process.exitCode=1;break;
+    }
     case 'scan': print(await toolkit.scan(name,source,options)); break;
     case 'add': print(await toolkit.add(name,source,options)); break;
     case 'flow': print(await toolkit.flow(name,source,options)); break;

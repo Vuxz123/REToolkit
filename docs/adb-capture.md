@@ -3,14 +3,16 @@
 The JavaScript CLI discovers ready Android devices and captures an installed
 authorized Unity package. It invokes ADB directly with argument arrays, then uses
 the existing Node extraction/input pipeline. It does not invoke `re.ps1`, install
-packages, request root, remove device files or open Ghidra.
+packages, enable root, remove device files or open Ghidra.
 
 ## Discover and capture
 
 ```powershell
 node re.js adb devices --adb C:\LDPlayer\LDPlayer9\adb.exe --json
+node re.js adb packages --serial emulator-5554 --json
 node re.js pull-ldplayer FoodHunt com.example.game --serial emulator-5554 --skip-launch --json
 node re.js pull-ldplayer FoodHunt com.example.game --adb C:\LDPlayer\LDPlayer9\adb.exe --serial 127.0.0.1:5555 --skip-launch --json
+node re.js pull-ldplayer FoodHunt com.example.game --serial emulator-5554 --skip-launch --include-data --json
 ```
 
 `--adb` accepts an existing regular executable ending in `.exe`. Without it,
@@ -28,7 +30,51 @@ queries its current APK paths again. For JSON, AI/Agent, CI or piped commands,
 use `--skip-launch` after ensuring downloads have already finished. ADB may start
 its own normal server; this command does not configure LDPlayer or install ADB.
 
-## Integrity and preservation
+## Full package and application data
+
+`--include-data` additionally inspects `/sdcard/Android/data/<package>` and private
+app data, preferring `/data/user/0/<package>` with `/data/data/<package>` as an
+absent-path fallback. It uses existing shell access, then `run-as` for a permitted
+app, then existing `su` only with a verified Android timeout facility. It never
+enables root, remounts, changes permissions, writes/deletes device files or stops
+the app. If no supported private access is available, the scope is `denied`.
+Unexpected I/O, disconnect, timeout, cancellation, malformed metadata or changes
+during transfer fail capture rather than being relabeled as permission denial.
+
+The install XAPK contains APK/split/OBB only. Userdata is a separate sibling
+`<package>-<UUID>.data.zip`, with `Android/data/<package>/...`,
+`private/<package>/...` and `retk-app-data.json`. It is not fed into extraction,
+Unity asset indexing or Jev. The receipt lists each scope as included, absent or
+denied, access mode, counts and archive hashes. A denied scope produces
+`applicationData.coverage: partial` and root `state: partial`; the readable GUI
+retains that status even for large stored results. Absence is explicit evidence
+that a directory was not present, not a permission error.
+
+App data files use canonical path/regular-file checks, reject internal links,
+special files, traversal and unsafe/case-colliding Windows names. Conservative
+safe path segments exclude spaces and non-ASCII names; unsupported entries fail
+explicitly. File count/byte budgets are shared with APK/OBB (1024 files, 8 GiB per
+file, 32 GiB total). The bounded directory inspection also limits total entries
+including directories. Shell-readable files use native pull; `run-as`/`su` use
+bounded base64 chunks without logging file contents. Remote stat and SHA256 are
+checked before/after and local SHA256 must match. A live database/WAL set or
+multi-file game save is still not an atomic snapshot, and the data ZIP is not a
+guaranteed restorable Android backup.
+
+In `retk gui`, use **LDPlayer / ADB** to list devices, list third-party installed
+packages on an explicit serial, then **Pull APK + OBB + dữ liệu ứng dụng**. This
+always includes data and skips game launch. Optional `adb.exe` selects an existing
+executable. Start the game/downloads separately before capture if needed.
+
+The existing workspace-scoped assets MCP server now advertises `adb_devices`,
+`adb_packages` (`serial`) and `adb_capture` (`serial`, `packageName`, optional
+`binary`/`metadata`). Capture uses that registered workspace, includes data and
+never launches the game. MCP cannot override the executable or launch flags;
+ADB is discovered from the host PATH/known LDPlayer locations. Use CLI/desktop
+with `--adb` for a custom location. Server registration does not select a device
+or authorize capturing an unrelated package. Restart the agent to discover new tools.
+
+## Package integrity and preservation
 
 All base/split APK paths and OBB basenames are validated before pulls. Exact
 installed package identity is required. Duplicate/case-colliding filenames are
@@ -77,3 +123,13 @@ without accessing the device again. Non-ZIP OBBs are retained with a warning.
 PowerShell/.NET Framework, then exercises the actual CLI and engine supervisor
 against base/split/OBB fixtures, including a zero-exit partial pull. It does not
 access a real emulator/device, run vendor engines or establish game compatibility.
+
+## Automatic inspection during preparation
+
+`retk prepare Game --serial emulator-5554 --package com.example.game` can inspect
+declared missing splits and recover matching installed content before dump.
+It verifies original/installed base bytes, package/version and real signing
+certificates before capture, then validates the captured APK set again. It does
+not launch the game or establish that remote/on-demand assets are downloaded.
+Existing analyzed/exported inputs are preserved for review. See
+[project preparation](project-preparation.md) for policies, deadlines and receipts.

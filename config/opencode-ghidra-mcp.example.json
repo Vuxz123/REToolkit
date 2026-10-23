@@ -1,13 +1,12 @@
 {
-  "mcpServers": {
+  "mcp": {
     "ghidra": {
-      "command": "node",
-      "args": ["C:\\Users\\DPC00176\\REToolkit\\re.js", "mcp"],
-      "type": "stdio",
-      "env": {
+      "command": ["node", "C:/Users/DPC00176/REToolkit/re.js", "mcp"],
+      "type": "local",
+      "enabled": true,
+      "environment": {
         "RETOOLKIT_ROOT": "C:\\Users\\DPC00176\\REToolkit"
-      },
-      "notes": "Merge into existing mcpServers and replace the checkout path. Requires Node.js >=24."
+      }
     }
   }
 }

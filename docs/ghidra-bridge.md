@@ -106,6 +106,20 @@ body is limited to that instruction, not guessed from the next method address.
 Inspect planned/noop/conflict/skipped counts and the immutable plan file under
 `04_Notes/symbol-plans/`. Another mutation makes the plan stale. Apply checks its
 hash and all observed before values, then uses one transaction for planned entries.
+Version-1 plan files may be up to 512 MiB. Node hashes the file in 64 KiB chunks;
+Java reads/writes plan JSON incrementally. Compact previews hash their arrays
+without serializing a second whole-plan string. Request/response frame limits
+are unchanged: pass the saved path and exact hash, not the plan contents.
+Apply still retains the validated changes and snapshots for its atomic transaction;
+streaming the file does not guarantee a particular heap is sufficient for every plan.
+
+An existing valid version-1 plan can be reused without changing its bytes. After
+updating the Java helpers, use a newly started owned session and preview first;
+Program identity, revision and observed values must still match. A stopped
+external retry script with its own old 32 MiB check must use the updated budget
+or the typed job route. Do not trim/rewrite the immutable plan or automatically
+restart a stopped/uncertain write.
+
 Known conflicts/skips or missing template groups produce partial coverage;
 `symbolsApplied` remains false.
 Full `il2cpp.h` types, C signatures and struct reconstruction are outside v1.
@@ -125,6 +139,7 @@ Run unit/legacy suites with `npm test` and `npm run test:legacy`. Engine checks:
 ```powershell
 npm run test:ghidra-session -- C:/path/to/REToolkit
 npm run test:ghidra-symbols -- C:/path/to/REToolkit
+node test/real-ghidra-symbols-streaming.mjs C:/path/to/REToolkit
 ```
 
 This is an experimental v1. Source-owned managed PE/x86, raw mapped symbols,
@@ -134,3 +149,7 @@ snapshot restoration into a separate project, a 1000-label transaction, exact
 Node/Java Unicode payload hashing, connection loss and save/receipt failures.
 These do not prove compatibility with a real IL2CPP build. Live GUI reopen and
 ARMv7/Thumb qualification remain unrun. Retain GUI for unqualified inputs.
+The streaming fixture uses a separate synthetic Program and a 256 MiB heap to
+read a >217.5 MiB plan with two real changes and generate/validate a >230 MiB
+plan of skipped rows. It checks file processing scale, not the heap required for
+hundreds of thousands of applied changes.

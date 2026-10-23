@@ -4,14 +4,19 @@ import {startAssetSession,assetSessionStatus,stopAssetSession,requestAssetSessio
 import {sourcePath} from './protocol.js';
 import {visualDefinitions} from '../visual/definitions.js';
 import {migrationDefinitions} from '../reconstruction/migration-definitions.js';
+import {adbDefinitions,runAdbOperation} from '../adb/api.js';
+import {jobOperations,jobDefinitions,validateSchema} from '../jobs/definitions.js';
 
 const text={type:'string',minLength:1,maxLength:2048},limit={type:'integer',minimum:1,maximum:1000};
 const paging={limit,cursor:{...text,maxLength:65536}};
 const operationId={type:'string',pattern:'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-4[a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$'};
 const evidence={type:'array',maxItems:10000,items:{type:'object'}};
 const libraryRequirements={type:'object',additionalProperties:false,required:['kind','schemaVersion','packages'],properties:{kind:{const:'retoolkit-library-requirements',type:'string'},schemaVersion:{const:1,type:'integer'},packages:{type:'array',maxItems:64,items:{type:'object',additionalProperties:false,required:['id','version'],properties:{id:{type:'string',minLength:1,maxLength:256},version:{type:'string',minLength:1,maxLength:128}}}}}};
-const request={type:'object',additionalProperties:false,required:['kind','schemaVersion','graphRevision','changes'],properties:{kind:{type:'string',const:'retoolkit-reconstruction-request'},schemaVersion:{type:'integer',const:1},graphRevision:{type:'string',pattern:'^[a-f0-9]{64}$'},changes:{type:'array',minItems:1,maxItems:16,items:{type:'object',additionalProperties:false,required:['scriptId','source'],properties:{scriptId:text,source:{type:'string',minLength:1,maxLength:1024**2},evidenceIds:{type:'array',maxItems:1000,items:{type:'string',pattern:'^[a-f0-9]{64}$'}}}}}}};
+const constructorDeclarations={type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['fullName','kind','evidenceId'],properties:{fullName:text,kind:{type:'string',enum:['static','instance']},evidenceId:{type:'string',pattern:'^[a-f0-9]{64}$'}}}};
+const request={type:'object',additionalProperties:false,required:['kind','schemaVersion','graphRevision','changes'],properties:{kind:{type:'string',const:'retoolkit-reconstruction-request'},schemaVersion:{type:'integer',const:1},graphRevision:{type:'string',pattern:'^[a-f0-9]{64}$'},changes:{type:'array',minItems:1,maxItems:16,items:{type:'object',additionalProperties:false,required:['scriptId','source'],properties:{scriptId:text,source:{type:'string',minLength:1,maxLength:1024**2},mode:{type:'string',enum:['bodies','initialization']},constructors:constructorDeclarations,evidenceIds:{type:'array',maxItems:1000,items:{type:'string',pattern:'^[a-f0-9]{64}$'}}}}}}};
 export const definitions={
+ 'preparation.status':{properties:{runId:operationId,verifyFreshness:{type:'boolean'}}},
+ ...adbDefinitions,
  ...visualDefinitions,
  ...migrationDefinitions,
  'assets.session.start':{properties:{}},'assets.session.status':{properties:{}},'assets.session.stop':{properties:{}},
@@ -26,7 +31,7 @@ export const definitions={
  'reconstruct.plan':{properties:{request,evidence},required:['request']},
  'reconstruct.apply':{properties:{operationId},required:['operationId']},
  'reconstruct.verify':{properties:{operationId},required:['operationId']},
- 'reconstruct.validate':{properties:{timeoutSeconds:{type:'integer',minimum:1,maximum:3600}}},
+ 'reconstruct.validate':{properties:{timeoutSeconds:{type:'integer',minimum:1,maximum:3600},resumeOperationId:operationId,assetIds:{type:'array',minItems:1,maxItems:1000,items:text}}},
  'reconstruct.validation':{properties:{operationId,...paging,section:{type:'string',enum:['summary','scripts','assets','diagnostics']}},required:['operationId']},
  'libraries.scan':{properties:{}},
  'libraries.list':{properties:{...paging,query:text}},
@@ -35,8 +40,23 @@ export const definitions={
  'libraries.import':{properties:{operationId},required:['operationId']},
  'libraries.verify':{properties:{operationId},required:['operationId']},
 };
+export const registeredJobOperations=jobOperations(definitions);
+Object.assign(definitions,jobDefinitions(registeredJobOperations));
 export function validateAssetParams(method,params) {
+ if(method==='preparation.status'){
+  validateSchema(params,{type:'object',additionalProperties:false,...definitions[method]});return params;
+ }
  const schema=definitions[method];
+ if(method==='reconstruct.validate'){
+  try{validateSchema(params,{type:'object',additionalProperties:false,...schema});}catch{throw assetError('asset_params_invalid','Invalid Unity validation scope or resume options');}
+  if(params.assetIds&&new Set(params.assetIds).size!==params.assetIds.length)throw assetError('asset_params_invalid','Validation asset IDs must be unique');
+ }
+ if(method.startsWith('jobs.')) {
+  if(!schema)throw assetError('asset_params_invalid','Unknown job operation');
+  validateSchema(params,{type:'object',additionalProperties:false,...schema});
+  if(method==='jobs.start')validateAssetParamsForJob(params.operation,params.params);
+  return params;
+ }
  if(method==='assets.index'&&params?.storage==='sqlite'&&params.graphMaxMiB!==undefined)throw assetError('asset_params_invalid','SQLite storage does not use a JSON memory budget');
  if(!schema||!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(k=>!Object.hasOwn(schema.properties,k))||(schema.required??[]).some(k=>!Object.hasOwn(params,k)))throw assetError('asset_params_invalid','Unknown operation or invalid asset parameters');
  for(const [key,value] of Object.entries(params)) {
@@ -47,8 +67,19 @@ export function validateAssetParams(method,params) {
  if(Buffer.byteLength(JSON.stringify(params))>32*1024**2)throw assetError('asset_payload_limit','Asset operation exceeds 32 MiB');
  return params;
 }
+export function validateAssetParamsForJob(operation,params) {
+ const schema=registeredJobOperations[operation];
+ if(!schema)throw assetError('job_operation_invalid','Unsupported job operation');
+ validateSchema(params,{type:'object',additionalProperties:false,...schema});
+ if(Object.hasOwn(definitions,operation))validateAssetParams(operation,params);
+ if(Buffer.byteLength(JSON.stringify(params))>1024**2)throw assetError('job_payload_limit','Job parameters exceed 1 MiB');
+ return params;
+}
 export async function invokeAssetApi(toolkit,name,method,params={}) {
  validateAssetParams(method,params);
+ if(method==='preparation.status'){const {inspectPreparation}=await import('../preparation/service.js');return inspectPreparation(toolkit,name,params);}
+ if(method.startsWith('jobs.')){const {invokeJobApi}=await import('../jobs/service.js');return invokeJobApi(toolkit,name,method,params);}
+ if(method.startsWith('adb.'))return runAdbOperation(toolkit,name,method,params);
  if(method==='visual.compare'){const {runVisualComparison}=await import('../visual/service.js');return runVisualComparison(toolkit,name,params);}
  if(method==='visual.report'){const {readVisualReport}=await import('../visual/service.js');return readVisualReport(toolkit,name,params);}
  if(method.startsWith('migration.')){const {runMigrationOperation}=await import('../reconstruction/migration-cli.js');return runMigrationOperation(toolkit,name,method.slice('migration.'.length),params);}

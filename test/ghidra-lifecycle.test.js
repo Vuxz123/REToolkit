@@ -31,6 +31,7 @@ test('detached session owns workspace until engine closes, reuses process and de
     await assert.rejects(withWorkspaceLock(toolkit.workspace('Fixture'),()=>{}),/busy/);
     assert.equal((await sessionStatus(toolkit,'Fixture')).live.result.state,'ready');
     assert.equal((await startSession(toolkit,'Fixture',{timeoutMs:1000})).runId,result.runId);
+    await assert.rejects(startSession(toolkit,'Fixture',{reuse:false,timeoutMs:1000}),error=>error.code==='session_conflict');
     await assert.rejects(startSession(toolkit,'Fixture',{write:true,timeoutMs:1000}),error=>error.code==='session_conflict');
     fs.appendFileSync(toolkit.read('Fixture').nativeBinary,'changed');
     await assert.rejects(querySession(toolkit,'Fixture','functions.list'),error=>error.code==='input_changed');

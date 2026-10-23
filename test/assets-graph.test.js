@@ -40,7 +40,7 @@ test('rejects numeric shorthand fileIDs, unknown tags, metadata aliases, excessi
  const f=await fixture(t);for(const value of ['1e3','1.0','0x10','+1']){await fs.writeFile(f.scenePath,`--- !u!1 &1\nGameObject:\n  bad: {fileID: ${value}}\n`);await assert.rejects(indexUnityProject(f.projectDir),/invalid_file_id/);}
  await fs.writeFile(f.scenePath,'--- !u!1 &1\nGameObject:\n  bad: !Unknown value\n');await assert.rejects(indexUnityProject(f.projectDir),/yaml/);
  await fs.writeFile(f.scenePath,`--- !u!1 &1\nGameObject:\n  bad: ${'['.repeat(105)}0${']'.repeat(105)}\n`);await assert.rejects(indexUnityProject(f.projectDir),/limit/);
- await fs.writeFile(f.scenePath,'x'.repeat(16*1024*1024+1));await assert.rejects(indexUnityProject(f.projectDir),/text_file_limit/);
+ await fs.writeFile(f.scenePath,'--- !u!1 &1\nGameObject: {}\n');await fs.writeFile(f.scriptPath,'x'.repeat(16*1024*1024+1));await assert.rejects(indexUnityProject(f.projectDir),/text_file_limit/);
 });
 test('assembly reference boundaries explicitly block guessed source assembly identity and linked Packages',async t=>{
  const f=await fixture(t);await fs.writeFile(path.join(f.projectDir,'Assets/Runtime.asmref'),JSON.stringify({reference:'GUID:deadbeef'}));let graph=await indexUnityProject(f.projectDir);assert.equal(graph.assets.find(a=>a.guid===f.guids.script).script.supported,false);assert.ok(graph.assets.find(a=>a.guid===f.guids.script).script.limitations.some(l=>l.includes('asmref')));

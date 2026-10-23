@@ -1,0 +1,4 @@
+interface:
+  display_name: "REToolkit Game Reconstruction"
+  short_description: "Rebuild Unity games with scoped evidence and validation."
+  default_prompt: "Use $retoolkit-game-reconstruction to resume this Unity reconstruction, implement the next supported feature slice, and verify its exact output."

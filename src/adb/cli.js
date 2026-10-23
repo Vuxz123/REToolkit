@@ -10,8 +10,10 @@ export async function runAdbCli(argv,defaultRoot){
  if(parsed.command==='pull'&&!parsed.options.skipLaunch&&(parsed.json||!process.stdin.isTTY||!process.stdout.isTTY))throw Object.assign(new Error('Interactive game launch requires a terminal; use --skip-launch for JSON or unattended capture'),{code:'ADB_INTERACTIVE_REQUIRED'});
  const root=path.resolve(parsed.root??defaultRoot),toolkit=createToolkit(root,{log:message=>process.stderr.write(message+'\n')});
  let result;
- if(parsed.command==='devices'){
-  const file=resolveAdbPath(parsed.options.adb);result={kind:'retoolkit-adb-devices',schemaVersion:1,adb:file,devices:await createAdbClient({file,run:toolkit.run,runOptions:{cwd:root}}).devices()};
+ if(['devices','packages'].includes(parsed.command)){
+  const file=resolveAdbPath(parsed.options.adb),client=createAdbClient({file,run:toolkit.run,runOptions:{cwd:root,toolchainRoot:root}});
+  if(parsed.command==='devices')result={kind:'retoolkit-adb-devices',schemaVersion:1,adb:file,devices:await client.devices()};
+  else{const serial=await client.selectDevice(parsed.options.serial);result={kind:'retoolkit-adb-packages',schemaVersion:1,serial,packages:await client.packages(serial)};}
  }else{
   const options={...parsed.options};
   if(!options.skipLaunch)options.confirm=async()=>{

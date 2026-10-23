@@ -1,4 +1,5 @@
 import com.google.gson.*;
+import com.google.gson.stream.JsonWriter;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.symbol.SourceType;
@@ -9,6 +10,9 @@ import java.nio.channels.FileChannel;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.DigestOutputStream;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.util.*;
 
 /** Durable executor. The caller must have ended GhidraScript's outer transaction. */
@@ -33,8 +37,20 @@ public final class RetkMutations {
     static String quote(String value){StringBuilder s=new StringBuilder("\"");for(int i=0;i<value.length();i++){char c=value.charAt(i);switch(c){case '"':s.append("\\\"");break;case '\\':s.append("\\\\");break;case '\b':s.append("\\b");break;case '\f':s.append("\\f");break;case '\n':s.append("\\n");break;case '\r':s.append("\\r");break;case '\t':s.append("\\t");break;default:if(c<32||(Character.isHighSurrogate(c)&&(i+1==value.length()||!Character.isLowSurrogate(value.charAt(i+1))))||(Character.isLowSurrogate(c)&&(i==0||!Character.isHighSurrogate(value.charAt(i-1)))))s.append(String.format("\\u%04x",(int)c));else s.append(c);}}return s.append('"').toString();}
     static String canonicalText(JsonElement value){if(value==null||value.isJsonNull())return "null";if(value.isJsonObject()){List<String> entries=new ArrayList<>();for(String key:new TreeSet<>(value.getAsJsonObject().keySet()))entries.add(quote(key)+":"+canonicalText(value.getAsJsonObject().get(key)));return "{"+String.join(",",entries)+"}";}if(value.isJsonArray()){List<String> entries=new ArrayList<>();for(JsonElement item:value.getAsJsonArray())entries.add(canonicalText(item));return "["+String.join(",",entries)+"]";}JsonPrimitive primitive=value.getAsJsonPrimitive();return primitive.isString()?quote(primitive.getAsString()):primitive.toString();}
     public static String payloadHash(String method,JsonObject params)throws Exception {JsonObject p=params.deepCopy();p.remove("operationId");p.remove("payloadHash");JsonObject payload=new JsonObject();payload.addProperty("method",method);payload.add("params",p);return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonicalText(payload).getBytes(StandardCharsets.UTF_8)));}
-    static String digest(JsonElement value)throws Exception {return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical(value).toString().getBytes(StandardCharsets.UTF_8)));}
-    JsonObject compact(JsonObject descriptor,JsonObject params)throws Exception {JsonObject result=descriptor.deepCopy();result.remove("changes");result.addProperty("before",digest(descriptor.get("before")));result.addProperty("after",digest(descriptor.get("after")));result.add("plan",params.get("plan"));result.addProperty("changeCount",descriptor.getAsJsonArray("changes").size());return result;}
+    // Preserve canonical(value).toString() bytes, including Gson's escaping and
+    // number spelling, without a duplicate tree or whole-array String/byte[].
+    static void writeCanonical(JsonWriter out,JsonElement value)throws Exception {
+        if(value==null||value.isJsonNull()){out.nullValue();return;}
+        if(value.isJsonObject()){out.beginObject();JsonObject object=value.getAsJsonObject();for(String key:new TreeSet<>(object.keySet())){out.name(key);writeCanonical(out,object.get(key));}out.endObject();return;}
+        if(value.isJsonArray()){out.beginArray();for(JsonElement item:value.getAsJsonArray())writeCanonical(out,item);out.endArray();return;}
+        JsonPrimitive primitive=value.getAsJsonPrimitive();if(primitive.isNumber())out.value(primitive.getAsNumber());else if(primitive.isBoolean())out.value(primitive.getAsBoolean());else out.value(primitive.getAsString());
+    }
+    static String digest(JsonElement value)throws Exception {
+        MessageDigest hash=MessageDigest.getInstance("SHA-256");
+        try(JsonWriter out=new JsonWriter(new OutputStreamWriter(new DigestOutputStream(OutputStream.nullOutputStream(),hash),StandardCharsets.UTF_8))){out.setLenient(true);writeCanonical(out,value);}
+        return "sha256:"+HexFormat.of().formatHex(hash.digest());
+    }
+    JsonObject compact(JsonObject descriptor,JsonObject params)throws Exception {JsonObject result=new JsonObject();for(var entry:descriptor.entrySet())if(!Set.of("changes","before","after").contains(entry.getKey()))result.add(entry.getKey(),entry.getValue().deepCopy());result.addProperty("before",digest(descriptor.get("before")));result.addProperty("after",digest(descriptor.get("after")));result.add("plan",params.get("plan"));result.addProperty("changeCount",descriptor.getAsJsonArray("changes").size());return result;}
     public static void atomic(Path path,JsonObject value)throws Exception {Files.createDirectories(path.getParent());Path tmp=path.resolveSibling(path.getFileName()+".tmp-"+UUID.randomUUID());try{try(FileChannel out=FileChannel.open(tmp,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)){ByteBuffer bytes=StandardCharsets.UTF_8.encode(value.toString()+"\n");while(bytes.hasRemaining())out.write(bytes);out.force(true);}Files.move(tmp,path,StandardCopyOption.ATOMIC_MOVE);}finally{Files.deleteIfExists(tmp);}}
     JsonObject prepare(String method,JsonObject p)throws Exception {
         if(method.equals("symbols.apply"))return symbols.validate(p,revision);

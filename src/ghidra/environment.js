@@ -33,7 +33,8 @@ export function engineEnvironment(toolkit,workspace) {
   const local=path.join(workspace,'04_Notes/.engine-runtime/local');
   fs.mkdirSync(appdata,{recursive:true});fs.mkdirSync(local,{recursive:true});
   return {JAVA_HOME:toolkit.tools.jdk,JAVA_HOME_OVERRIDE:toolkit.tools.jdk,GHIDRA_INSTALL_DIR:toolkit.tools.ghidra,
-    PATH:toolkit.env.PATH,APPDATA:appdata,LOCALAPPDATA:local};
+    PATH:toolkit.env.PATH,APPDATA:appdata,LOCALAPPDATA:local,
+    ...(toolkit.env.GHIDRA_HEADLESS_MAXMEM?{GHIDRA_HEADLESS_MAXMEM:toolkit.env.GHIDRA_HEADLESS_MAXMEM}:{})};
 }
 export function verifyBinding(config,toolkit,name) {
   const current=validateProject(toolkit,name);

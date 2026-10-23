@@ -1,9 +1,11 @@
 # REToolkit Setup And MCP Handoff
 
 Use the current repo-local instructions in `skills/retoolkit-install`,
-`skills/retoolkit-flow` and `skills/retoolkit-mcp-analysis`. The recommended
-CLI is `node re.js <command>` on Node.js 24+. The existing PowerShell GUI is
-retained for later migration and still uses the legacy pipeline.
+`skills/retoolkit-flow`, `skills/retoolkit-mcp-analysis` and
+`skills/retoolkit-game-reconstruction`. The recommended
+CLI is `retk <command>` on Node.js 24+. `retk gui` opens the Electron desktop.
+The old PowerShell UI is retained for compatibility; use the current desktop
+and [runtime guide](../docs/desktop.md).
 
 ## Install And Prepare
 
@@ -11,7 +13,10 @@ From the repository root:
 
 ```powershell
 npm ci
-.\install-re-toolkit.ps1 -All
+npm run cli:install
+retk setup install --lock config/native-windows-x64.lock.json
+retk desktop-runtime install --lock config/desktop-windows-x64.lock.json
+npm run gui:install
 node .\re.js doctor
 node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --dry-run
 node .\re.js flow FoodHunt "D:\Builds\FoodHunt.apk" --no-open
@@ -19,9 +24,9 @@ node .\re.js status FoodHunt
 node .\re.js open FoodHunt
 ```
 
-The installer stays PowerShell. Core preparation/state/archive/resume commands
-are native JavaScript; do not route them through `re.ps1`. Selected Ghidra/tool,
-LDPlayer and AssetRipper compatibility wrappers still use PowerShell adapters.
+Installation, desktop, Ghidra/PyGhidra launch and the core pipeline run through
+Node.js. The PowerShell installer is an adapter; do not route the current Node
+pipeline through the legacy PowerShell implementation.
 
 Resume is the default. Use explicit `--binary` and `--metadata` paths when
 candidate discovery is ambiguous. Existing Ghidra programs must never be
@@ -97,14 +102,26 @@ When the user explicitly requests installation/update:
    while updating CLI/MCP instructions. Do not rename an MCP skill to the old
    CLI skill name.
 4. Archive conflicting installed folders outside active skill roots. Install
-   the three current repo folders into the agent's configured skill directory
+   the four current repo folders into the agent's configured skill directory
    only after checking the exact destinations; avoid merging into or silently
    overwriting existing customized folders.
 5. Restart the agent, verify the loaded skill paths, and retain the backup for
    rollback. Other agents can read the same repo folders using their own skill
    mechanism; do not assume Codex paths apply to every agent.
 
-No toolkit command performs this global migration automatically.
+The explicit cleanup command automates the known legacy integrations:
+
+```cmd
+node scripts/clean-agent-integrations.mjs
+node scripts/clean-agent-integrations.mjs --apply
+```
+
+The first command is read-only. Apply backs up originals under
+`.cache/agent-cleanup/<UUID>/`, verifies hashes, updates existing Ghidra entries
+in Codex/OpenCode, refreshes installed REToolkit skill files and retires the old
+Codex CLI skill. Other MCP servers and settings stay unchanged. Backups may
+contain private configuration; keep them out of Git. Restart the affected agent
+after applying. AssetRipper MCP still requires an explicitly selected workspace.
 
 ## Verification
 

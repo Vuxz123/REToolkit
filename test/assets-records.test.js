@@ -17,7 +17,7 @@ test('streamed shared records reproduce legacy node and reference identities exa
  const legacy=await graphApi.indexUnityProject(root),inventory=await graphApi.inventoryUnityProject(root),metadata=await graphApi.readUnitySourceMetadata(root,inventory.files),source=inventory.files.find(f=>f.path==='Assets/Example.prefab');
  const asset=graphApi.makeUnityAsset(source,metadata),records=await graphApi.readUnitySerializedRecords(root,source);
  assert.equal(Array.isArray(records),false,'records must be consumed incrementally');
- const nodes=[...records].map(record=>graphApi.makeUnityGraphNode(source,asset,record));
+ const nodes=[];for await(const record of records)nodes.push(graphApi.makeUnityGraphNode(source,asset,record));
  assert.deepEqual(nodes,legacy.nodes);assert.deepEqual(asset,legacy.assets.find(a=>a.id===asset.id));
  const edges=nodes.flatMap(node=>[...graphApi.unityReferenceEdges(node,{findAssetGuid:guid=>legacy.assets.find(a=>a.guid===guid),findAssetId:id=>legacy.assets.find(a=>a.id===id),hasNode:id=>nodes.some(n=>n.id===id)})]);
  assert.deepEqual(edges,legacy.edges);assert.equal(nodes[0].fileID,'9007199254740993');

@@ -2,7 +2,8 @@
 // A custom record may add pins: [{archiveSha256, root, version, packageId?}].
 // Only an exact hash/root pin may provide a missing release version.
 export const libraryDescriptors = Object.freeze([
-  {id:'dotween',aliases:['DOTween'],namespaces:['DG.Tweening'],assemblies:['DOTween']},
+  // Local Yarn Fever!/threadscrew core snapshot; see libraries/dotween/README.md.
+  {id:'dotween',aliases:['DOTween'],namespaces:['DG.Tweening'],assemblies:['DOTween'],pins:[{archiveSha256:'e50be4124b46cfcbceb300c8cc6b6cdaad8ca7f7a9365179979190cd4d2f26e0',root:'Assets',version:'1.2.335'}]},
   {id:'unitask',aliases:['UniTask'],namespaces:['Cysharp.Threading.Tasks'],assemblies:['UniTask']},
   {id:'newtonsoft-json',aliases:['Newtonsoft.Json','JSON.NET'],namespaces:['Newtonsoft.Json'],assemblies:['Newtonsoft.Json'],packageIds:['com.unity.nuget.newtonsoft-json']},
   {id:'textmeshpro',aliases:['TextMesh Pro','TMP'],namespaces:['TMPro'],assemblies:['Unity.TextMeshPro'],packageIds:['com.unity.textmeshpro']},
@@ -12,7 +13,7 @@ export const libraryDescriptors = Object.freeze([
   {id:'spine',aliases:['Spine'],namespaces:['Spine','Spine.Unity']},
   {id:'odin',aliases:['Odin Inspector'],namespaces:['Sirenix.OdinInspector','Sirenix.Serialization']},
   {id:'fairygui',aliases:['FairyGUI'],namespaces:['FairyGUI']}
-].map(record=>Object.freeze(Object.fromEntries(Object.entries({...record,pins:[]}).map(([key,value])=>[key,Array.isArray(value)?Object.freeze(value):value])))));
+].map(record=>Object.freeze(Object.fromEntries(Object.entries({pins:[],...record}).map(([key,value])=>[key,Array.isArray(value)?Object.freeze(value):value])))));
 
 export function exactLibraryVersion(value){
   if(typeof value!=='string'||value.length>128)return false;

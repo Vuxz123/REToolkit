@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Diagnostics;
+using System.Security.Cryptography;
 public static class OwnedAdbFixture {
  public static int Main(string[] args) {
   try {
@@ -20,6 +21,25 @@ public static class OwnedAdbFixture {
    }
    if(args.Length<3 || args[0]!="-s" || args[1]!="emulator-5554")throw new Exception("Unexpected selected fixture device");
    if(args[2]=="shell") {
+    if(args.Length==4) {
+     string command=args[3],pkg="com.example.fixture";
+     if(command.Contains("RETK_TIMEOUT")){Console.WriteLine("RETK_SU_MISSING");return 0;}
+     string selected=command.Contains("/sdcard/Android/data/")?"/sdcard/Android/data/"+pkg:"/data/user/0/"+pkg;
+     bool external=selected.StartsWith("/sdcard");
+     if(!external && mode=="private-denied"){
+      if(command.StartsWith("run-as "))Console.Error.WriteLine("run-as: package not debuggable: "+pkg);
+      else Console.Error.WriteLine("stat: '"+selected+"': Permission denied");return 1;
+     }
+     string canonical=external?"/storage/emulated/0/Android/data/"+pkg:selected;
+     string name=external?"external.bin":"private.bin",source=Path.Combine(root,name);
+     if(command.Contains("RETK_DATA_V1")) {
+      Console.WriteLine("RETK_DATA_V1\nROOT|"+canonical+"\nR|41ed|4096|1|2|3\nE|81a4|"+new FileInfo(source).Length+"|1|2|3|"+canonical+"/"+name+"|"+canonical+"/"+name+"\nEND");return 0;
+     }
+     if(command.Contains("RETK_FILE_V1")) {
+      byte[] bytes=File.ReadAllBytes(source);string sha;using(var algorithm=SHA256.Create())sha=BitConverter.ToString(algorithm.ComputeHash(bytes)).Replace("-","").ToLowerInvariant();
+      Console.WriteLine("RETK_FILE_V1\nROOT|"+canonical+"\nS|81a4|"+bytes.Length+"|1|2|3\nH|"+sha+"\nEND");return 0;
+     }
+    }
     if(args.Length==7 && args[3]=="pm" && args[4]=="list" && args[5]=="packages") {Console.WriteLine("package:com.example.fixture");return 0;}
     if(args.Length==6 && args[3]=="pm" && args[4]=="path") {Console.WriteLine("package:/data/app/~~owned==/com.example.fixture==/base.apk");Console.WriteLine("package:/data/app/~~owned==/com.example.fixture==/split_config.arm64.apk");return 0;}
     if(args.Length==6 && args[3]=="ls" && args[4]=="-1") {
@@ -39,7 +59,7 @@ public static class OwnedAdbFixture {
  }
  private static string Source(string root,string remote) {
   string name=remote.Substring(remote.LastIndexOf('/')+1);
-  if(name!="base.apk" && name!="split_config.arm64.apk" && name!="main.1.com.example.fixture.obb")throw new Exception("Unexpected fixture source");
+  if(name!="base.apk" && name!="split_config.arm64.apk" && name!="main.1.com.example.fixture.obb" && name!="external.bin" && name!="private.bin")throw new Exception("Unexpected fixture source");
   return Path.Combine(root,name);
  }
 }

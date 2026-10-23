@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {randomUUID,createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {createToolkit} from '../src/toolkit.js';
+import {desktopLaunchSpec,electronExecutable} from '../src/desktop/cli.js';
+const repo=path.resolve(import.meta.dirname,'..'),directory=path.join(repo,'.cache/desktop-flow-acceptance',randomUUID()),root=path.join(directory,'toolkit');fs.mkdirSync(root,{recursive:true});
+fs.mkdirSync(path.join(root,'config'),{recursive:true});for(const file of ['package.json','package-lock.json','config/native-windows-x64.lock.json','config/desktop-windows-x64.lock.json'])fs.copyFileSync(path.join(repo,file),path.join(root,file));
+const toolkit=createToolkit(root,{log:()=>{},run:()=>{throw Error('No engine execution');}});await toolkit.init('FlowA');await toolkit.init('FlowB');
+const now=new Date().toISOString(),jobId='11111111-1111-4111-8111-111111111111',workspace=toolkit.workspace('FlowA'),base=path.join(workspace,'04_Notes/jobs',jobId);fs.mkdirSync(base,{recursive:true});
+fs.writeFileSync(path.join(base,'record.json'),JSON.stringify({kind:'retoolkit-job',schemaVersion:1,jobId,workspace,operation:'reconstruct.validate',operationId:jobId,state:'running',stage:'unity.serialized-properties',pid:process.pid,createdAt:now,updatedAt:now,validationProgress:{operationId:jobId,requestedAssets:50,completedAssets:17,pendingAssets:33,currentAsset:'Assets/Fixture.prefab'}}));
+const session=path.join(workspace,'04_Notes/agent-sessions','22222222-2222-4222-8222-222222222222');fs.mkdirSync(session,{recursive:true});fs.writeFileSync(path.join(session,'launch.json'),JSON.stringify({harness:'claude',env:{SECRET:'do-not-forward'},args:['do-not-forward']}));fs.writeFileSync(path.join(session,'launch-status.json'),JSON.stringify({state:'terminal-opened',createdAt:now}));fs.writeFileSync(path.join(session,'terminal-status.json'),JSON.stringify({state:'failed',exitCode:1,message:'Fixture launch failed',at:now}));
+const spec=desktopLaunchSpec(root,process.execPath,electronExecutable());const result=spawnSync(spec.file,['--disable-gpu',...spec.args],{cwd:repo,windowsHide:true,encoding:'utf8',timeout:60000,env:{...spec.env,RETK_DESKTOP_FLOW_SMOKE:directory,RETK_DESKTOP_SMOKE:undefined,RETK_DESKTOP_RESULT_SMOKE:undefined,RETK_DESKTOP_PREPARATION_SMOKE:undefined,RETK_DESKTOP_VISIBLE_SMOKE:undefined}});assert.equal(result.status,0,result.stderr||result.error?.message);
+const report=JSON.parse(fs.readFileSync(path.join(directory,'observation.json'),'utf8'));assert.equal(report.projectIsolation,true);assert.equal(report.durableJob,true);assert.equal(report.typedScope,true);assert.equal(report.intake,true);assert.equal(report.fixtureOnly,true);console.log(JSON.stringify({...report,directory}));

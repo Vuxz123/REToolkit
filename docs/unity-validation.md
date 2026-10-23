@@ -1,74 +1,78 @@
-# Verify reconstructed exports in Unity
+# Unity validation and resume
 
-`reconstruct validate` imports a fresh source-only staging copy using the exact
-Unity Editor version recorded in `ProjectSettings/ProjectVersion.txt`. It reports
-compilation, observed MonoScript identities and missing component/reference counts.
-It does not publish the staging project over the original export.
+Validation stages the complete selected export and runs the exact matching Unity
+Editor. Compilation, binding coverage and gameplay are separate observations.
+The source export, older requests and receipts remain unchanged.
 
-```powershell
-node re.js assets index MyGame
-node re.js assets session stop MyGame
-node re.js reconstruct validate MyGame --timeout-seconds 600 --json
-node re.js reconstruct validation MyGame --operation <UUID> --json
-node re.js reconstruct validation MyGame --operation <UUID> --section scripts --limit 100
-node re.js reconstruct validation MyGame --operation <UUID> --section assets --limit 100
-node re.js reconstruct validation MyGame --operation <UUID> --section diagnostics --limit 20
+Validation accepts scenes (`.unity`), prefabs (`.prefab`) and serialized data
+assets (`.asset`), including ScriptableObject tables. Exact scoped IDs may mix
+these types. A saved policy containing table assets does not need its scope
+reduced to scenes/prefabs. Source-only snapshots retain `.asset` selectors even
+when static YAML indexing cannot parse their contents; `coverage.dataAssets`
+counts those selectors, without claiming serialized-reference verification.
+
+For a `.asset` file the helper uses Unity's
+[LoadAllAssetsAtPath](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/AssetDatabase.LoadAllAssetsAtPath.html)
+to include the main object and hidden subassets, then reads their serialized
+properties. Their budgets are shared per file. Empty/null/error loads remain
+incomplete. Missing script pointers and unresolved object references block
+binding success; ordinary optional null references remain allowed. The helper
+does not follow references into other asset files, save assets or enter Play mode.
+Data assets require explicit `reference-scan-v2` traversal observations; a legacy
+loaded-only report cannot certify their coverage.
+
+```cmd
+retk reconstruct validate Game --json
+retk reconstruct validation Game --operation <UUID> --section assets --limit 20 --json
+retk reconstruct validate Game --resume-operation <UUID> --json
 ```
 
-Use returned cursors with the same operation and section. The shared MCP server
-exposes `reconstruct_validate` and `reconstruct_validation`; it accepts no arbitrary
-Editor flags, helper methods, output paths or eval text. Stop AssetRipper first:
-Editor validation takes the same workspace lease.
+`compilation.state` reports verified compiler success/failure independently of
+serialized traversal. `compileReady` follows verified compilation. A successful
+compile may accompany `state: partial` and `bindingsVerified: false`.
+`coverage.requestedAssets`, `completedAssets`, and `pendingAssets` describe the
+requested asset coverage; an asset loaded but interrupted is still pending.
+Zero missing-reference counters on an incomplete row do not establish success.
 
-The default Windows installation path is
-`<ProgramFiles>/Unity/Hub/Editor/<exact-version>/Editor/Unity.exe`. A custom
-`unityEditorPath` in `project.re.json` may name another installed `Unity.exe`.
-The executable's embedded ProductVersion must match before launch; the helper's
-actual `Application.unityVersion` must match afterward. A missing Editor reports
-`blocked / unity_editor_missing`. REToolkit does not install an Editor or silently
-upgrade the project.
+The helper visits reference-bearing fields, keeps arrays/structs that may contain
+references, skips proven reference-free payload children, and guards managed
+reference cycles within each serialized object. Budgets reset for each asset.
+The current caps are 200000 objects and 2000000 visited properties per asset,
+with a 240-second helper observation budget per invocation. The Editor process
+also has its separate caller timeout. Hitting a cap leaves explicit pending work.
+Limit/load failures record per-asset completion, counters and the last object,
+component and property path, then allow subsequent assets to be checked. Partial
+reports are checkpointed during work. `jobs_get.validationProgress` and desktop
+results show observed asset progress; no guessed percentage is used.
 
-Each run is retained under `04_Notes/assets/unity-validation/<UUID>`:
+Resume creates a fresh operation. It reuses only completed extended-helper rows
+whose source/build, Editor, helper and scope still match. Previous artifacts and
+their hashes are verified before reuse; legacy incomplete reports cannot supply
+completed checkpoints. Source/helper/Editor changes require a fresh validation.
+After this helper update, start a fresh validation rather than resuming a receipt
+created by the earlier helper. New partial operations can then be resumed.
+Keep the same authorized asset IDs, including table IDs. Older project-wide
+receipts that omitted `.asset` files cannot certify the expanded project scope
+even when their inventory revision still matches; reading those as current
+validation returns `unity_validation_scope_changed`. Their files stay intact.
+Interrupted or uncertain engine ownership must be inspected before any retry.
+A repeated unchanged resource limit needs investigation, not an automatic loop.
 
-- `project/`: copied Assets, ProjectSettings and Packages plus the fixed helper;
-- `request.json`: selected build, graph revision and requested script/asset IDs;
-- `observation.json`: bounded actual Editor observations, if the helper ran;
-- `receipt.json`: process/result provenance, hashes, readiness and coverage;
-- `editor-output.txt`: bounded local output for compiler/infrastructure diagnosis.
+For a feature such as item-slot, use exact IDs returned by the current asset index:
 
-Generated Library/Temp caches are excluded from the original copy. Copied source
-hashes must match the graph, and original sources are rechecked before and after
-execution. Symlinks/junctions, reserved helper paths and local/Git/unresolved package
-dependencies are refused in this version; make dependencies portable first.
-Staging isolates project writes but is not an OS sandbox: Unity import hooks and
-Editor code belonging to that project can execute during import.
+```cmd
+retk reconstruct validate Game --asset-ids "[\"asset:<guid>\"]" --json
+```
 
-`compileReady:true` requires a closed successful process and a complete validated
-report from the exact Editor. `bindingsVerified:true` additionally requires all
-requested scripts to resolve to expected full type/assembly/GUID identities and
-every requested scene/prefab to load without observed missing components or object
-references. Binary scenes/prefabs are included even when the offline graph marked
-them opaque. These flags apply to that exact source snapshot. Any later source,
-metadata or build change makes the receipt stale. `behavior` remains `unverified`.
+MCP `reconstruct_validate` or `jobs_start` with operation `reconstruct.validate`
+accepts optional `assetIds` (a unique array of 1..1000 IDs), `resumeOperationId`
+and `timeoutSeconds`. The desktop operation has the same optional scope and
+resume fields. Omit scope when resuming to retain the prior scope; conflicting
+explicit scope is rejected.
 
-A compiler error can prevent the helper from running. A missing report, timeout,
-nonzero exit, wrong run/version/GUID or incomplete observations cannot establish
-readiness. Killing a process is a request; the supervisor waits for the actual close
-event. Uncertain closure retains workspace/toolchain ownership and reports
-`unity_recovery_required`; inspect retained markers rather than deleting them.
-
-This completes the Editor verification portion of reconstruction slice3. DLL
-conversion, explicit script rebinding, serialized-field migrations and gameplay
-validation remain separate work. Existing source-apply receipts retain
-`compileReady:false`; the independent Editor receipt supplies compilation evidence.
-
-Run the source-owned real Editor acceptance fixture with
-`npm run test:unity-validation -- 2022.3.62f2`. It exercises valid compilation and
-binding, a missing script, and a deliberate compile error, preserving original
-inventory after each staging run. Unit/fixture process tests do not prove real
-Editor acceptance or real game compatibility.
-
-The fixed helper uses Unity's public
-[GUID/local fileID API](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/AssetDatabase.TryGetGUIDAndLocalFileIdentifier.html),
-[MonoScript.GetClass](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/MonoScript.GetClass.html)
-and [missing-script count API](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/GameObjectUtility.GetMonoBehavioursWithMissingScriptCount.html).
+Scoped success is exposed as `scopeBindingsVerified`; it does not set the
+project-wide `bindingsVerified` flag. All source files still participate in the
+staged project and compilation. Script observations distinguish attachable types,
+reflection-confirmed non-attachable types, compiler-confirmed source membership
+and unresolved identities. Compiler membership alone does not establish a
+component's binding identity. Gameplay and visual fidelity remain unverified.

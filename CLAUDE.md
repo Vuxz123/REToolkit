@@ -90,11 +90,18 @@ steps stay awaiting user action/unknown until separately verified.
 
 ## Skills And Documentation
 
+For full reconstruction tasks use `skills/retoolkit-game-reconstruction/SKILL.md`
+and its conditional references. It defines the feature/evidence ledger and resume
+rules. Library/migration stages require their own verifiers; do not attribute an
+export's validation to a different output or assume stage promotion is supported.
+
 Use the current repo-local `skills/retoolkit-*` instructions. Search installed
 skill roots for stale `ghidra-reverse-engineering-cli` guidance before following
 it. README and `prompts/install-ghidra-skill.md` document detection and manual
 backup/update. Global installed skills are outside this migration: do not change
-them automatically or overwrite local customizations.
+them automatically or overwrite local customizations. For an explicit user
+cleanup request, `scripts/clean-agent-integrations.mjs` plans or applies the
+known launcher/skill migration with full backups and hash guards.
 
 README is the current JavaScript CLI guide; Tutorial.md is the older PowerShell
 workflow. Keep `config/` MCP examples on `node <absolute-re.js> mcp`. Retired
@@ -137,7 +144,8 @@ Python, GhidraMCP GUI extensions and global .NET requirements before networking 
 writes. `-InstallRuntime` also requires GUI Python; use `-InstallGhidra` or
 `--components jdk,ghidra` for native JDK/Ghidra. Preserve exact `-LockedManifest`
 and `-PythonManifest` delegation and reject mixed installation/version flags.
-The PythonManifest route covers MCP CLI only; GUI/.NET setup has not been ported.
+The PythonManifest route covers MCP CLI only. GUI Python, GhidraMCP extension
+and toolkit-local .NET use the separate Node `desktop-runtime` profile.
 Do not replace existing real engines for setup fixtures. The optional
 `test:setup-download` downloads the four shipped locked archives into a new
 `.cache/setup-vendor-acceptance/<id>` root, verifies inventories and checks
