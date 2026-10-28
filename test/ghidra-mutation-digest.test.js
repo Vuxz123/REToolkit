@@ -18,7 +18,7 @@ test('Java mutation digests preserve legacy bytes and compact large descriptors 
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'retk-mutation-digest-'));
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const classpath=(await jars(path.join(engines,'tools/ghidra/Ghidra'))).join(path.delimiter);
-  const sources=['RetkMutations.java','RetkQueries.java','RetkSymbols.java','RetkProgramIdentity.java'].map(name=>path.join(root,'scripts/ghidra',name));
+  const sources=['RetkMutations.java','RetkAnalysis.java','RetkQueries.java','RetkSymbols.java','RetkProgramIdentity.java'].map(name=>path.join(root,'scripts/ghidra',name));
   run(javac,['-cp',classpath,'-d',directory,...sources,path.join(root,'test/fixtures/RetkMutationDigestFixture.java')]);
   const args=['-Xmx96m','-cp',directory+path.delimiter+classpath,'RetkMutationDigestFixture'];
   assert.match(run(java,[...args,'compatible',directory]),/compatible=/);

@@ -38,3 +38,13 @@ test('v2 completion is explicit for every asset even when global report is incom
  pair.report.complete=true;assert.equal(validateUnityObservation(pair.report,pair.request),pair.report);
  pair.report.assets[0].loaded=false;assert.throws(()=>validateUnityObservation(pair.report,pair.request),{code:'unity_report_invalid'});
 });
+
+test('optional reflected non-attachable type inventory is bounded and tied to resolved classification',()=>{
+ const pair=fixture(),row=pair.report.scripts[0];row.classification='non-attachable';row.nonAttachableTypes=['Example.Test','Example.Test+Helper'];
+ assert.equal(validateUnityObservation(pair.report,pair.request),pair.report);
+ for(const value of [null,{},[''],['Bad\nType'],['x'.repeat(2049)],['Example.Test','Example.Test'],Array.from({length:1025},(_,i)=>'Type'+i),['Other']]){
+  const changed=structuredClone(pair);changed.report.scripts[0].nonAttachableTypes=value;assert.throws(()=>validateUnityObservation(changed.report,changed.request),{code:'unity_report_invalid'});
+ }
+ for(const mutation of [r=>Object.assign(r,{classification:'compiled-source',resolved:false,fullName:null}),r=>r.classification='attachable']){const changed=structuredClone(pair);mutation(changed.report.scripts[0]);assert.throws(()=>validateUnityObservation(changed.report,changed.request),{code:'unity_report_invalid'});}
+ row.classification='attachable';row.nonAttachableTypes=['Example.Test+Helper'];assert.equal(validateUnityObservation(pair.report,pair.request),pair.report);
+});

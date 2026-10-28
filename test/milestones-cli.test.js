@@ -8,6 +8,9 @@ import {fileURLToPath} from 'node:url';
 import {parseMilestoneArgs} from '../src/milestones-cli.js';
 const entry=fileURLToPath(new URL('../re.js',import.meta.url));
 test('milestone parser validates scoped flags and explicit Jev send command',()=>{
+ assert.equal(parseMilestoneArgs(['evidence','capture','Game','--kind','instructions','--selector','0x1000','--end-address','0x1007']).options.endAddress,'0x1007');
+ assert.throws(()=>parseMilestoneArgs(['evidence','capture','Game','--kind','instructions','--selector','0x1000']));
+ assert.throws(()=>parseMilestoneArgs(['evidence','capture','Game','--kind','decompile','--selector','0x1000','--end-address','0x1007']));
  assert.equal(parseMilestoneArgs(['--root','C:/tools','doctor','Game','--task','headless','--probe']).options.probe,true);
  assert.deepEqual(parseMilestoneArgs(['jev','request','bundle','--questions','q.json','--out','r.json','--file','notes/a.md','--file','notes/b.md']).options.files,['notes/a.md','notes/b.md']);
  assert.throws(()=>parseMilestoneArgs(['doctor','--probe','--timeout','31']));

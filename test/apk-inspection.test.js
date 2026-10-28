@@ -33,6 +33,13 @@ test('APK inspection hashes actual bytes and never trusts a certificate ZIP entr
   assert.equal(result.packageName, 'com.example.game'); assert.equal(result.versionCode, '7'); assert.equal(result.signing.state, 'unverified'); assert.deepEqual(result.signing.certificateSha256, []);
   assert.match(result.sha256, /^[a-f0-9]{64}$/); assert.deepEqual(result.delivery.nativeAbis, ['arm64-v8a']); assert.equal(result.delivery.coverage, 'unverified');
 });
+test('read-only APK inspection preserves case-distinct Android resource members',async t=>{
+ const root=await fixture(t),apk=await writeApk(path.join(root,'case-resources.apk'),{},[['res/-N.png','upper image'],['res/-n.png','lower image'],['res/0N.xml','upper xml'],['res/0n.xml','lower xml'],['lib/arm64-v8a/libil2cpp.so','native']]);
+ const original=await fs.readFile(apk),result=await inspectApkSet([apk],unsigned);
+ assert.equal(result.state,'unverified');assert.equal(result.packageName,'com.example.game');assert.deepEqual(result.missingSplits,[]);assert.equal(result.apks.length,1);assert.equal(result.delivery.hasIl2cpp,true);assert.deepEqual(await fs.readFile(apk),original);
+ const duplicate=await writeApk(path.join(root,'duplicate-resource.apk'),{},[['res/item.png','one'],['res/item.png','two']]);
+ await assert.rejects(inspectApk(duplicate,unsigned),/duplicate/i);
+});
 
 test('declared dependencies and global split types reveal omissions without demanding every device configuration', async t => {
   const root = await fixture(t); const base = await writeApk(path.join(root, 'base.apk'), { requiredSplitTypes: 'config.abi', usesSplits: ['feature'] });

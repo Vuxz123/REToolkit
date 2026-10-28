@@ -1,6 +1,6 @@
 import {fingerprint} from './state.js';
 
-const methods={'functions.decompile':'pseudocode','references.list':'references','functions.list':'observations'};
+const methods={'functions.decompile':'pseudocode','references.list':'references','functions.list':'observations','instructions.list':'observations'};
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const integer=(value,min=0,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(value)&&value>=min&&value<=max;
 const text=value=>typeof value==='string';
@@ -19,6 +19,10 @@ function query(value) {
   if(value.method==='functions.decompile') {
     object(params,['selector','limit','cursor','timeoutSeconds'],['selector','limit']);check(nonempty(params.selector));
     if(Object.hasOwn(params,'timeoutSeconds'))check(integer(params.timeoutSeconds,1,300));
+  } else if(value.method==='instructions.list') {
+    object(params,['address','endAddress','limit','cursor'],['address','endAddress','limit']);check(address(params.address)&&address(params.endAddress));
+    const parse=v=>{const p=v.split(':');return {space:p.length===2?p[0]:'ram',value:BigInt(p.at(-1))};};
+    const a=parse(params.address),b=parse(params.endAddress);check(a.space===b.space&&b.value>=a.value&&b.value-a.value<65536n,'Invalid bounded instruction range');
   } else if(value.method==='references.list') {
     object(params,['address','direction','limit','cursor'],['address','direction','limit']);check(address(params.address)&&['to','from'].includes(params.direction));
   } else {object(params,['query','limit','cursor'],['limit']);if(Object.hasOwn(params,'query'))check(text(params.query));}
@@ -45,6 +49,12 @@ function result(value,evidence) {
   for(const [index,row] of value.items.entries()) {
     if(method==='functions.decompile') {
       object(row,['line','text']);check(integer(row.line,1,2147483647)&&row.line===offset+index+1&&text(row.text));
+    } else if(method==='instructions.list') {
+      object(row,['address','text','length']);check(address(row.address)&&nonempty(row.text)&&integer(row.length,1,32));
+      const parse=v=>{const p=v.split(':');return [p.length===2?p[0]:'ram',BigInt(p.at(-1))];};
+      const [space,a]=parse(row.address),[startSpace,start]=parse(evidence.query.params.address),[,end]=parse(evidence.query.params.endAddress);
+      check(space===startSpace&&a>=start&&a+BigInt(row.length)-1n<=end,'Instruction lies outside evidence range');
+      if(index){const [,prior]=parse(value.items[index-1].address);check(a>=prior+BigInt(value.items[index-1].length),'Instructions overlap or are unordered');}
     } else if(method==='references.list') {
       object(row,['from','to','type']);check(address(row.from)&&address(row.to)&&nonempty(row.type));
     } else {

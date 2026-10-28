@@ -24,7 +24,7 @@ namespace REToolkit
         [Serializable] public sealed class Request
         {
             public string kind; public int schemaVersion; public string runId; public string graphRevision;
-            public string inventorySha256; public string unityVersion; public Entry[] scripts; public Entry[] assets; public Selector[] components;
+            public string inventorySha256; public string unityVersion; public Entry[] scripts; public Entry[] assets; public Selector[] components; public bool componentMode;
         }
         [Serializable] public sealed class Field { public string name; public string type; public string propertyType; public string valueJson; }
         [Serializable] public sealed class Identity { public string assembly; public string fullName; public string guid; public string fileID; }
@@ -32,7 +32,7 @@ namespace REToolkit
         {
             public string path; public string assembly; public string fullName; public string guid; public string fileID; public List<Field> fields = new List<Field>();
         }
-        [Serializable] public sealed class ComponentRow { public string componentId; public Identity script; public List<Field> fields = new List<Field>(); }
+        [Serializable] public sealed class ComponentRow { public string componentId; public Identity script; public bool native; public string fullName; public string assembly; public List<Field> fields = new List<Field>(); }
         [Serializable] public sealed class Compilation { public string state = "failed"; }
         [Serializable] public sealed class Report
         {
@@ -43,6 +43,7 @@ namespace REToolkit
         }
         static int fieldCount, objectCount;
         static Report report;
+        static bool componentMode;
         static string Number(long n) { return n.ToString(CultureInfo.InvariantCulture); }
         static string Quote(string s)
         {
@@ -87,9 +88,23 @@ namespace REToolkit
         {
             foreach (var script in AssetDatabase.LoadAllAssetsAtPath(entry.path).OfType<MonoScript>())
             {
+                var type = script.GetClass();
+                if (componentMode && (type == null || !typeof(Component).IsAssignableFrom(type) || type.IsAbstract || type.ContainsGenericParameters)) continue;
                 if (report.scripts.Count >= MaxEntries) throw new InvalidOperationException("MonoScript limit exceeded.");
                 var identity = ScriptIdentity(script);
                 report.scripts.Add(new Script { path = entry.path, guid = identity.guid, fileID = identity.fileID, assembly = identity.assembly, fullName = identity.fullName, fields = Fields(script.GetClass()) });
+            }
+        }
+        static void ObservePackageRegistry()
+        {
+            foreach (var script in MonoImporter.GetAllRuntimeMonoScripts())
+            {
+                var path = AssetDatabase.GetAssetPath(script); var type = script.GetClass();
+                if (!path.StartsWith("Packages/", StringComparison.Ordinal) || type == null || !typeof(Component).IsAssignableFrom(type) || type.IsAbstract || type.ContainsGenericParameters) continue;
+                SafeAsset(path); var identity = ScriptIdentity(script);
+                if (report.scripts.Any(s => s.path == path && s.guid == identity.guid && s.fileID == identity.fileID)) continue;
+                if (report.scripts.Count >= MaxEntries) throw new InvalidOperationException("Package MonoScript limit exceeded.");
+                report.scripts.Add(new Script { path = path, guid = identity.guid, fileID = identity.fileID, assembly = identity.assembly, fullName = identity.fullName, fields = Fields(type) });
             }
         }
         static string Value(SerializedProperty p, string localGuid)
@@ -119,7 +134,7 @@ namespace REToolkit
         static void ObserveObject(UnityEngine.Object target, string assetGuid, Dictionary<string, Selector> selectors, HashSet<string> found)
         {
             if (++objectCount > MaxEntries) throw new InvalidOperationException("Object traversal limit exceeded.");
-            if (!(target is MonoBehaviour) && !(target is ScriptableObject)) return;
+            if (!(target is MonoBehaviour) && !(target is ScriptableObject) && !(componentMode && target is Component)) return;
             string g; long n;
             if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(target, out g, out n) || String.IsNullOrEmpty(g) || n == 0)
             {
@@ -132,6 +147,10 @@ namespace REToolkit
             var selectorKey = assetGuid + ":" + Number(n); Selector selector;
             if (!selectors.TryGetValue(selectorKey, out selector)) return;
             if (!found.Add(selector.componentId)) throw new InvalidOperationException("Ambiguous observed component identity.");
+            if (componentMode && !(target is MonoBehaviour) && target is Component)
+            {
+                report.components.Add(new ComponentRow { componentId = selector.componentId, native = true, fullName = target.GetType().FullName, assembly = target.GetType().Assembly.GetName().Name }); return;
+            }
             MonoScript script = target is MonoBehaviour ? MonoScript.FromMonoBehaviour((MonoBehaviour)target) : MonoScript.FromScriptableObject((ScriptableObject)target);
             var row = new ComponentRow { componentId = selector.componentId, script = ScriptIdentity(script) };
             using (var serialized = new SerializedObject(target))
@@ -204,12 +223,14 @@ namespace REToolkit
                 if (String.Equals(input, output, StringComparison.OrdinalIgnoreCase) || new FileInfo(input).Length > MaxBytes) throw new InvalidOperationException("Invalid request file.");
                 var request = JsonUtility.FromJson<Request>(File.ReadAllText(input, Encoding.UTF8));
                 if (request == null || request.kind != "retoolkit-migration-observation-request" || request.schemaVersion != 1 || request.scripts == null || request.assets == null || request.components == null || request.scripts.Length > 10000 || request.assets.Length > 10000 || request.components.Length > MaxEntries) throw new InvalidOperationException("Invalid request.");
+                componentMode = request.componentMode;
                 report.runId = request.runId; report.graphRevision = request.graphRevision; report.inventorySha256 = request.inventorySha256; report.unityVersion = Application.unityVersion;
                 if (request.unityVersion != Application.unityVersion || EditorUtility.scriptCompilationFailed || EditorApplication.isCompiling || EditorApplication.isPlayingOrWillChangePlaymode) throw new InvalidOperationException("Editor version/compilation state invalid.");
                 var selectors = new Dictionary<string, Selector>(StringComparer.Ordinal); var found = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var selector in request.components) { SafeAsset(selector.path); selectors.Add(selector.guid + ":" + selector.fileID, selector); }
                 report.complete = true; report.compilation.state = "succeeded"; Application.logMessageReceived += Log; subscribed = true;
                 foreach (var entry in request.scripts) { SafeAsset(entry.path); string ext = Path.GetExtension(entry.path); if (ext != ".cs" && ext != ".dll") throw new InvalidOperationException("Unsupported script path."); ObserveScripts(entry); }
+                if (componentMode) ObservePackageRegistry();
                 foreach (var entry in request.assets) { SafeAsset(entry.path); if (entry.kind != "scene" && entry.kind != "prefab" && entry.kind != "asset") throw new InvalidOperationException("Unsupported serialized asset."); ObserveAsset(entry, selectors, found); }
                 if (found.Count != request.components.Length) throw new InvalidOperationException("Not all requested component identities were observed.");
                 if (EditorApplication.isCompiling || EditorUtility.scriptCompilationFailed) throw new InvalidOperationException("Compilation changed during observation.");

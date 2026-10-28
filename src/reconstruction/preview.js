@@ -5,6 +5,7 @@ const budget=1024**2,size=value=>Buffer.byteLength(JSON.stringify(value));
 export function reconstructionPreview(plan,storedPlan){
  const {inventory,...preview}=plan;
  const result={...preview,inventoryFiles:inventory.length,storedPlan,changes:plan.changes.map(change=>{
+  if(change.eventStorageProof){const proof=change.eventStorageProof;return {...change,eventStorageProof:{kind:proof.kind,schemaVersion:proof.schemaVersion,sha256:fingerprint(proof),originalTokenSha256:proof.originalTokenSha256,normalizedTokenSha256:proof.normalizedTokenSha256,compilerFixture:proof.compilerFixture,dump:proof.dump,nativeFieldUse:proof.nativeFieldUse,nativeTypeIndexEquivalence:proof.nativeTypeIndexEquivalence,rawEventDefinitionsSha256:proof.rawEventDefinitionsSha256,limitations:proof.limitations,events:proof.events.map(({fullName,name,addEvidenceId,removeEvidenceId,metadata})=>({fullName,name,addEvidenceId,removeEvidenceId,metadata})),proofInSavedPlan:true}};}
   if(!change.initializationProof)return {...change};
   const proof=change.initializationProof;
   return {...change,initializationProof:{kind:proof.kind,schemaVersion:proof.schemaVersion,sha256:fingerprint(proof),originalTokenSha256:proof.originalTokenSha256,dump:proof.dump,constructors:proof.constructors.map(({fullName,kind,evidenceId,metadata})=>({fullName,kind,evidenceId,metadata})),proofInSavedPlan:true}};

@@ -5,10 +5,23 @@ import {assertAssetPath} from '../assets/context.js';
 import {workspaceResultPreview} from './workspace-preview.js';
 import {validationResultPreview} from './validation-preview.js';
 import {validationProgressPreview} from '../unity/progress.js';
+import {recoveryProgressPreview} from '../recovery/progress.js';
+import {phaseMetricsPreview} from '../workflow/metrics.js';
 import {createDesktopHistory} from './history.js';
 import {withoutJevCredentials} from '../jev-environment.js';
 const terminal=new Set(['succeeded','failed','unverified','unknown']);
+function dataPreview(r){
+ const clip=(v,n=512)=>typeof v==='string'?v.slice(0,n):v,proof=p=>p?{type:clip(p.type,256),kind:clip(p.kind,64),value:p.value?{display:clip(p.value.display,256),preview:clip(p.value.preview,256)}:null}:undefined;
+ return {kind:r.kind,command:r.command,operationId:r.operationId,baselineId:r.baselineId,state:r.state,dataCaptureComplete:r.dataCaptureComplete===true,dataPreserved:r.dataPreserved===true,schemaCompatible:r.schemaCompatible===true,coverage:r.coverage,reason:clip(r.reason),differenceCount:r.differenceCount,differences:(r.differences??[]).slice(0,3).map(d=>({kind:clip(d.kind,64),assetId:clip(d.assetId,128),objectId:clip(d.objectId,128),propertyPath:clip(d.propertyPath),before:proof(d.before),after:proof(d.after)})),storedReceipt:clip(r.storedReceipt,2048),storedData:clip(r.storedData,2048),runtimeInitialized:'unverified',gameplay:'unverified',previewOnly:true};
+}
 function capturePreview(job){
+ if(job.result?.kind==='retoolkit-data-contract')return dataPreview(job.result);
+ if(job.result?.kind==='retoolkit-reconstruction-run'){
+  const r=job.result,step=s=>s?{id:s.id,label:String(s.label??'').slice(0,512),state:s.state,dimension:s.dimension}:null;return {kind:r.kind,runId:r.runId,sequence:r.sequence,goal:String(r.goal??'').slice(0,2048),state:r.state,complete:r.complete===true,agentResumed:r.agentResumed===true,candidate:r.candidate,nextStep:step(r.nextStep),waiting:r.waiting,continuation:r.continuation,steps:(r.steps??[]).slice(0,5).map(step),stepCount:r.steps?.length??0,phaseMetrics:phaseMetricsPreview(r.phaseMetrics),previewOnly:true};
+ }
+ if(job.operation.startsWith('recovery.')&&job.result&&typeof job.result==='object'){
+  const value=job.result;return {...(value.result?.kind==='retoolkit-data-contract'?{result:dataPreview(value.result)}:{}),kind:'retoolkit-recovery-preview',artifactId:value.artifactId,revision:value.revision,state:value.state,project:value.project,compileReady:false,bindingsVerified:false,gameplay:'unverified',counts:value.counts,total:value.total,items:(value.items??[]).slice(0,5).map(row=>({code:row.code,category:row.category,state:row.state,path:row.path})),phaseMetrics:phaseMetricsPreview(value.phaseMetrics),previewOnly:true};
+ }
  const workspace=workspaceResultPreview(job);if(workspace)return workspace;
  const validation=validationResultPreview(job);if(validation)return validation;
  if(job.operation==='project.create'&&job.result?.kind==='retoolkit-project-intake'){
@@ -20,7 +33,16 @@ function capturePreview(job){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:0;
  return {kind:'retoolkit-adb-result',schemaVersion:1,state:text(job.result.state),capture:{bundle:text(job.result.capture?.bundle),manifest:text(job.result.capture?.manifest),...(data?{applicationData:{coverage:text(data.coverage),bundle:text(data.bundle),files:count(data.files),scopes:Array.isArray(data.scopes)?data.scopes.slice(0,2).map(scope=>({id:text(scope.id),state:text(scope.state),access:text(scope.access),files:count(scope.files)})):[]}}:{})}};
 }
-function compact(job){if(Buffer.byteLength(JSON.stringify(job))<=16384)return structuredClone(job);const {id,operation,state,createdAt,completedAt,exitCode,storedResult}=job,preview=capturePreview(job);return {id,operation,state,createdAt,completedAt,exitCode,storedResult,payload:{name:job.payload.name},result:{...preview,notice:preview.kind==='retoolkit-workspace-preview'?'Đã rút gọn danh sách tệp lớn; trạng thái và lựa chọn đầu vào được giữ bên dưới. Kết quả đầy đủ ở đường dẫn đã lưu.':'Output exceeds desktop preview. Inspect storedResult or use a bounded CLI query.'},...(job.error?{error:{code:String(job.error.code).slice(0,128),message:String(job.error.message).slice(0,1024)}}:{}),...(job.progress?{progress:job.progress.slice(-512)}:{}),...(validationProgressPreview(job.validationProgress)?{validationProgress:validationProgressPreview(job.validationProgress)}:{})};}
+function compact(job){
+ if(Buffer.byteLength(JSON.stringify(job))<=16384)return structuredClone(job);
+ const {id,operation,state,createdAt,completedAt,exitCode,storedResult}=job,preview=capturePreview(job);
+ return {id,operation,state,createdAt,completedAt,exitCode,storedResult,payload:{name:job.payload.name},
+  result:{...preview,notice:preview.kind==='retoolkit-workspace-preview'?'Đã rút gọn danh sách tệp lớn; trạng thái và lựa chọn đầu vào được giữ bên dưới. Kết quả đầy đủ ở đường dẫn đã lưu.':'Output exceeds desktop preview. Inspect storedResult or use a bounded CLI query.'},
+  ...(job.error?{error:{code:String(job.error.code).slice(0,128),message:String(job.error.message).slice(0,1024)}}:{}),
+  ...(job.progress?{progress:job.progress.slice(-512)}:{}),
+  ...(validationProgressPreview(job.validationProgress)?{validationProgress:validationProgressPreview(job.validationProgress)}:{}),
+  ...(recoveryProgressPreview(job.recoveryProgress)?{recoveryProgress:recoveryProgressPreview(job.recoveryProgress)}:{})};
+}
 export function createDesktopBroker(root,{node=process.execPath,spawnImpl=spawn,onChange=()=>{},history=true,jevEnvironment=()=>process.env}={}){
  root=path.resolve(root);const journal=createDesktopHistory(root,{enabled:history!==false}),jobs=journal.load();let active=false;
  const notify=(job,persist=true)=>{if(persist)journal.save(jobs.map(compact));try{onChange(compact(job));}catch{}};
@@ -33,11 +55,11 @@ export function createDesktopBroker(root,{node=process.execPath,spawnImpl=spawn,
   child.stdout.on('data',bytes=>{stdoutBytes+=bytes.length;if(!truncated&&stdoutBytes<=2*1024**2)stdout+=outputDecoder.write(bytes);else truncated=true;});
   let progressLine='',progressOverflow=false;
   child.stderr.on('data',bytes=>{const accepted=bytes.subarray(0,Math.max(0,512*1024-stderrBytes));stderrBytes+=accepted.length;const decoded=errorDecoder.write(accepted);stderr+=decoded;
-   if(job.operation==='reconstruct.validate'){
+   if(job.operation==='reconstruct.validate'||job.operation.startsWith('recovery.')||job.operation.startsWith('data.')||job.operation.startsWith('components.')){
     const incoming=progressDecoder.write(bytes);let start=0;
     while(start<incoming.length){const end=incoming.indexOf('\n',start),part=incoming.slice(start,end<0?incoming.length:end);if(!progressOverflow){if(progressLine.length+part.length>8192){progressLine='';progressOverflow=true;}else progressLine+=part;}
      if(end<0)break;
-     if(!progressOverflow)try{const event=JSON.parse(progressLine);if(event.kind==='unity-validation-progress'){const progress=validationProgressPreview(event);if(progress)job.validationProgress=progress;}}catch{}
+     if(!progressOverflow)try{const event=JSON.parse(progressLine);if(event.kind==='unity-validation-progress'){const progress=validationProgressPreview(event);if(progress)job.validationProgress=progress;}else if(event.kind==='recovery-progress'){const progress=recoveryProgressPreview(event);if(progress)job.recoveryProgress=progress;}}catch{}
      progressLine='';progressOverflow=false;start=end+1;
     }
    }

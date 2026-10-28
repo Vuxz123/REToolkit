@@ -122,6 +122,24 @@ reconstruction, migration, library, visual and adb operations. Inspect terminal
 state, diagnostics and result references; process completion and domain readiness
 are separate. Record failed and uncertain/interrupted runs without inferring success.
 
+For multi-step reconstruction, discover workflow_status first. Resume the exact
+unfinished run or create workflow_create from the existing authorized goal,
+candidate and finite scenario checklist. Use workflow_claim with current sequence
+and actual harness/thread identity; save runId, claimId and every returned sequence.
+Heartbeat after meaningful work. workflow_next reconciles the next dependency
+and also changes sequence. workflow_checkpoint records progress/blockers or exact
+terminal jobs. A successful apply/compile completes one step, never unfinished
+gameplay. For long jobs prefer workflow_wait with runId, sequence, claimId,
+stepId and jobId. Codex registers continue-reconstruction and releases the claim;
+inspect actual watcher waiting/transportReady or queued before ending. Queued is
+not resumed: claim again on notification, checkpoint and continue. Other harnesses
+retain a claim for active jobs_wait. Unknown registration is inspection only.
+Batch dependent evidenced source within the 16-file limit, verify every apply,
+then validate scoped Unity at a compile-coherent feature boundary. Reuse current
+setup/index. Missing gameplay observations/runner is an explicit blocker, never
+permission to shrink the checklist; current workflow cannot ingest manual
+gameplay acceptance automatically. See docs/reconstruction-continuity.md.
+
 Background job completion alone DOES NOT wake a finished agent turn. Do not end
 with a promise such as "Next: after review/apply finishes" unless a real wait or
 durable continuation has been registered. For short waits use jobs_wait
@@ -162,6 +180,27 @@ reconstruct.validate can still validate the full staged source without a graph.
 Read compile/binding outcomes separately from serialized-reference coverage.
 
 Before using native results, inspect analysis readiness, symbol plan coverage,
+and preparation options.analysisMode. With analysisMode:"on-demand", deferred
+analysis/symbols are intentional: never start workspace.analyze or a full symbol
+pass merely to satisfy readiness. Use jobs_start operation ghidra.analysis.targets
+with params {focus:"gameplay",limit:100}; follow its cursor. sdk-excluded entries
+are recognized ads/telemetry SDK hints, not deleted packages or proven ownership.
+Keep unknown code visible. Start from scene/prefab components and gameplay types;
+follow required runtime/tween/async/save dependencies and game-side ad callbacks,
+without walking SDK internals unless the authorized behavior requires them.
+Use ghidra.session.start {write:true} when no owner exists, then explicitly request
+ghidra.analysis.ensure {address:<exact loaded hex>,endAddress:<inclusive loaded hex>,
+kind:"disassemble"|"function"|"stack",reason:<why needed>,timeoutSeconds:60}.
+The limit is 64 KiB per request. Use disassemble to inspect uncertain extents;
+function follows decoded flow and rejects incomplete/indirect branch recovery;
+stack requires an existing exact function. Expand selected scopes deliberately,
+never guess a function end from the next metadata address. Catalog RVA must be
+mapped using the verified Program image base; VA must match loaded memory.
+Query decompile/disasm/xrefs through the owned CLI session after saved analysis.
+An empty xrefs result is not proof of no callers when analysis is scoped.
+Preserve the returned operation UUID and receipts; reuse matching coverage.
+No query implicitly analyzes. Default full mode retains normal preparation.
+Before using native results, inspect
 saved symbol receipts and exact build/program/session identity. Symbol writes use
 a contained saved plan path and exact planHash plus the existing ownership and
 receipt checks. Never bypass locks, replay uncertain writes, invent receipts or

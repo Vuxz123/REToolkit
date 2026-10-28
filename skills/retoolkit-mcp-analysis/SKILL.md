@@ -10,6 +10,44 @@ Resolve the checkout from the task context or the MCP registration's absolute
 use the absolute entrypoint. Documentation paths refer to the checkout rather
 than this skill's personal installation directory.
 
+First inspect `preparation_status` and its `options.analysisMode`. Default `full`
+uses normal preparation. If mode is `on-demand`, deferred whole-program analysis
+and bulk symbols are intentional; do not run full analysis to remove that state.
+Use the native headless owner and typed jobs described below. GUI instructions
+later in this skill apply only when the GUI owns the project.
+
+## Agent-directed native analysis
+
+`jobs_start` supports `ghidra.analysis.targets` with `{focus:"gameplay",limit:100}`.
+Follow its cursor. The verified IL2CPP method catalog keeps exact RVA/VA strings;
+it does not supply or guess method ends. Gameplay focus hides known ads/tracking
+SDK implementations (`sdk-excluded`) while retaining unknown code and supporting
+libraries. Classification is a hint: confirm against scene/prefab bindings and
+behavior. Do not exclude game-side ad reward/revive callbacks or a dependency
+merely because it is third-party. Nothing is deleted from the binary/project.
+
+When the authorized task needs native logic, start/reuse the exact owned write
+session with `ghidra.session.start` `{write:true}`. Request
+`ghidra.analysis.ensure` with exact loaded `address`, inclusive `endAddress`,
+`kind` (`disassemble`, `function`, `stack`), `reason`, and `timeoutSeconds` (1..300).
+Each range is at most 64 KiB. `disassemble` inspects code without declaring a
+complete function. `function` follows decoded flow and rejects truncated bodies,
+unresolved indirect branches and overlapping functions. Expand scope from code
+evidence, never from the next method address. `stack` needs an existing exact
+function contained in the selected range. ARM/Thumb remains unqualified.
+
+Poll the exact job; inspect its saved receipt before reading decompiled output
+through the native CLI. Repeat requests reuse matching revision-bound coverage;
+analysis never sets global analyzed/symbols/xrefs completeness. An empty xref
+list does not prove that no callers exist. Dependencies are separate targets,
+not an automatic whole-program fallback. No query silently mutates a Program.
+
+CLI equivalents: `retk analysis targets Game --focus gameplay` and
+`retk analysis ensure Game 0x1000 --end 0x10ff --kind function --reason "Recover input"`.
+The addresses above are examples; establish loaded address mapping first.
+
+## GUI owner
+
 Interactive analysis uses the live Ghidra/PyGhidra GUI through GhidraMCP.
 Launch the bridge with the recommended JavaScript CLI:
 

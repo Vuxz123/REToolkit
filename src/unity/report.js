@@ -1,3 +1,4 @@
+import {validateDataSnapshot} from '../data/contracts.js';
 const MAX_JSON=16*1024*1024,MAX_REQUESTED=10000,MAX_COUNT=200000;
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
@@ -46,11 +47,13 @@ function requestRows(rows,script,ids,paths){
   return result;
 }
 export function validateUnityRequest(value){
-  shape(value,['kind','schemaVersion','runId','graphRevision','binding','unityVersion','scripts','assets','scanPolicy'],['kind','schemaVersion','runId','graphRevision','binding','unityVersion','scripts','assets']);
+  shape(value,['kind','schemaVersion','runId','graphRevision','binding','unityVersion','scripts','assets','scanPolicy','dataCapture'],['kind','schemaVersion','runId','graphRevision','binding','unityVersion','scripts','assets']);
   check(value.kind==='retoolkit-unity-validation-request'&&value.schemaVersion===1&&uuid(value.runId)&&hash(value.graphRevision)&&version(value.unityVersion),'Invalid Unity validation request binding');
   if(Object.hasOwn(value,'scanPolicy'))check(value.scanPolicy==='reference-scan-v2','Unknown Unity traversal policy');
   binding(value.binding);const ids=new Set(),paths=new Set();
   const scripts=requestRows(value.scripts,true,ids,paths),assets=requestRows(value.assets,false,ids,paths);
+  if(Object.hasOwn(value,'dataCapture'))check(typeof value.dataCapture==='boolean','Invalid data capture policy');
+  if(value.dataCapture)check(assets.size>0&&assets.size<=64&&[...assets.values()].every(a=>a.kind==='asset'&&/^asset:[a-f0-9]{32}$/i.test(a.assetId)),'Data capture requires 1..64 stable .asset IDs');
   for(const row of assets.values())if(row.kind==='asset')check(value.scanPolicy==='reference-scan-v2','Data assets require explicit traversal policy');
   return {scripts,assets};
 }
@@ -60,11 +63,11 @@ function traversal(value){
   check(value.complete?value.stopReason==='':['property_limit','object_limit','asset_error','interrupted'].includes(value.stopReason),'Invalid Unity traversal completion');
   for(const key of ['objectPath','componentType','propertyPath'])check(typeof value[key]==='string'&&value[key].length<=2048&&!/[\x00-\x1f\x7f]/.test(value[key]),'Invalid Unity traversal location');
 }
-function observedRows(rows,expected,complete,script,extended){
+function observedRows(rows,expected,complete,script,extended,dataCapture=false){
   array(rows,MAX_REQUESTED);const seen=new Set();
   for(const row of rows){
     const required=script?['assetId','path','guid','fileID','fullName','assembly','resolved']:['assetId','path','kind','loaded','missingScripts','missingReferences'];
-    shape(row,[...required,script?'classification':'traversal'],required);
+    shape(row,[...required,script?'classification':'traversal',...(script?['nonAttachableTypes']:[]),...(!script&&dataCapture?['data']:[])],required);
     const requested=expected.get(row.assetId);check(requested&&!seen.has(row.assetId)&&row.path===requested.path,'Unrequested or duplicate Unity observation identity/path');seen.add(row.assetId);
     if(script){
       check(typeof row.resolved==='boolean');
@@ -78,8 +81,15 @@ function observedRows(rows,expected,complete,script,extended){
         if(compiledSource)check(!row.resolved&&actualIdentity&&row.fullName===null&&text(row.assembly),'Compiled source lacks compiler assembly identity');
         if(row.classification==='unresolved')check(!row.resolved,'Unresolved script cannot be resolved');
       }
+      if(Object.hasOwn(row,'nonAttachableTypes')){
+        check(extended&&row.resolved&&['attachable','non-attachable'].includes(row.classification),'Reflected type inventory requires resolved script classification');
+        array(row.nonAttachableTypes,1024);
+        check(row.nonAttachableTypes.every(name=>text(name))&&new Set(row.nonAttachableTypes).size===row.nonAttachableTypes.length,'Invalid reflected non-attachable type inventory');
+        check(row.nonAttachableTypes.includes(row.fullName)===(row.classification==='non-attachable'),'Reflected root type contradicts script classification');
+      }
       if(actualIdentity&&/^asset:[a-f0-9]{32}$/i.test(row.assetId))check(row.guid.toLowerCase()===row.assetId.slice(6).toLowerCase(),'Unity MonoScript GUID does not match requested asset');
     }else{
+      if(dataCapture){check(Object.hasOwn(row,'data'),'Requested data observation is missing');validateDataSnapshot(row.data,row.assetId);if(row.data.complete)check(row.loaded&&row.traversal?.complete&&row.data.objects.length===row.traversal.objects,'Complete data object coverage contradicts traversal');}
       check(row.kind===requested.kind&&typeof row.loaded==='boolean'&&integer(row.missingScripts)&&integer(row.missingReferences),'Invalid Unity serialized asset observation');
       if(extended){check(Object.hasOwn(row,'traversal'),'Extended Unity asset lacks traversal');traversal(row.traversal);check(!row.traversal.complete||row.loaded,'Unloaded asset cannot be traversal complete');check(!complete||row.traversal.complete,'Complete Unity observation has incomplete traversal');}
       else check(!Object.hasOwn(row,'traversal'),'Traversal lacks versioned policy');
@@ -99,7 +109,7 @@ export function validateUnityObservation(report,request){
     const extended=Object.hasOwn(report,'traversal');
     for(const row of expected.assets.values())if(row.kind==='asset')check(extended,'Data assets require extended traversal observations');
     if(extended){shape(report.traversal,['policy']);check(request.scanPolicy==='reference-scan-v2'&&report.traversal.policy===request.scanPolicy,'Unknown Unity traversal policy');}
-    observedRows(report.scripts,expected.scripts,report.complete,true,extended);observedRows(report.assets,expected.assets,report.complete,false,extended);
+    observedRows(report.scripts,expected.scripts,report.complete,true,extended);observedRows(report.assets,expected.assets,report.complete,false,extended,request.dataCapture===true);
     array(report.diagnostics,1000);
     for(const diagnostic of report.diagnostics){
       shape(diagnostic,['severity','message','path']);check(['error','warning','info'].includes(diagnostic.severity)&&typeof diagnostic.message==='string'&&diagnostic.message.length<=8192,'Invalid Unity observation diagnostic');

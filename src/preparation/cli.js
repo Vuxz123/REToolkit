@@ -5,6 +5,7 @@ import {validateAssetParamsForJob} from '../assets/api.js';
 export const isPreparationCommand=argv=>['prepare','preparation'].includes(argv[0]);
 const usage=`Automatic project preparation (Node background worker)
   retk prepare <Game> [--profile native|reconstruction]
+       [--analysis-mode full|on-demand]
        [--symbols plan|apply|skip] [--address-mode rva|va]
        [--serial <device> --package <package.name>]
        [--no-auto-pull] [--no-include-data] [--baseline-validation]
@@ -15,7 +16,7 @@ the workspace engine lock. Preparation does not prove gameplay readiness.
 `;
 const fail=message=>{throw Object.assign(new Error(message),{code:'PREPARATION_ARGUMENT_INVALID'});};
 export function parsePreparationArgs(argv){
- const positionals=[],params={},options={},seen=new Set(),values={profile:'profile',symbols:'symbols','address-mode':'addressMode',serial:'serial',package:'packageName','resume-run':'resumeRunId',run:'runId',root:'root'},flags={json:'json',help:'help','no-auto-pull':'autoPull','no-include-data':'includeData','baseline-validation':'baselineValidation'};
+ const positionals=[],params={},options={},seen=new Set(),values={profile:'profile','analysis-mode':'analysisMode',symbols:'symbols','address-mode':'addressMode',serial:'serial',package:'packageName','resume-run':'resumeRunId',run:'runId',root:'root'},flags={json:'json',help:'help','no-auto-pull':'autoPull','no-include-data':'includeData','baseline-validation':'baselineValidation'};
  for(let index=0;index<argv.length;index++){
   const arg=argv[index];if(!arg.startsWith('--')){positionals.push(arg);continue;}
   const key=arg.slice(2);if(seen.has(key))fail('Duplicate preparation option');seen.add(key);

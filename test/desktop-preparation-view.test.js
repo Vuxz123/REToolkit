@@ -1,6 +1,22 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {fakeDocument,flush} from './helpers/desktop-dom.js';
 const runId='12345678-1234-4123-8123-123456789abc';
+test('on-demand analysis checkbox defaults off and round trips saved preparation mode',async t=>{
+ const {createPreparationOptions}=await import('../src/desktop/preparation-view.js'),previous={document:globalThis.document},document=fakeDocument();globalThis.document=document;t.after(()=>Object.assign(globalThis,previous));
+ const options=createPreparationOptions(),checkbox=document.querySelector('#preparation-analysisMode');
+ assert(checkbox);assert.equal(checkbox.type,'checkbox');assert.match(options.element.textContent,/Analysis theo yêu cầu/);assert.equal(checkbox.checked,false);assert.equal(options.read().analysisMode,'full');
+ checkbox.checked=true;assert.equal(options.read().analysisMode,'on-demand');options.load({});assert.equal(checkbox.checked,false);
+ options.load({analysisMode:'on-demand'});assert.equal(checkbox.checked,true);assert.equal(options.read().analysisMode,'on-demand');options.setDisabled(true);assert.equal(checkbox.disabled,true);
+ options.load({analysisMode:'full'});assert.equal(checkbox.checked,false);
+});
+test('saved on-demand mode is loaded and preserved by the resume action',async t=>{
+ const {createPreparationView}=await import('../src/desktop/preparation-view.js'),previous={document:globalThis.document,window:globalThis.window},document=fakeDocument(),submitted=[];
+ const report={name:'Game',runId,state:'succeeded',options:{analysisMode:'on-demand'},stages:[{id:'analyze',state:'deferred'}],readiness:{nativeAnalysis:{state:'deferred',mode:'on-demand'}}};
+ globalThis.document=document;globalThis.window={retk:{preparation:{inspect:async()=>report},run:async(op,payload)=>{submitted.push({op,payload});return {id:'job'};}}};t.mock.timers.enable({apis:['setTimeout']});const view=createPreparationView();t.after(()=>{view.update({workspaces:[],jobs:[]},'');Object.assign(globalThis,previous);});
+ view.update({workspaces:[{name:'Game'}],jobs:[]},'Game');await flush();assert.equal(document.querySelector('#preparation-analysisMode').checked,true);
+ assert.match(document.querySelector('#preparation').textContent,/Hoãn theo yêu cầu/);
+ document.querySelector('#preparation-resume').click();await flush();assert.equal(submitted[0].payload.analysisMode,'on-demand');assert.equal(submitted[0].payload.resumeRunId,runId);
+});
 test('Android discovery offers bounded explicit choices without selecting a target',async t=>{
  const {createPreparationOptions}=await import('../src/desktop/preparation-view.js');const previous={document:globalThis.document,window:globalThis.window};const document=fakeDocument(),calls=[];
  globalThis.document=document;globalThis.window={retk:{preparation:{devices:async()=>({devices:[{serial:'emulator-5554',state:'device'}]}),packages:async serial=>{calls.push(serial);return {packages:[{packageName:'com.example.game'}]};}}}};t.after(()=>Object.assign(globalThis,previous));

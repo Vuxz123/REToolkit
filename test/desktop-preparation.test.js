@@ -14,3 +14,8 @@ test('preload transports explicit freshness choice and defaults to cheap observa
  bridge.preparation.inspect('Game');bridge.preparation.inspect('Game',undefined,true);bridge.preparation.inspect('Game','12345678-1234-4123-8123-123456789abc',false);
  assert.deepEqual(calls,[['desktop:preparation:inspect','Game',undefined,false],['desktop:preparation:inspect','Game',undefined,true],['desktop:preparation:inspect','Game','12345678-1234-4123-8123-123456789abc',false]]);
 });
+
+test('desktop transports the explicit preparation analysis mode',()=>{
+ for(const analysisMode of ['full','on-demand'])assert.deepEqual(buildDesktopCommand('workspace.prepare',{name:'Game',analysisMode}),['prepare','Game','--analysis-mode',analysisMode]);
+ assert.throws(()=>buildDesktopCommand('workspace.prepare',{name:'Game',analysisMode:'all'}));
+});

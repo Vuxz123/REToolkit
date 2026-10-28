@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createToolkit } from '../toolkit.js';
 import { BridgeError } from './protocol.js';
 import { fileIdentity } from '../state.js';
+import {validateAnalysisScope} from './analysis-scope.js';
+import {analysisTargets} from './analysis-catalog.js';
 import { startSession,stopSession,sessionStatus,querySession,mutateSession,recoverSession } from './provider.js';
 
 export const bridgeUsage=`Persistent Ghidra CLI (existing imported project; stop before opening GUI)
@@ -19,9 +21,11 @@ export const bridgeUsage=`Persistent Ghidra CLI (existing imported project; stop
   comment set <Game> <address> --type eol|plate|pre|post|repeatable (--text <text>|--file <utf8-file>) [--dry-run]
   symbols plan <Game> --address-mode rva|va [--create-functions] [--replace-user-names] [--replace-user-comments]
   symbols apply <Game> --plan <path> [--dry-run] [--operation-id <uuid>]
+  analysis targets <Game> [--focus gameplay|all] [--query <name>] [--limit <n>] [--cursor <value>]
+  analysis ensure <Game> <address> --end <inclusive-address> --kind disassemble|function|stack --reason <text> [--timeout <seconds>] [--dry-run] [--operation-id <uuid>]
 Global: --root <toolkit>, --json. No automatic JVM start on query. Target output is untrusted data.
 `;
-const values=new Set(['root','query','limit','cursor','direction','length','type','text','file','plan','address-mode','operation-id','timeout','idle-timeout']);
+const values=new Set(['root','query','limit','cursor','direction','length','type','text','file','plan','address-mode','operation-id','timeout','idle-timeout','end','kind','reason','focus']);
 const flags=new Set(['json','write','dry-run','create-functions','replace-user-names','replace-user-comments','help']);
 const address=/^(?:[A-Za-z_][\w.-]*:)?0x[0-9a-fA-F]+$/;
 const specs={
@@ -31,10 +35,12 @@ const specs={
   strings:[1,['query','limit','cursor']], 'bytes.read':[2,['length']], 'comment.set':[2,['type','text','file','dryRun','operationId']],
   'symbols.plan':[1,['addressMode','createFunctions','replaceUserNames','replaceUserComments']],
   'symbols.apply':[1,['plan','dryRun','operationId']],
+  'analysis.targets':[1,['focus','query','limit','cursor']],
+  'analysis.ensure':[2,['end','kind','reason','timeout','dryRun','operationId']],
 };
 const camel=name=>name.replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase());
 export function isBridgeCommand(raw) {
-  return ['session','function','decompile','disasm','xrefs','strings','bytes','comment'].includes(raw[0])||raw[0]==='symbols'&&['plan','apply'].includes(raw[1]);
+  return ['analysis','session','function','decompile','disasm','xrefs','strings','bytes','comment'].includes(raw[0])||raw[0]==='symbols'&&['plan','apply'].includes(raw[1]);
 }
 export function parseBridgeArgs(raw) {
   const options={};const args=[];
@@ -47,7 +53,7 @@ export function parseBridgeArgs(raw) {
     else if(flags.has(key)&&split<0)options[property]=true;
     else throw new BridgeError('invalid_argument',`Unknown option ${item}`);
   }
-  let command=args.shift();if(['session','function','bytes','comment','symbols'].includes(command))command+='.'+args.shift();
+  let command=args.shift();if(['analysis','session','function','bytes','comment','symbols'].includes(command))command+='.'+args.shift();
   if(options.help)return {help:true};
   const spec=specs[command];if(!spec||args.length!==spec[0])throw new BridgeError('invalid_argument',`Invalid arguments for ${command}\n${bridgeUsage}`);
   for(const key of Object.keys(options))if(!['root','json','help',...spec[1]].includes(key))throw new BridgeError('invalid_argument',`Option ${key} is not supported by ${command}`);
@@ -60,6 +66,8 @@ export function parseBridgeArgs(raw) {
   if(options.operationId&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(options.operationId))throw new BridgeError('invalid_argument','operation-id must be UUID');
   if(command==='bytes.read'&&!options.length)throw new BridgeError('invalid_argument','bytes read requires --length');
   if(command==='symbols.apply'&&!options.plan)throw new BridgeError('invalid_argument','symbols apply requires --plan');
+  if(command==='analysis.ensure')validateAnalysisScope({address:args[1],endAddress:options.end,kind:options.kind,reason:options.reason,timeoutSeconds:options.timeout});
+  if(command==='analysis.targets'&&options.focus&&!['gameplay','all'].includes(options.focus))throw new BridgeError('invalid_argument','focus must be gameplay or all');
   if(command==='comment.set') {
     if(!['eol','plate','pre','post','repeatable'].includes(options.type))throw new BridgeError('invalid_argument','comment type must be eol|plate|pre|post|repeatable');
     if((options.text===undefined)===(options.file===undefined))throw new BridgeError('invalid_argument','Choose exactly one --text or --file');
@@ -72,6 +80,8 @@ export async function runBridgeCli(raw,defaultRoot) {
   let result;const timeout={timeoutMs:(options.timeout??60)*1000};
   const list={...(options.query!==undefined?{query:options.query}:{}),...(options.limit?{limit:options.limit}:{}),...(options.cursor?{cursor:options.cursor}:{})};
   switch(command) {
+    case 'analysis.targets':result=await analysisTargets(toolkit,name,{...list,...(options.focus?{focus:options.focus}:{})});break;
+    case 'analysis.ensure':result=await mutateSession(toolkit,name,'analysis.ensure',{address:args[0],endAddress:options.end,kind:options.kind,reason:options.reason,timeoutSeconds:options.timeout??60},options);break;
     case 'session.start':result=await startSession(toolkit,name,{write:options.write,timeoutMs:(options.timeout??300)*1000,idleMs:(options.idleTimeout??900)*1000});break;
     case 'session.status':result=await sessionStatus(toolkit,name);break;
     case 'session.stop':result=await stopSession(toolkit,name,{timeoutMs:(options.timeout??30)*1000});break;

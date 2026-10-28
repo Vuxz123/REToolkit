@@ -3,7 +3,7 @@ import {isSqliteGraph,verifyStoredGraph} from '../assets/graph-storage.js';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {fingerprint,withWorkspaceLock} from '../state.js';
-import {assertAssetPath,assetPaths,selectedAssetBinding,safeAssetExportPath,assetError} from '../assets/context.js';
+import {assertAssetPath,assetPaths,selectedAssetBinding,assetError,assetProjectPath} from '../assets/context.js';
 import {indexUnityProject,locateUnityProject,verifyGraphFiles} from '../assets/graph.js';
 import {acquireToolchainRead} from '../toolchain/lease.js';
 import {assertNoSession} from '../ghidra/runtime.js';
@@ -27,7 +27,7 @@ export function addLibraryRoot(toolkit,directory){
  if(config.libraryRoots.length>16)fail('library_config_invalid','At most 16 library roots are supported');write(paths(toolkit).config,config);return config;
  }finally{fs.rmdirSync(gate);}
 }
-async function catalog(toolkit){
+export async function readLibraryCatalog(toolkit){
  const p=paths(toolkit),config=readLibraryConfig(toolkit),file=path.join(p.base,'catalog.json');
  if(!fs.existsSync(file)){if(config.libraryRoots.length)fail('library_catalog_missing','Run libraries scan to index configured roots');const {scanLibraries}=await import('./catalog.js');return scanLibraries({roots:[],cacheDir:p.base});}
  const value=read(file),roots=value.roots;
@@ -60,7 +60,7 @@ function page(items,params,binding){
  const next=offset+result.length;return {items:result,nextCursor:next<rows.length?Buffer.from(JSON.stringify({signature,offset:next})).toString('base64url'):null};
 }
 async function projectFacts(toolkit,name){
- const selected=selectedAssetBinding(toolkit,name),projectDir=await locateUnityProject(safeAssetExportPath(selected.workspace,selected.project.reconstructedSourceDir??path.join(selected.workspace,'05_ReconstructedSource'),selected.inputPath));
+ const selected=selectedAssetBinding(toolkit,name),projectDir=await locateUnityProject(assetProjectPath(toolkit,name,selected));
  const configured=selected.project.assetReconstruction,graphLimitBytes=configured?.binding&&fingerprint(configured.binding)===fingerprint(selected.binding)?configured.graphLimitBytes:undefined;
  let sourceGraph;
  if(configured?.graphStorage==='sqlite'){const graphFile=assetPaths(toolkit,name).graphFile;sourceGraph=read(graphFile);if(!isSqliteGraph(sourceGraph)||fingerprint(sourceGraph.binding)!==fingerprint(selected.binding))fail('stale_graph','Saved SQLite graph binding changed');verifyStoredGraph(sourceGraph,graphFile);await verifyGraphFiles(projectDir,sourceGraph);}
@@ -68,13 +68,14 @@ async function projectFacts(toolkit,name){
  const {enrichLibraryGraph}=await import('./project-facts.js');const graph=await enrichLibraryGraph(projectDir,sourceGraph);return {...selected,projectDir,graph};
 }
 const methods=new Set(['libraries.scan','libraries.list','libraries.identify','libraries.plan','libraries.import','libraries.verify']);
-export async function runLibraryOperation(toolkit,name,method,params={}){
+export async function runLibraryOperation(toolkit,name,method,params={},dependencies={}){
+ if(method.startsWith('libraries.runtime.')){const {runRuntimeProviderOperation}=await import('./runtime-provider.js');return runRuntimeProviderOperation(toolkit,name,method.slice('libraries.runtime.'.length),params,dependencies);}
  if(!methods.has(method))fail('library_method_invalid','Unknown library operation');
  if(method==='libraries.scan'){
   paramsShape(params,[]);const p=paths(toolkit),config=readLibraryConfig(toolkit);fs.mkdirSync(p.base,{recursive:true});
   return withWorkspaceLock(p.base,async()=>{const {scanLibraries}=await import('./catalog.js');const value=await scanLibraries({roots:config.libraryRoots,cacheDir:p.base});write(path.join(p.base,'catalog.json'),value);return {state:value.state,revision:value.revision,archiveCount:value.archives.length,packageCount:value.packages.length,limitations:value.limitations};});
  }
- const index=await catalog(toolkit);
+ const index=await readLibraryCatalog(toolkit);
  if(method==='libraries.list'){paramsShape(params,['query','limit','cursor']);return {state:index.state,revision:index.revision,...page(index.packages.map(compactPackage),params,index.revision),limitations:index.limitations};}
  const p=assetPaths(toolkit,name),lease=acquireToolchainRead(toolkit.root);let uncertain=false;
  try{
@@ -101,7 +102,7 @@ export async function runLibraryOperation(toolkit,name,method,params={}){
     const saved=read(path.join(directory,params.operationId+'.json'));if(saved.plan?.operationId!==params.operationId)fail('library_plan_invalid','Saved library plan identity changed');
     await verifyCatalogSources(toolkit,index);
     const {importLibraryPlan,verifyLibraryImport}=await import('./importer.js');const action=method==='libraries.import'?importLibraryPlan:verifyLibraryImport;
-    const result=await action({toolkit,name,projectDir,graph,catalog:index,plan:saved.plan});
+    const result=await action({toolkit,name,projectDir,graph,catalog:index,plan:saved.plan},dependencies);
     await verifyGraphFiles(projectDir,graph);if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(facts.binding))fail('stale_graph','Selected source changed during library operation');return result;
    }catch(error){uncertain=['unity_recovery_required','library_recovery_required'].includes(error.code);throw error;}
   });

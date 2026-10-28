@@ -32,6 +32,95 @@ async function fixture(t) {
 }
 const service=()=>import('../src/preparation/service.js');
 
+test('resume clears resolved native errors when on-demand stages become deferred',async t=>{
+ const f=await fixture(t),{runPreparation}=await service();let nativeReady=false;
+ const dependencies={...f.dependencies,invokeStage:async(id,c)=>{const result=await f.invokeStage(id,c);return id==='prerequisites'?{...result,native:nativeReady}:result;}};
+ const first=await runPreparation(f.toolkit,'Game',{analysisMode:'on-demand'},dependencies);assert.equal(first.stages.find(s=>s.id==='analyze').state,'blocked');
+ nativeReady=true;const resumed=await runPreparation(f.toolkit,'Game',{resumeRunId:first.runId},dependencies);assert.equal(resumed.state,'succeeded');
+ for(const id of ['analyze','symbols']){const stage=resumed.stages.find(s=>s.id===id);assert.equal(stage.state,'deferred');assert.equal(stage.error,undefined);}
+ assert.deepEqual(resumed.blockers,[]);
+});
+
+test('on-demand preparation defers global analysis and bulk symbols after verified import while assets continue',async t=>{
+ const f=await fixture(t),{runPreparation,inspectPreparation}=await service();
+ const result=await runPreparation(f.toolkit,'Game',{analysisMode:'on-demand',symbols:'apply'},f.dependencies);
+ assert.equal(result.state,'succeeded');assert.equal(result.options.analysisMode,'on-demand');
+ assert.deepEqual(f.calls,['prerequisites','android','inputs','dump','import','assets','index','scripts']);
+ assert.deepEqual(result.readiness.nativeAnalysis,{state:'deferred',mode:'on-demand'});
+ assert.equal(result.readiness.symbols.state,'deferred');assert.equal(result.readiness.symbols.coverage,'unverified');assert.equal(result.readiness.assetsIndex.state,'ready');
+ for(const id of ['analyze','symbols'])assert.equal(result.stages.find(s=>s.id===id).state,'deferred');
+ const inspected=await inspectPreparation(f.toolkit,'Game');assert.equal(inspected.freshness,'current');assert.equal(inspected.readiness.nativeAnalysis.state,'deferred');
+ const handoff=JSON.parse(fs.readFileSync(result.handoffPath));assert.equal(handoff.options.analysisMode,'on-demand');assert.equal(handoff.readiness.nativeAnalysis.state,'deferred');
+ f.calls.length=0;const resumed=await runPreparation(f.toolkit,'Game',{resumeRunId:result.runId},f.dependencies);
+ assert.equal(resumed.state,'succeeded');assert.equal(resumed.options.analysisMode,'on-demand');assert.deepEqual(f.calls,['prerequisites','android','inputs']);
+ const changed=await runPreparation(f.toolkit,'Game',{resumeRunId:result.runId,analysisMode:'full'},f.dependencies);assert.equal(changed.blockers[0].code,'PREPARATION_OPTIONS_CHANGED');
+ fs.writeFileSync(f.project.nativeBinary,'changed');const stale=await inspectPreparation(f.toolkit,'Game');assert.equal(stale.readiness.nativeAnalysis.state,'stale');
+});
+
+test('on-demand deferral requires successful import evidence and never hides native blockers',async t=>{
+ const {runPreparation}=await service();
+ for(const failure of ['blocked','missing-evidence']){
+  const f=await fixture(t);
+  const result=await runPreparation(f.toolkit,'Game',{analysisMode:'on-demand'}, {...f.dependencies,invokeStage:(id,c)=>id==='import'?(failure==='blocked'?{state:'blocked',code:'IMPORT_FAILED'}:{state:'ready'}):f.invokeStage(id,c)});
+  assert.equal(result.readiness.nativeAnalysis.state,'blocked');assert.equal(result.readiness.symbols.state,'blocked');assert.equal(result.readiness.assetsIndex.state,'ready');assert(!f.calls.includes('analyze'));assert(!f.calls.includes('symbols'));
+ }
+});
+
+test('full is the default and historical reports without analysisMode resume as full',async t=>{
+ const f=await fixture(t),{runPreparation}=await service(),first=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},f.dependencies);
+ assert.equal(first.options.analysisMode,'full');assert.deepEqual(first.readiness.nativeAnalysis,{state:'ready'});
+ const legacy=JSON.parse(fs.readFileSync(first.reportPath));delete legacy.options.analysisMode;fs.writeFileSync(first.reportPath,JSON.stringify(legacy));f.calls.length=0;
+ const resumed=await runPreparation(f.toolkit,'Game',{resumeRunId:first.runId,analysisMode:'full'},f.dependencies);
+ assert.equal(resumed.state,'succeeded');assert.deepEqual(f.calls,['prerequisites','android','inputs']);assert.equal(resumed.options.analysisMode,'full');
+ await assert.rejects(()=>runPreparation(f.toolkit,'Game',{analysisMode:'everything'},f.dependencies),{code:'PREPARATION_PARAMS_INVALID'});
+});
+
+test('on-demand uses import identity attestation and never writes global analysis state',async t=>{
+ const f=await fixture(t),{runPreparation}=await service(),tools=path.join(f.root,'tools');fs.mkdirSync(tools);f.toolkit.tools={dumper:path.join(tools,'dumper.exe'),ghidra:tools,headless:path.join(tools,'headless.bat'),java:path.join(tools,'java.exe')};
+ const notes=path.join(f.workspace,'04_Notes');fs.mkdirSync(notes);fs.mkdirSync(f.project.ghidraProjectDir);
+ for(const ext of ['.gpr','.rep'])fs.writeFileSync(path.join(f.project.ghidraProjectDir,'Game'+ext),'fixture database');
+ const receipt=path.join(notes,'import-receipt.json'),fp=stepFingerprint(f.project,'import',f.toolkit.tools,f.root),value={fingerprint:fp,project:'Game',program:f.project.ghidraProgramName,native:f.project.identities.native,attestation:{program:f.project.ghidraProgramName,sha256:f.project.identities.native.sha256}};
+ fs.writeFileSync(receipt,JSON.stringify(value));setStep(f.project,'import','succeeded',fp,outputManifest([receipt]));const previousAnalysis=structuredClone(f.project.steps.analyze),previousSymbols=structuredClone(f.project.steps.symbols);
+ const dependencies={...f.dependencies,invokeStage:(id,c)=>id==='import'?c.runDefault():f.invokeStage(id,c)};
+ const first=await runPreparation(f.toolkit,'Game',{analysisMode:'on-demand'},dependencies);assert.equal(first.state,'succeeded');assert.equal(first.readiness.nativeAnalysis.state,'deferred');assert.deepEqual(f.project.steps.analyze,previousAnalysis);assert.deepEqual(f.project.steps.symbols,previousSymbols);
+ value.attestation.sha256='0'.repeat(64);fs.writeFileSync(receipt,JSON.stringify(value));setStep(f.project,'import','succeeded',fp,outputManifest([receipt]));
+ const invalid=await runPreparation(f.toolkit,'Game',{analysisMode:'on-demand'},dependencies);assert.equal(invalid.readiness.nativeAnalysis.state,'blocked');assert.equal(invalid.stages.find(s=>s.id==='import').error.code,'PREPARATION_IMPORT_UNVERIFIED');assert.equal(invalid.readiness.assetsIndex.state,'ready');
+});
+
+const pendingOutputs=[{id:'step.dump',status:'blocked',code:'DUMP_EVIDENCE_STALE',message:'dump outputs not prepared'},{id:'step.import',status:'blocked',code:'IMPORT_EVIDENCE_STALE',message:'import outputs not prepared'}];
+function pendingReport(extra){return {tasks:{prepare:{state:'blocked',diagnosticIds:[...pendingOutputs.map(d=>d.id),...(extra?[extra.id]:[])]},assetripper:{state:'available',diagnosticIds:[]}},diagnostics:[...pendingOutputs,...(extra?[extra]:[])]};}
+test('default prerequisite check allows preparation to create pending dump/import outputs',async t=>{
+ const f=await fixture(t),{runPreparation}=await service();
+ const result=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},{...f.dependencies,diagnose:async()=>pendingReport(),invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)});
+ assert.equal(result.state,'succeeded');assert(f.calls.includes('dump'));assert(f.calls.includes('import'));
+ const prerequisites=result.stages.find(s=>s.id==='prerequisites').result;assert.equal(prerequisites.native,true);assert.deepEqual(prerequisites.pendingOutputs.map(d=>d.id),['step.dump','step.import']);assert(prerequisites.pendingOutputs.every(d=>d.status==='pending'));assert(!prerequisites.diagnostics.some(d=>d.id==='step.dump'));
+});
+test('pending outputs never bypass missing tools, bad inputs, busy ownership or unexplained blocked diagnostics',async t=>{
+ const {runPreparation}=await service();
+ for(const extra of [{id:'tool.java',code:'JAVA_RUNTIME_MISSING'},{id:'input.native',code:'NATIVE_INPUT_STALE'},{id:'workspace.busy',code:'WORKSPACE_BUSY'},{id:'step.dump',code:'UNEXPECTED_OUTPUT_CORRUPTION'}]){
+  const f=await fixture(t),report=pendingReport({...extra,status:'blocked',message:'real blocker'});
+  const result=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},{...f.dependencies,diagnose:async()=>report,invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)});
+  assert.equal(result.stages.find(s=>s.id==='prerequisites').result.native,false);assert(!f.calls.includes('dump'));assert.equal(result.stages.find(s=>s.id==='dump').state,'blocked');
+ }
+ for(const prepare of [{state:'blocked'},{state:'unknown'},{state:'ready'},{state:'available'},{state:'blocked',diagnosticIds:['missing-diagnostic']}]){
+  const f=await fixture(t),report=pendingReport();report.tasks.prepare=prepare;
+  const result=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},{...f.dependencies,diagnose:async()=>report,invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)});
+  assert.equal(result.stages.find(s=>s.id==='prerequisites').result.native,false);assert(!f.calls.includes('dump'));
+ }
+});
+test('real doctor keeps output readiness blocked while default setup can run; removing Java still blocks it',async t=>{
+ const f=await fixture(t),{runPreparation}=await service(),{diagnose}=await import('../src/diagnostics.js');
+ f.toolkit.tools=Object.fromEntries(['dumper','java','headless','bridge','python','assetripper'].map(name=>[name,path.join(f.root,'engines',name+'.exe')]));
+ for(const file of Object.values(f.toolkit.tools)){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'owned engine availability fixture');}
+ f.toolkit.tools.ghidra=path.join(f.root,'engines/ghidra');fs.mkdirSync(path.join(f.toolkit.tools.ghidra,'Ghidra'),{recursive:true});fs.writeFileSync(path.join(f.toolkit.tools.ghidra,'Ghidra/application.properties'),'application.version=12.1.2\n');
+ const readDoctor=(toolkit,options)=>diagnose(toolkit,{...options,getSessionStatus:async()=>({state:'stopped'})});
+ const before=await readDoctor(f.toolkit,{name:'Game',task:'prepare'});assert.equal(before.tasks.prepare.state,'blocked');assert(before.diagnostics.some(d=>d.code==='DUMP_EVIDENCE_STALE'));
+ const deps={...f.dependencies,diagnose:readDoctor,invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)};
+ const first=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},deps);assert.equal(first.state,'succeeded');assert(f.calls.includes('dump'));assert.equal(first.stages.find(s=>s.id==='prerequisites').result.native,true);
+ fs.unlinkSync(f.toolkit.tools.java);f.calls.length=0;
+ const blocked=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},deps);assert.equal(blocked.stages.find(s=>s.id==='prerequisites').result.native,false);assert(!f.calls.includes('dump'));assert(blocked.stages.find(s=>s.id==='prerequisites').result.diagnostics.some(d=>d.code==='JAVA_RUNTIME_MISSING'));
+});
+
 test('preparation persists stages before launch, serializes work and publishes compact independent readiness',async t=>{
  const f=await fixture(t),{runPreparation,inspectPreparation}=await service();
  const result=await runPreparation(f.toolkit,'Game',{addressMode:'rva'},f.dependencies);
@@ -213,7 +302,7 @@ test('a current export with verified source and engine fingerprint is reused wit
 test('resource policy adapts heap to available memory, honors explicit policy and never polls for RAM',async t=>{
  const f=await fixture(t),{runPreparation}=await service(),GiB=1024**3;
  f.toolkit.env={};let samples=0;
- const dependencies={...f.dependencies,diagnose:async()=>({tasks:{prepare:{state:'available'},assetripper:{state:'available'}},diagnostics:[]}),getResources:()=>{samples++;return {availableBytes:12*GiB,totalBytes:32*GiB};},invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)};
+ const dependencies={...f.dependencies,diagnose:async()=>({tasks:{prepare:{state:'available',diagnosticIds:[]},assetripper:{state:'available'}},diagnostics:[]}),getResources:()=>{samples++;return {availableBytes:12*GiB,totalBytes:32*GiB};},invokeStage:(id,c)=>id==='prerequisites'?c.runDefault():f.invokeStage(id,c)};
  const first=await runPreparation(f.toolkit,'Game',{symbols:'skip'},dependencies);
  assert.equal(first.resources.native.heapMiB,8192);assert.equal(first.resources.native.source,'adaptive');assert.equal(f.toolkit.env.GHIDRA_HEADLESS_MAXMEM,undefined);assert.equal(samples,1);
  f.toolkit.env.GHIDRA_HEADLESS_MAXMEM='6G';
@@ -222,6 +311,7 @@ test('resource policy adapts heap to available memory, honors explicit policy an
  f.calls.length=0;
  const blocked=await runPreparation(f.toolkit,'Game',{symbols:'skip'},{...dependencies,getResources:()=>({availableBytes:4*GiB,totalBytes:16*GiB})});
  assert.equal(blocked.state,'partial');assert.equal(blocked.readiness.assetsIndex.state,'ready');assert.equal(f.calls.includes('dump'),false);
+ assert.equal(blocked.stages.find(s=>s.id==='dump').error.code,'PREPARATION_MEMORY_INSUFFICIENT');assert.match(blocked.stages.find(s=>s.id==='dump').error.message,/memory|heap/i);
 });
 
 test('symbol write transport failure is unknown, retains operation UUID and stops owned session',async t=>{

@@ -4,7 +4,7 @@ import {assertAssetPath} from '../assets/context.js';
 import {buildDesktopCommand} from './operations.js';
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const operations=new Set(['workspace.import','workspace.analyze','ghidra.symbols.plan','ghidra.symbols.apply','ghidra.session.start']);
+const operations=new Set(['workspace.import','workspace.analyze','ghidra.analysis.ensure','ghidra.symbols.plan','ghidra.symbols.apply','ghidra.session.start']);
 const states=new Set(['pending','queued','running','succeeded','failed','unknown','awaiting-user','stale']);
 const pid=value=>Number.isSafeInteger(value)&&value>0?value:null;
 const date=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?value:null;

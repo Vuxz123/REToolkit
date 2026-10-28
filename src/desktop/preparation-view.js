@@ -9,8 +9,12 @@ const describe=value=>Array.isArray(value)?value.map(describe).join(' · '):type
 const errorText=error=>typeof error==='string'?error:[errorLabels[error.code]??error.message,error.code].filter(Boolean).join(' · ');
 const local=value=>value?new Date(value).toLocaleString('vi-VN'):'Chưa có';
 const active=state=>['running','queued'].includes(state);
+states.deferred='Hoãn theo yêu cầu';
+fieldLabels.mode='Chế độ';
 export function createPreparationOptions({prefix='preparation'}={}){
  const container=make('div',undefined,'preparation-options'),fields={},defaults={};
+ const analysisLabel=make('label','Analysis theo yêu cầu'),analysisMode=make('input');analysisMode.id=prefix+'-analysisMode';analysisMode.type='checkbox';analysisMode.checked=false;analysisLabel.append(analysisMode);container.append(analysisLabel);
+ const analysisNote=make('p','Khi bật, chỉ import Ghidra rồi hoãn phân tích toàn bộ và symbol hàng loạt. Asset tiếp tục; agent yêu cầu phân tích từng phạm vi khi cần.','muted');analysisNote.className+=' preparation-wide';container.append(analysisNote);
  function field(key,title,choices){const label=make('label',title),input=make(choices?'select':'input');input.id=prefix+'-'+key;input.autocomplete='off';if(choices)for(const [value,text]of choices){const option=make('option',text);option.value=value;input.append(option);}input.value=choices?.[0]?.[0]??'';label.append(input);container.append(label);fields[key]=input;return input;}
  field('profile','Mục tiêu',[['reconstruction','Native và asset / reconstruction'],['native','Phân tích native']]);
  field('symbols','Symbol',[['plan','Chỉ lập kế hoạch'],['apply','Áp dụng symbol (cho phép ghi Ghidra)'],['skip','Bỏ qua']]);
@@ -26,7 +30,7 @@ export function createPreparationOptions({prefix='preparation'}={}){
  packages.addEventListener('click',async()=>{const serial=fields.serial.value.trim();if(!serial){discoveryStatus.textContent='Chọn serial trước khi liệt kê package.';return;}packages.disabled=true;try{const result=await window.retk.preparation.packages(serial);if(fields.serial.value.trim()!==serial)return;packageNames.replaceChildren();for(const item of (result.packages??[]).slice(0,1024)){const option=make('option',item.packageName);option.value=item.packageName;packageNames.append(option);}discoveryStatus.textContent='Đã đọc package trên '+serial+'. Chọn package cụ thể trong ô phía trên.';}catch(error){discoveryStatus.textContent=error.message;}finally{packages.disabled=false;}});
  fields.serial.addEventListener('input',()=>packageNames.replaceChildren());
  const note=make('p','Thiết bị và package được lưu trong lần chuẩn bị. Chỉ pull bản cài khớp danh tính build; dữ liệu tải từ xa vẫn có thể chưa xác minh. Áp symbol cần RVA/VA rõ ràng hoặc chính sách hợp lệ đã lưu.','muted');note.className+=' preparation-wide';container.append(note);
- return {element:container,read(){return Object.fromEntries(Object.entries(fields).filter(([,field])=>field.value.trim()).map(([key,field])=>[key,field.value.trim()]));},load(options={}){for(const [key,field]of Object.entries(fields))field.value=options[key]===undefined?defaults[key]:String(options[key]);packageNames.replaceChildren();serials.replaceChildren();discoveryStatus.textContent='';},setDisabled(disabled){for(const field of [...Object.values(fields),devices,packages])field.disabled=disabled;}};
+ return {element:container,read(){return {analysisMode:analysisMode.checked?'on-demand':'full',...Object.fromEntries(Object.entries(fields).filter(([,field])=>field.value.trim()).map(([key,field])=>[key,field.value.trim()]))};},load(options={}){analysisMode.checked=options.analysisMode==='on-demand';for(const [key,field]of Object.entries(fields))field.value=options[key]===undefined?defaults[key]:String(options[key]);packageNames.replaceChildren();serials.replaceChildren();discoveryStatus.textContent='';},setDisabled(disabled){for(const field of [analysisMode,...Object.values(fields),devices,packages])field.disabled=disabled;}};
 }
 export function createPreparationView({onJob=()=>{},onMessage=()=>{},onReport=()=>{}}={}){
  const panel=make('section',undefined,'card preparation');panel.id='preparation';panel.hidden=true;

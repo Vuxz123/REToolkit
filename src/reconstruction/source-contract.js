@@ -104,7 +104,9 @@ export async function analyzeSourceContracts({projectDir,documents,editorPath,si
   const source=textSource(document.source);aggregate+=Buffer.byteLength(source);check(aggregate<=64*MiB,'Source inventory exceeds 64 MiB');
   const omitted=document.omitConstructors;
   if(omitted!==undefined)check(Array.isArray(omitted)&&omitted.length<=32&&omitted.every(c=>c&&Object.keys(c).length===2&&typeof c.fullName==='string'&&c.fullName.length>0&&c.fullName.length<=2048&&['static','instance'].includes(c.kind)),'Invalid omitted constructor selectors');
-  return {path:document.path,source,...(omitted?{omitConstructors:omitted}:{})};
+  const events=document.normalizeEvents;
+  if(events!==undefined)check(Array.isArray(events)&&events.length<=32&&events.every(e=>e&&Object.keys(e).length===2&&typeof e.fullName==='string'&&e.fullName.length>0&&e.fullName.length<=2048&&typeof e.name==='string'&&e.name.length>0&&e.name.length<=512),'Invalid normalized event selectors');
+  return {path:document.path,source,...(omitted?{omitConstructors:omitted}:{}),...(events?{normalizeEvents:events}:{})};
  });
  check(typeof projectDir==='string'&&projectDir.length>0,'Expected project directory');projectDir=assertAssetPath(path.resolve(projectDir));
  let toolchain;

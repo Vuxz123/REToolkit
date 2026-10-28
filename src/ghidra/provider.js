@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { runtimePaths,secureDirectory,atomicJson,readJson,readSession,publicSession,releaseStartupGate } from './runtime.js';
 import { validateProject,verifyBinding,sessionProfile,engineEnvironment } from './environment.js';
 import { connectClient } from './client.js';
+import {validateAnalysisScope} from './analysis-scope.js';
 import { BridgeError,mutationParams } from './protocol.js';
 import { fingerprint,withWorkspaceLock } from '../state.js';
 
@@ -39,6 +40,7 @@ export async function querySession(toolkit,name,method,params={},options={}) {
   try{return await client.request(method,params,options);}finally{client.close();}
 }
 export async function mutateSession(toolkit,name,method,params,{dryRun=false,operationId,...options}={}) {
+  if(method==='analysis.ensure'){validateAnalysisScope(params);options.timeoutMs??=(params.timeoutSeconds??60)*1000+30000;}
   if(method.startsWith('symbols.'))verifySymbolsProfile(toolkit,name);
   const client=await connection(toolkit,name);
   const id=operationId??randomUUID();

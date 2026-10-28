@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {measurePhase} from '../workflow/metrics.js';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {assertAssetPath} from '../assets/context.js';
@@ -6,6 +7,7 @@ import {fingerprint} from '../state.js';
 import {scriptBindings} from './bindings.js';
 import {readUnitySourceMetadata,describeUnitySourceScript} from '../assets/graph.js';
 import {initializationDeclarations,proveInitialization} from './source-initialization.js';
+import {eventStorageDeclarations,proveEventStorage} from './source-event-storage.js';
 
 const fail=message=>{throw Object.assign(new Error(message),{code:'reconstruction_invalid'});};
 const check=(value,message)=>{if(!value)fail(message);};
@@ -28,9 +30,10 @@ async function readSource(projectDir,file){
 /** Re-derived from complete source files, never authorized by a saved hash alone.
  * Unknown assembly scopes cannot silently hide an overlapping type identity.
  * This attests syntax/declaration preservation, not compilation or behavior. */
-export async function prepareBodyCandidates({projectDir,graph,changes,editorPath,dump,evidence=[]}){
- const requested=changes.filter(change=>['bodies','initialization'].includes(change.mode));if(!requested.length)return new Map();
- for(const change of requested)if(change.mode==='initialization')initializationDeclarations(change);
+export async function prepareBodyCandidates(params){return measurePhase('source.parser',()=>prepareBodyCandidatesCore(params));}
+async function prepareBodyCandidatesCore({projectDir,graph,changes,editorPath,dump,evidence=[]}){
+ const requested=changes.filter(change=>['bodies','initialization','event-storage'].includes(change.mode));if(!requested.length)return new Map();
+ for(const change of requested){if(change.mode==='initialization')initializationDeclarations(change);if(change.mode==='event-storage')eventStorageDeclarations(change);}
  check(requested.every(change=>typeof change.source==='string'&&Buffer.byteLength(change.source)>0&&Buffer.byteLength(change.source)<=1024**2),'Invalid body replacement source size');
  const targets=requested.map(change=>({change,asset:eligible(graph,change.scriptId)})),assemblies=new Set(targets.map(({asset})=>asset.script.assembly));
  // Re-derive compiler membership from the complete file inventory. A forged
@@ -45,8 +48,8 @@ export async function prepareBodyCandidates({projectDir,graph,changes,editorPath
   // receipt verifier below the caller's journal gate still checks every file.
   const published=replacement?.afterSha256===sha256&&replacement?.afterSize===current.bytes.length&&sha256===hash(replacement.source);
   check(sha256===file.sha256&&current.bytes.length===file.size||published,'Source inventory changed during declaration analysis');
-  if(replacement?.mode==='initialization'&&replacement.initializationProof){
-   const baseline=replacement.initializationProof.originalSource;
+  if((replacement?.mode==='initialization'&&replacement.initializationProof)||(replacement?.mode==='event-storage'&&replacement.eventStorageProof)){
+   const baseline=(replacement.initializationProof??replacement.eventStorageProof).originalSource;
    check(typeof baseline==='string'&&Buffer.byteLength(baseline)<=1024**2&&hash(baseline)===file.sha256&&Buffer.byteLength(baseline)===file.size,'Initialization proof original source is not the graph inventory source');
    current.source=baseline;
   }
@@ -57,19 +60,22 @@ export async function prepareBodyCandidates({projectDir,graph,changes,editorPath
   const definition=actual.script.assemblyDefinition;check(!definition||['includePlatforms','excludePlatforms','defineConstraints'].every(key=>definition[key]?.length===0),'Constrained compiler assembly declaration identity changed');}
  check(sources.length<=10000,'Body declaration inventory exceeds 10000 files');
  const documents=[],current=new Map();
- for(const asset of sources){const item=sourceReads.get(asset.path);current.set(asset.path,item);documents.push({path:asset.path,source:item.source});}
- for(const {change,asset} of targets)documents.push({path:afterPath(asset.path),source:change.source,...(change.mode==='initialization'?{omitConstructors:change.constructors.map(({fullName,kind})=>({fullName,kind}))}:{})});
+ for(const asset of sources){const item=sourceReads.get(asset.path);current.set(asset.path,item);const selection=targets.find(t=>t.asset.path===asset.path)?.change;documents.push({path:asset.path,source:item.source,...(selection?.mode==='event-storage'?{normalizeEvents:selection.events.map(({fullName,name})=>({fullName,name}))}:{})});}
+ for(const {change,asset} of targets)documents.push({path:afterPath(asset.path),source:change.source,...(change.mode==='event-storage'?{normalizeEvents:change.events.map(({fullName,name})=>({fullName,name}))}:{}),...(change.mode==='initialization'?{omitConstructors:change.constructors.map(({fullName,kind})=>({fullName,kind}))}:{})});
  const {analyzeSourceContracts}=await import('./source-contract.js');
  const analysis=await analyzeSourceContracts({projectDir,documents,editorPath}),results=new Map(analysis.documents.map(doc=>[doc.path,{...doc,parser:analysis.parser}])),candidates=new Map();
  for(const {change,asset} of targets){
   const before=results.get(asset.path),after=results.get(afterPath(asset.path));
   check(before?.supported&&after?.supported,`Unsupported body declaration contract: ${before?.reason??after?.reason??'parser result missing'}`);
-  const contract={...preservedContract(before),...(change.mode==='initialization'?{tokenSha256:before.tokenSha256}:{})};
-  let initializationProof;
+  const contract={...preservedContract(before),...(['initialization','event-storage'].includes(change.mode)?{tokenSha256:before.tokenSha256}:{})};
+  let initializationProof,eventStorageProof;
   if(change.mode==='initialization'){
    const saved=change.initializationProof;
    initializationProof=proveInitialization({change,before,after,originalSource:current.get(asset.path).source,assembly:asset.script.assembly,graph,dump,evidence:saved?saved.constructors?.map(c=>c.evidence):evidence});
    if(saved)check(fingerprint(saved)===fingerprint(initializationProof),'Initialization proof metadata, native evidence or syntax contract changed');
+  }else if(change.mode==='event-storage'){
+   const saved=change.eventStorageProof;eventStorageProof=proveEventStorage({change,before,after,originalSource:current.get(asset.path).source,assembly:asset.script.assembly,graph,dump,evidence:saved?saved.events.flatMap(e=>[e.addEvidence,e.removeEvidence]):evidence});
+   if(saved)check(fingerprint(saved)===fingerprint(eventStorageProof),'Event storage proof metadata, native evidence or syntax contract changed');
   }else check(fingerprint(contract)===fingerprint(preservedContract(after)),'Body replacement changes a declaration, field initializer or accessor contract');
   const types=before.types;check(Array.isArray(types)&&types.length>0&&new Set(types.map(t=>t.fullName)).size===types.length,'Ambiguous or missing compiler declaration identity');
   const names=new Set(types.map(t=>t.name)),fullNames=new Set(types.map(t=>t.fullName));
@@ -91,7 +97,7 @@ export async function prepareBodyCandidates({projectDir,graph,changes,editorPath
    targetKind=generic?'generic-source':'data-source';
   }else check(meta,'Body source GUID requires its existing meta identity');
   const bytes=current.get(asset.path).bytes;
-  candidates.set(change.scriptId,{asset,beforeSha256:hash(bytes),identity:{assembly:asset.script.assembly,targetKind,contract},...(initializationProof?{initializationProof}:{})});
+  candidates.set(change.scriptId,{asset,beforeSha256:hash(bytes),identity:{assembly:asset.script.assembly,targetKind,contract},...(initializationProof?{initializationProof}:{}),...(eventStorageProof?{eventStorageProof}:{})});
  }
  return candidates;
 }

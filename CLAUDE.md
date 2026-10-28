@@ -91,6 +91,14 @@ owning GUI project; for interactive work, use its existing MCP server.
 Auto Analysis, symbols, correct program selection or MCP readiness. Manual GUI
 steps stay awaiting user action/unknown until separately verified.
 
+Preparation `analysisMode` is optional (`full` default, `on-demand` enabled by
+the desktop checkbox/CLI flag). Deferred native analysis/bulk symbols are
+intentional in on-demand mode; use `analysis targets` and explicit bounded
+`analysis ensure`, also exposed as typed `ghidra.analysis.targets/ensure` jobs.
+Follow the gameplay task and required dependencies, exclude known ads/telemetry
+SDK internals by default, retain unknown code, and never infer complete xrefs
+from a scoped receipt. See docs/ghidra-bridge.md for range/mutation limits.
+
 ## Skills And Documentation
 
 For full reconstruction tasks use `skills/retoolkit-game-reconstruction/SKILL.md`

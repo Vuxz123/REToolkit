@@ -7,15 +7,17 @@ const inputPath={type:'string',minLength:1,maxLength:32767,pattern:'^[^\\x00-\\x
 const inputSelection={properties:{input:inputPath,binary:inputPath,metadata:inputPath},required:['input']};
 const threadId={type:'string',pattern:'^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$'};
 export const pipelineDefinitions={
- 'agent.wake_after':{properties:{jobId:uuid,threadId,task:{type:'string',enum:['observe-job','verify-source-and-scoped-unity']},operationId:uuid,assetIds:{type:'array',minItems:1,maxItems:1000,items:{type:'string',minLength:1,maxLength:2048}},waitTimeoutSeconds:integer(1,86400)},required:['jobId','threadId','task'],oneOf:[{properties:{task:{const:'observe-job'}}},{properties:{task:{const:'verify-source-and-scoped-unity'}},required:['operationId','assetIds']}]},
+ 'agent.wake_after':{properties:{jobId:uuid,threadId,runId:uuid,task:{type:'string',enum:['observe-job','verify-source-and-scoped-unity','continue-reconstruction']},operationId:uuid,assetIds:{type:'array',minItems:1,maxItems:1000,items:{type:'string',minLength:1,maxLength:2048}},waitTimeoutSeconds:integer(1,86400)},required:['jobId','threadId','task'],oneOf:[{properties:{task:{const:'observe-job'}}},{properties:{task:{const:'verify-source-and-scoped-unity'}},required:['operationId','assetIds']},{properties:{task:{const:'continue-reconstruction'}},required:['runId']}]},
  'workspace.status':{properties:{}},'workspace.dump':{properties:{}},
  'workspace.inputs.resolve':{properties:{policy:{type:'string',enum:['prefer-arm64','manual']}}},
  'workspace.add':inputSelection,'workspace.scan':inputSelection,
  'workspace.import':{properties:{reimport:bool}},
  'workspace.analyze':{properties:{}},
- 'workspace.prepare':{properties:{profile:{type:'string',enum:['native','reconstruction']},symbols:{type:'string',enum:['plan','apply','skip']},addressMode:{type:'string',enum:['rva','va']},serial:{type:'string',minLength:1,maxLength:255,pattern:'^[A-Za-z0-9_][A-Za-z0-9_.:\\[\\]-]*$'},packageName:{type:'string',minLength:1,maxLength:255,pattern:'^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]*)+$'},autoPull:bool,includeData:bool,baselineValidation:bool,resumeRunId:uuid}},
+ 'workspace.prepare':{properties:{analysisMode:{type:'string',enum:['full','on-demand']},profile:{type:'string',enum:['native','reconstruction']},symbols:{type:'string',enum:['plan','apply','skip']},addressMode:{type:'string',enum:['rva','va']},serial:{type:'string',minLength:1,maxLength:255,pattern:'^[A-Za-z0-9_][A-Za-z0-9_.:\\[\\]-]*$'},packageName:{type:'string',minLength:1,maxLength:255,pattern:'^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]*)+$'},autoPull:bool,includeData:bool,baselineValidation:bool,resumeRunId:uuid}},
  'ghidra.session.start':{properties:{write:bool,timeoutMs:integer(1,300000),idleMs:integer(1000,86400000)}},
  'ghidra.session.status':{properties:{}},'ghidra.session.stop':{properties:{timeoutMs:integer(1,300000)}},
+ 'ghidra.analysis.targets':{properties:{focus:{type:'string',enum:['gameplay','all']},query:{type:'string',maxLength:2048},limit:integer(1,1000),cursor:{type:'string',minLength:1,maxLength:4096}}},
+ 'ghidra.analysis.ensure':{properties:{address:{type:'string',pattern:'^(?:[A-Za-z_][\\w.-]*:)?0x[0-9a-fA-F]{1,16}$'},endAddress:{type:'string',pattern:'^(?:[A-Za-z_][\\w.-]*:)?0x[0-9a-fA-F]{1,16}$'},kind:{type:'string',enum:['disassemble','function','stack']},reason:{type:'string',minLength:1,maxLength:2048},timeoutSeconds:integer(1,300),dryRun:bool,operationId:uuid},required:['address','endAddress','kind','reason']},
  'ghidra.symbols.plan':{properties:{addressMode:{type:'string',enum:['rva','va']},createFunctions:bool,replaceUserNames:bool,replaceUserComments:bool},required:['addressMode']},
  'ghidra.symbols.apply':{properties:{plan:{type:'string',minLength:1,maxLength:4096},planHash:{type:'string',pattern:'^[a-f0-9]{64}$'},dryRun:bool,operationId:uuid},required:['plan','planHash']},
 };

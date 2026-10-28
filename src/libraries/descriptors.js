@@ -7,6 +7,7 @@ export const libraryDescriptors = Object.freeze([
   {id:'unitask',aliases:['UniTask'],namespaces:['Cysharp.Threading.Tasks'],assemblies:['UniTask']},
   {id:'newtonsoft-json',aliases:['Newtonsoft.Json','JSON.NET'],namespaces:['Newtonsoft.Json'],assemblies:['Newtonsoft.Json'],packageIds:['com.unity.nuget.newtonsoft-json']},
   {id:'textmeshpro',aliases:['TextMesh Pro','TMP'],namespaces:['TMPro'],assemblies:['Unity.TextMeshPro'],packageIds:['com.unity.textmeshpro']},
+  {id:'ugui',aliases:['Unity UI','uGUI'],namespaces:['UnityEngine.UI','UnityEngine.EventSystems'],assemblies:['UnityEngine.UI'],packageIds:['com.unity.ugui']},
   {id:'cinemachine',aliases:['Cinemachine'],namespaces:['Cinemachine','Unity.Cinemachine'],packageIds:['com.unity.cinemachine']},
   {id:'input-system',aliases:['Input System'],namespaces:['UnityEngine.InputSystem'],packageIds:['com.unity.inputsystem']},
   {id:'urp',aliases:['Universal Render Pipeline'],namespaces:['UnityEngine.Rendering.Universal'],packageIds:['com.unity.render-pipelines.universal']},

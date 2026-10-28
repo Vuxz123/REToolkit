@@ -13,14 +13,21 @@ function selectedBuild(project){
   if(build.native.sha256!==project.identities.native?.sha256||build.metadata.sha256!==project.identities.metadata?.sha256)throw artifactError('input_changed','Selected inputs changed; scan/import the matching build');
   return build;
 }
-export async function captureEvidence(toolkit,name,{kind,selector,direction='to',limit=100,out},{query=querySession}={}){
+export async function captureEvidence(toolkit,name,{kind,selector,endAddress,direction='to',limit=100,out},{query=querySession}={}){
   const project=toolkit.read(name);const folder=externalOutput(toolkit,out??path.join(toolkit.root,'exports/evidence',name));
   if(!Number.isInteger(limit)||limit<1||limit>1000)throw artifactError('invalid_argument','Evidence limit must be 1..1000');
   let method,params;
   if(kind==='decompile'){if(typeof selector!=='string'||!selector)throw artifactError('invalid_argument','Decompile requires a selector');method='functions.decompile';params={selector,limit};}
   else if(kind==='xrefs'){if(!address.test(selector??'')||!['to','from'].includes(direction))throw artifactError('invalid_argument','Xrefs require a hex address and direction to|from');method='references.list';params={address:selector,direction,limit};}
   else if(kind==='functions'){method='functions.list';params={limit,...(selector?{query:selector}:{})};}
-  else throw artifactError('invalid_argument','Evidence kind must be decompile|xrefs|functions');
+  else if(kind==='instructions'){
+    if(!address.test(selector??'')||!address.test(endAddress??''))throw artifactError('invalid_argument','Instruction evidence requires exact --selector and --end-address');
+    const parse=v=>{const p=v.split(':');return {space:p.length===2?p[0]:'ram',value:BigInt(p.at(-1))};},a=parse(selector),b=parse(endAddress);
+    if(a.space!==b.space||b.value<a.value||b.value-a.value>=65536n)throw artifactError('invalid_argument','Instruction evidence requires an inclusive range of 1..65536 bytes');
+    method='instructions.list';params={address:selector,endAddress,limit};
+  }
+  else throw artifactError('invalid_argument','Evidence kind must be decompile|xrefs|functions|instructions');
+  if(kind!=='instructions'&&endAddress!==undefined)throw artifactError('invalid_argument','endAddress is only supported for instruction evidence');
   const build=selectedBuild(project);
   const response=await query(toolkit,name,method,params);
   if(response?.ok!==true||!response.result||!Number.isSafeInteger(response.revision)||response.revision<0||

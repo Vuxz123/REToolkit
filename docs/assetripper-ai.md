@@ -189,6 +189,21 @@ The MCP surface follows the
 [lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle)
 and [tools protocol](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
+## Serialized scalar fidelity
+
+Unity compact arrays can be written as unquoted little-endian hexadecimal;
+some byte sequences also look like YAML scientific notation. The graph reader
+preserves the exact bytes at the known font glyph-array path. For other fields,
+a numeric scalar that also matches a packed hex encoding is retained as
+`{kind:"ambiguous-unity-scalar", source:"<original lexeme>", readOnly:true}`.
+This preserves data without claiming the original element type or silently
+coercing it to Infinity/null. Inspect the script/type declaration and original
+asset before decoding such a token. No map, sequence or reference is omitted.
+Sprite `m_RenderDataKey` GUID keys retain all 32 characters, including leading
+zeros. Numeric keys outside that exact schema, nonfinite floats outside compact
+ambiguity, unsafe YAML and malformed fileID/guid references remain rejected.
+See Unity's [text serialization format](https://docs.unity.com/en-us/engine/7000.0/manual/working-with-scenes/text-scene-format/format-description).
+
 Qualification distinguishes source-owned fixture export/reconstruction, actual
 installed engine startup/OpenAPI/stop, and Unity compilation/gameplay. Run
 `npm test`, `npm run test:legacy`, and

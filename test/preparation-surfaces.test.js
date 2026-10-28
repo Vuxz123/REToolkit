@@ -47,3 +47,15 @@ test('owned Ghidra session receives the preparation heap policy',async()=>{
  const {engineEnvironment}=await import('../src/ghidra/environment.js'),root=await fs.mkdtemp(path.join(os.tmpdir(),'retk-preparation-heap-'));
  try{const env=engineEnvironment({tools:{jdk:'jdk',ghidra:'ghidra'},env:{PATH:'path',GHIDRA_HEADLESS_MAXMEM:'5G'}},root);assert.equal(env.GHIDRA_HEADLESS_MAXMEM,'5G');}finally{await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('preparation CLI and job schema accept only full or on-demand analysis modes',async()=>{
+ const {parsePreparationArgs}=await import('../src/preparation/cli.js');
+ for(const analysisMode of ['full','on-demand']){
+  assert.doesNotThrow(()=>validateAssetParamsForJob('workspace.prepare',{analysisMode}));
+  assert.equal(parsePreparationArgs(['prepare','Game','--analysis-mode',analysisMode]).params.analysisMode,analysisMode);
+ }
+ assert.deepEqual(parsePreparationArgs(['prepare','Game']).params,{});
+ assert.throws(()=>validateAssetParamsForJob('workspace.prepare',{analysisMode:'all'}));
+ assert.throws(()=>parsePreparationArgs(['prepare','Game','--analysis-mode','all']));
+ assert.throws(()=>parsePreparationArgs(['preparation','Game','--analysis-mode','full']));
+});

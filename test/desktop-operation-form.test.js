@@ -21,6 +21,11 @@ test('operation form uses enum, boolean and bounded numeric controls',async t=>{
  field('autoPull').value='false';field('symbols').value='plan';await form.submit();assert.equal(submitted[0].payload.autoPull,'false');
  form.select('assets.index');assert.equal(field('storage').tag,'select');assert.equal(field('graphMaxMiB').type,'number');field('graphMaxMiB').value='64';await form.submit();assert.equal(submitted.length,1);
 });
+test('recovery form distinguishes artifact UUID revision and typed method from input SHA256 and operation UUID',async t=>{
+ const {form,field,submitted,messages}=await setup(t);form.select('recovery.run');field('artifactId').value=id;field('artifactRevision').value=id;
+ assert.equal(field('method').tag,'select');field('method').value='assets.index';field('paramsFile').value='C:/owned/params.json';await form.submit();
+ assert.equal(submitted.length,1,JSON.stringify(messages));assert.equal(submitted[0].payload.method,'assets.index');assert.equal(submitted[0].payload.artifactRevision,id);
+});
 test('operation scope converts newline IDs and rejects malformed or duplicate JSON before submission',async t=>{
  const {form,field,submitted,messages}=await setup(t);form.select('reconstruct.validate');field('assetIds').value='asset:1\nasset:2';await form.submit();assert.equal(submitted[0].payload.assetIds,'["asset:1","asset:2"]');
  field('assetIds').value='["same","same"]';await form.submit();assert.equal(submitted.length,1);assert.match(messages.at(-1),/assetIds/);

@@ -1,6 +1,7 @@
 // Pure presentation data: this module also runs in the isolated browser renderer.
 const LIMIT = Object.freeze({depth:6, rows:50, fields:40, nodes:1200, value:4096, text:12000, raw:65536});
 const labels = Object.freeze({
+  componentId:'Component ID',targetId:'Đích mapping',componentPlanId:'Kế hoạch component',migrationOperationId:'Migration đã tạo',observationId:'Quan sát Editor',origin:'Nguồn type',implementation:'Triển khai runtime',groupCount:'Nhóm component',targetCount:'Type ứng viên',samplesComplete:'Mẫu gồm toàn bộ instance',blockers:'Điểm chặn',from:'Binding hiện tại',to:'Binding đích',writable:'Cho phép rebind',observed:'Đã quan sát type',counts:'Số lượng theo trạng thái',
   id:'ID', name:'Tên', state:'Trạng thái', status:'Trạng thái', ok:'Thành công', valid:'Hợp lệ',
   error:'Lỗi', errors:'Lỗi', code:'Mã', message:'Thông báo', reason:'Lý do', notice:'Lưu ý',
   path:'Đường dẫn', file:'Tệp', files:'Tệp', storedResult:'Kết quả đầy đủ', source:'Mã nguồn',
@@ -127,6 +128,17 @@ function metricsFor(job,result) {
 }
 
 function statusFor(job,result,metrics) {
+  const qualification=result.kind==='retoolkit-data-baseline-qualification'?result:result.result?.kind==='retoolkit-data-baseline-qualification'?result.result:null;
+  if(qualification&&job.state==='succeeded')return {tone:'info',label:'Baseline gốc đủ bằng chứng dữ liệu',description:'Đã xác minh dữ liệu và script của các ScriptableObject đã chọn từ bằng chứng gốc. Receipt partial cũ được giữ nguyên; định danh source toàn project và gameplay cần kiểm chứng riêng.'};
+  const component=result.kind==='retoolkit-component-operation'?result:result.result?.kind==='retoolkit-component-operation'?result.result:null;
+  if(component&&job.state==='succeeded')return {tone:component.state==='blocked'?'warn':'info',label:component.state==='blocked'?'Mapping còn bị chặn':'Đã ghi nhận mapping component',description:'Xem type, thư viện và các điểm chặn. Áp dụng chỉ tạo staging; binding cần quan sát lại bằng Unity, gameplay có kiểm chứng riêng.'};
+  const dataContract=result.kind==='retoolkit-data-contract'?result:result.result?.kind==='retoolkit-data-contract'?result.result:null;
+  if(dataContract){
+    const result=dataContract;
+    if(result.command==='capture')return {tone:'info',label:result.dataCaptureComplete?'Đã lưu baseline':'Baseline chưa đầy đủ',description:'Baseline ghi dữ liệu tham chiếu; chưa xác minh bản tái dựng hay gameplay. Xem coverage và lý do còn thiếu.'};
+    return {tone:result.dataPreserved===true?'good':'warn',label:result.dataPreserved===true?'Dữ liệu khớp baseline':'Dữ liệu chưa được xác minh',description:'Đối chiếu trên các ScriptableObject đã chọn. Runtime initialization và gameplay có kết quả riêng.'};
+  }
+  if(result.kind==='retoolkit-reconstruction-run'&&result.complete!==true)return {tone:'warn',label:'Mục tiêu chưa hoàn tất',description:result.state==='waiting-agent'?'Đang chờ agent nhận lại việc. Gửi thông báo thành công chưa xác nhận agent đã tiếp tục.':'Checklist gameplay còn bước chưa được xác minh; xem bước tiếp theo hoặc lý do bị chặn.'};
   const interrupted=[job.error,result.error].some(error=>error?.code==='DESKTOP_INTERRUPTED');
   const uncertainSession=job.operation==='agent.session'&&job.state==='unverified';
   if(job.state==='unknown'||interrupted||uncertainSession||job.state!=='failed'&&[result.state,result.status].includes('unknown'))return {tone:'warn',label:'Cần kiểm tra kết quả',description:job.operation==='agent.session'?'Trạng thái phiên chưa xác minh. Kiểm tra bản ghi terminal và tiến trình; chưa có bằng chứng MCP đã kết nối hoặc Agent đã tiếp tục.':'Kết quả tác vụ chưa xác định. Kiểm tra operation, ownership và receipt đã lưu trước khi thực hiện thêm thao tác ghi hoặc thử lại.'};
@@ -173,10 +185,20 @@ export function buildResultModel(job,{operationLabel}={}) {
     add('Bản xem trước','Đây là bản xem trước có giới hạn. Sao chép đường dẫn kết quả đầy đủ để xem toàn bộ dữ liệu.','notice');
   }
   if(envelope.error)add('Lỗi của lệnh',envelope.error);
+  const dataContract=result.kind==='retoolkit-data-contract'?result:result.result?.kind==='retoolkit-data-contract'?result.result:null;
+  if(dataContract){
+    add('Dữ liệu ScriptableObject',{state:dataContract.state,baselineId:dataContract.baselineId,dataCaptureComplete:dataContract.dataCaptureComplete,dataPreserved:dataContract.dataPreserved,schemaCompatible:dataContract.schemaCompatible,coverage:dataContract.coverage,reason:dataContract.reason,runtimeInitialized:dataContract.runtimeInitialized,gameplay:dataContract.gameplay,storedRaw:dataContract.storedRaw,storedData:dataContract.storedData});
+    if(dataContract.differences?.length)add('Khác biệt dữ liệu',dataContract.differences);
+  }
+  const component=result.kind==='retoolkit-component-operation'?result:result.result?.kind==='retoolkit-component-operation'?result.result:null;
+  if(component){add('Mapping component',{state:component.state,total:component.total,groupCount:component.groupCount,targetCount:component.targetCount,counts:component.counts,implementation:component.implementation,bindingsVerified:component.bindingsVerified,gameplay:component.gameplay,storedRecord:component.storedRecord});if(component.blockers?.length)add('Điểm chặn mapping',component.blockers);}
+  if(result.kind==='retoolkit-reconstruction-run')add('Tiến trình tái dựng gameplay',{goal:result.goal,state:result.state,complete:result.complete,agentResumed:result.agentResumed,nextStep:result.nextStep,waiting:result.waiting,continuation:result.continuation,steps:result.steps});
+  if(Array.isArray(envelope.phaseMetrics??result.phaseMetrics))add('Thời gian từng pha',envelope.phaseMetrics??result.phaseMetrics);
   if(result.error)add('Lỗi kết quả',result.error);
   if(Array.isArray(result.errors)&&result.errors.length)add('Các lỗi kết quả',result.errors);
   if(['running','queued'].includes(envelope.state)&&record(envelope.validationProgress))add('Tiến độ Unity',envelope.validationProgress);
   if(['running','queued'].includes(envelope.state)&&record(envelope.assetProgress))add('Tiến độ source / index',envelope.assetProgress);
+  if(['running','queued'].includes(envelope.state)&&record(envelope.recoveryProgress))add('Tiến độ bản tái dựng',envelope.recoveryProgress);
   if(result.kind==='retoolkit-unity-validation'&&record(result.resume))add('Tiếp tục kiểm chứng',{...result.resume,hướngDẫn:'Chọn Kiểm chứng bằng Unity, điền Operation cần tiếp tục. Chỉ tái sử dụng kết quả còn khớp source, Editor và helper.'});
   if(Object.hasOwn(envelope,'result')){
     const isTechnical=([key,value])=>bookkeepingKeys.has(key)&&scalar(value);

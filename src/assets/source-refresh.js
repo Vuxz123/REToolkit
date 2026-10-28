@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {measurePhase} from '../workflow/metrics.js';
 import syncFs from 'node:fs';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
@@ -28,7 +29,8 @@ export async function discardSourceRefresh(graph,graphFile){
 
 /** A complete current graph and a verified source receipt are required.
  * Saved JSON reconstruction graphs omit serialized rows and cannot be used here. */
-export async function refreshSourceGraph({projectDir,graph,graphFile,receipt,onProgress=()=>{}}){
+export async function refreshSourceGraph(params){return measurePhase('graph.refresh',()=>refreshSourceGraphCore(params));}
+async function refreshSourceGraphCore({projectDir,graph,graphFile,receipt,onProgress=()=>{}}){
  assertGraphManifest(graph);const {receiptSha256,...unsigned}=receipt;
  check(receipt.kind==='retoolkit-reconstruction-receipt'&&receipt.schemaVersion===1&&receiptSha256===fingerprint(unsigned),'Invalid source receipt');
  check(receipt.graphRevision===graph.revision&&fingerprint(receipt.binding)===fingerprint(graph.binding),'Receipt baseline differs from graph');

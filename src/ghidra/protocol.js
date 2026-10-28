@@ -6,7 +6,7 @@ export const REQUEST_LIMIT=64*1024;
 export const RESPONSE_LIMIT=2*1024*1024;
 export const methods=new Set(['session.status','session.stop','control.attach','control.heartbeat',
   'functions.list','functions.get','functions.decompile','instructions.list','references.list',
-  'strings.search','memory.read','functions.rename','comments.set','symbols.plan','symbols.apply']);
+  'strings.search','memory.read','functions.rename','comments.set','symbols.plan','symbols.apply','analysis.ensure']);
 export class BridgeError extends Error {
   constructor(code,message,details={}) {super(message); this.name='BridgeError'; this.code=code; Object.assign(this,details);}
 }

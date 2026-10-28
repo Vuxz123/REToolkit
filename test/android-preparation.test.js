@@ -34,6 +34,12 @@ async function fixture(t){
  return {root,toolkit,workspace,input,dependencies,counts:()=>({pulls,captures,adds}),operations};
 }
 async function api(){const module=await import('../src/adb/preparation.js').catch(()=>({}));assert.equal(typeof module.runAndroidPreflight,'function','Android preflight must be implemented');return module;}
+test('invalid APK set keeps bounded inspection reasons in its receipt without device recovery',async t=>{
+ const f=await fixture(t),{runAndroidPreflight}=await api(),reasons=Array.from({length:20},(_,i)=>`Bad manifest ${i}: `+'x'.repeat(1800));
+ const result=await runAndroidPreflight(f.toolkit,'Game',{}, {...f.dependencies,inspectSet:async()=>({state:'invalid',reasons})});
+ assert.equal(result.state,'blocked');assert.equal(result.inspectionIssues.length,16);assert(result.inspectionIssues.every(v=>v.length<=1024));assert.equal(result.omittedInspectionIssues,4);assert.deepEqual(f.counts(),{pulls:0,captures:0,adds:0});
+ const receipt=JSON.parse(await fs.readFile(path.join(f.workspace,result.receipt),'utf8'));assert.deepEqual(receipt.inspectionIssues,result.inspectionIssues);
+});
 
 test('ADB preparation deadlines report pending cleanup without claiming or killing a running child',async()=>{
  const {boundedAdbRun}=await api();assert.equal(typeof boundedAdbRun,'function');

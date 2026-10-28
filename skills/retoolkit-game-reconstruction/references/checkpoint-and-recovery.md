@@ -60,6 +60,15 @@ do not authenticate tool results.
 
 ## Waiting and continuation
 
+Prefer `workflow_wait` when a durable reconstruction run exists. It binds the
+exact job/step and, for Codex, registers continue-reconstruction on the claimed
+thread. Inspect actual watcher readiness before leaving a turn. On delivery,
+read workflow_status, claim with its current sequence, checkpoint the terminal
+job and continue the earliest unfinished dependency. Queued without a new claim
+is still waiting-agent. Keep active waits for unsupported harnesses; do not
+duplicate the legacy watcher below for the same producer. See checkout
+`docs/reconstruction-continuity.md` for DTOs and gameplay acceptance limits.
+
 A background worker finishing does not start another agent turn. For short
 waits call `jobs_wait {jobId,timeoutSeconds:25}`; a timed-out wait leaves the same
 producer running. Do not substitute a prose promise for an actual subscription.

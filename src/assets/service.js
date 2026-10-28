@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
-import {assetPaths,selectedAssetBinding,assertAssetPath,assetError,safeAssetExportPath} from './context.js';
+import {assetPaths,selectedAssetBinding,assertAssetPath,assetError,assetProjectPath} from './context.js';
 import {indexUnityProject,locateUnityProject,verifyGraphFiles,queryGraph,UNITY_PROJECT_LIMITS} from './graph.js';
 import {createValidationSourceSnapshot} from './validation-snapshot.js';
 import {refreshSourceGraph,assertSourceRefreshFresh,discardSourceRefresh} from './source-refresh.js';
 import {assertGraphManifest,isSqliteGraph,openStoredGraph,verifyStoredGraph,focusStoredScriptGraph} from './graph-storage.js';
 import {buildScriptMap} from '../reconstruction/map.js';
 import {createReconstructionPlan,applyReconstructionPlan,verifyReconstruction} from '../reconstruction/plan.js';
+import {readMetadataEventDefinitions} from '../reconstruction/dump-events.js';
 import {initializationContext} from '../reconstruction/initialization-context.js';
 import {reconstructionPreview} from '../reconstruction/preview.js';
 import {readMetadataImageRanges} from '../reconstruction/dump-images.js';
@@ -34,9 +35,9 @@ function writeJson(file,value,{exclusive=false,maxBytes=128*MiB,compact=false}={
 function paramsShape(params,allowed) {
   if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(k=>!allowed.includes(k)))throw assetError('asset_params_invalid','Unknown or invalid asset parameters');
 }
-async function exportRoot(selected) {
-  const directory=safeAssetExportPath(selected.workspace,selected.project.reconstructedSourceDir??path.join(selected.workspace,'05_ReconstructedSource'),selected.inputPath);
-  if(within(directory,path.join(selected.workspace,'04_Notes'))||within(directory,selected.inputPath)||within(selected.inputPath,directory))throw assetError('asset_path_invalid','Export directory overlaps input or notes');
+async function exportRoot(selected,toolkit,name) {
+  const directory=assetProjectPath(toolkit,name,selected);
+  if(within(directory,selected.inputPath)||within(selected.inputPath,directory))throw assetError('asset_path_invalid','Export directory overlaps input');
   const projectDir=await locateUnityProject(directory);assertAssetPath(projectDir,selected.workspace);return projectDir;
 }
 function currentGraph(paths,selected) {
@@ -59,7 +60,7 @@ async function recordAssetState(toolkit,name,binding,change) {
   project.assetReconstruction={...(previous?.binding&&fingerprint(previous.binding)===fingerprint(binding)?previous:{}),binding,...change,compileReady:false,bindingsVerified:false,behavior:'unverified'};
   await toolkit.save(name,project);
 }
-function verifiedDump(toolkit,selected) {
+function verifiedDump(toolkit,selected,{events=false}={}) {
   const file=assertAssetPath(path.join(selected.workspace,'02_Il2CppDumperOutput/dump.cs'),selected.workspace);
   if(!fs.existsSync(file))return undefined;
   const stat=fs.lstatSync(file);if(!stat.isFile()||stat.size>128*MiB)throw assetError('asset_payload_limit','Dump source exceeds limit');
@@ -68,7 +69,7 @@ function verifiedDump(toolkit,selected) {
   try{verified=reusable(selected.project,'dump',stepFingerprint(selected.project,'dump',toolkit.tools,toolkit.root));}catch{}
   const text=fs.readFileSync(file,'utf8');
   const imageRanges=verified&&/^\/\/ Image \d+: .+?\.dll - Il2CppDumper\.TypeDefinitionIndex\s*$/m.test(text)?readMetadataImageRanges(selected.project.metadata,selected.binding.metadata):undefined;
-  return {text,sha256:createHash('sha256').update(text).digest('hex'),verified,build:selected.binding,...(imageRanges?{imageRanges}:{})};
+  return {text,sha256:createHash('sha256').update(text).digest('hex'),verified,build:selected.binding,...(imageRanges?{imageRanges}:{}),...(verified&&events?{eventDefinitions:readMetadataEventDefinitions(selected.project.metadata,selected.binding.metadata)}:{})};
 }
 function pageScripts(map,params) {
   const limit=params.limit??100;
@@ -91,7 +92,7 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
   if(!assetMethods.has(method))throw assetError('asset_method_invalid','Unknown asset operation');
   const paths=assetPaths(toolkit,name);
   if(!ownsWorkspaceLock(paths.workspace))throw assetError('asset_lease_required','Asset operation requires the workspace lease');
-  const selected=selectedAssetBinding(toolkit,name),projectDir=await exportRoot(selected);
+  const selected=selectedAssetBinding(toolkit,name),projectDir=await exportRoot(selected,toolkit,name);
   if(method==='assets.index') {
     paramsShape(params,['graphMaxMiB','storage']);if(params.storage!==undefined&&!['json','sqlite'].includes(params.storage)||params.graphMaxMiB!==undefined&&(![128,256,512].includes(params.graphMaxMiB)||params.storage==='sqlite'))throw assetError('asset_params_invalid','Invalid graph storage or JSON budget');
     const graphLimitBytes=(params.graphMaxMiB??128)*MiB,graph=await indexOwnedGraph(projectDir,selected.binding,paths,{storage:params.storage??'json',graphLimitBytes,onProgress:graphProgress(toolkit)});
@@ -122,7 +123,7 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
       if(complete(current)&&current.revision===saved.graph.revision&&fingerprint(current.binding)===fingerprint(selected.binding)&&fingerprint(current.files)===fingerprint(saved.graph.files))baseline=current;
     }
     await report({phase:'source.validating'});
-    const nativeContext=initializationContext({changes:saved.plan?.changes,dump:saved.plan?.changes?.some(change=>change.mode==='initialization')?verifiedDump(toolkit,selected):undefined,expectedBinding:selected.binding,readBinding:()=>selectedAssetBinding(toolkit,name).binding,readDump:()=>verifiedDump(toolkit,selectedAssetBinding(toolkit,name))});
+    const nativeContext=initializationContext({changes:saved.plan?.changes,dump:saved.plan?.changes?.some(change=>['initialization','event-storage'].includes(change.mode))?verifiedDump(toolkit,selected,{events:saved.plan.changes.some(c=>c.mode==='event-storage')}):undefined,expectedBinding:selected.binding,readBinding:()=>selectedAssetBinding(toolkit,name).binding,readDump:()=>verifiedDump(toolkit,selectedAssetBinding(toolkit,name),{events:saved.plan.changes.some(c=>c.mode==='event-storage')})});
     let receipt,uncertain=false;
     const marker=path.join(paths.workspace,'.retk-lock/assets-write-'+randomUUID()+'.json');
     // Persist a second owner before source mutation. Even process death or a full
@@ -180,10 +181,10 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     const graph=await createValidationSourceSnapshot({projectDir,binding:selected.binding});
     const {validateUnityProject,readUnityValidation}=await import('../unity/validation.js');
     if(method==='reconstruct.validation'){paramsShape(params,['operationId','section','limit','cursor']);return readUnityValidation({toolkit,name,projectDir,graph,...params});}
-    paramsShape(params,['timeoutSeconds','resumeOperationId','assetIds']);
+    paramsShape(params,['timeoutSeconds','resumeOperationId','assetIds','dataCapture']);
     const {hasAssetSession}=await import('./session.js');
     if(hasAssetSession(toolkit,name))throw assetError('asset_session_active','Stop the owned AssetRipper session before starting Unity validation');
-    const result=await validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds:params.timeoutSeconds??600,resumeOperationId:params.resumeOperationId,assetIds:params.assetIds},dependencies.validation);
+    const result=await validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds:params.timeoutSeconds??600,resumeOperationId:params.resumeOperationId,assetIds:params.assetIds,dataCapture:params.dataCapture??false},dependencies.validation);
     const project=toolkit.read(name),previous=project.assetReconstruction;
     project.assetReconstruction={...(previous?.binding&&fingerprint(previous.binding)===fingerprint(selected.binding)?previous:{}),binding:selected.binding,state:result.state==='partial'?'partial':result.compileReady?(result.bindingsVerified?'bindings_verified':'compile_ready'):result.state,validationState:result.state,compilation:result.compilation,compileReady:result.compileReady,bindingsVerified:result.bindingsVerified,scopeBindingsVerified:result.scopeBindingsVerified,validationScope:result.scope,validationCoverage:result.coverage,behavior:'unverified',validationOperation:result.operationId};await toolkit.save(name,project);
     return result;
@@ -212,10 +213,10 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
   const sqlite=isSqliteGraph(graph),selection=sqlite&&method==='assets.scripts'?pageScripts({graphRevision:graph.revision,scripts:graph.assets.filter(a=>a.script||/\.(?:cs|dll)$/i.test(a.path)).map(a=>({scriptId:a.id,path:a.path,identity:{fullName:a.script?.types?.length===1?a.script.types[0].fullName:null}})),limitations:graph.limitations},params):null;
   const scriptIds=sqlite?(selection?selection.items.map(s=>s.scriptId):params.request?.changes?.map(c=>c.scriptId)):undefined;
   const focused=sqlite?focusStoredScriptGraph(graph,paths.graphFile,{scriptIds}):graph;
-  const dump=verifiedDump(toolkit,selected),evidence=params.evidence??[];
+  const dump=verifiedDump(toolkit,selected,{events:params.request?.changes?.some(c=>c.mode==='event-storage')===true}),evidence=params.evidence??[];
   const map=await buildScriptMap(focused,{projectDir,dump,evidence,scriptIds});writeJson(paths.mapFile,{...map,...(sqlite?{scope:{kind:'selected-scripts',scriptIds}}:{})});
   if(method==='assets.scripts')return scriptPageResponse(map,params,selection,graph.coverage);
-  const nativeContext=initializationContext({changes:params.request?.changes,dump,expectedBinding:selected.binding,readBinding:()=>selectedAssetBinding(toolkit,name).binding,readDump:()=>verifiedDump(toolkit,selectedAssetBinding(toolkit,name))});
+  const nativeContext=initializationContext({changes:params.request?.changes,dump,expectedBinding:selected.binding,readBinding:()=>selectedAssetBinding(toolkit,name).binding,readDump:()=>verifiedDump(toolkit,selectedAssetBinding(toolkit,name),{events:params.request?.changes?.some(c=>c.mode==='event-storage')===true})});
   const plan=await createReconstructionPlan({projectDir,graph:focused,scriptMap:map,request:params.request,editorPath:selected.project.unityEditorPath,dump,evidence,...nativeContext});
   const file=path.join(paths.reconstructionDir,'plans',plan.operationId+'.json');
   // Saved reconstruction needs the complete file inventory, all source type

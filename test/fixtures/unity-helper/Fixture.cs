@@ -29,12 +29,39 @@ static class Fixture
         else if (scenario.StartsWith("data", StringComparison.Ordinal))
         {
             request.scanPolicy = "reference-scan-v2";
-            int count = scenario == "data-errors" ? 4 : scenario == "data-limits" ? 3 : 2;
+            request.dataCapture = scenario.StartsWith("data-capture", StringComparison.Ordinal);
+            int count = request.dataCapture ? 1 : scenario == "data-errors" ? 4 : scenario == "data-limits" ? 3 : 2;
             for (int index = 0; index < count; index++)
             {
                 string assetPath = "Assets/Table" + index + ".asset";
                 var table = new Table { name = "Table" + index };
-                table.nodes.Add(new UnityEditor.Node { path = "m_Script", type = UnityEditor.SerializedPropertyType.ObjectReference, reference = scenario == "data-missing-script" && index == 0 ? null : new UnityEditor.MonoScript(), instanceId = 0 });
+                table.nodes.Add(new UnityEditor.Node { path = "m_Script", type = UnityEditor.SerializedPropertyType.ObjectReference, reference = (scenario == "data-missing-script" || scenario == "data-capture-atomic-missing") && index == 0 ? null : new UnityEditor.MonoScript(), instanceId = 0 });
+                if (scenario.Contains("atomic"))
+                {
+                    // These are Unity pointer representation children, not fields on the referenced object.
+                    // Next(true) deliberately exposes them; Next(false) must land on the following sibling.
+                    long pointerId = scenario.EndsWith("2676", StringComparison.Ordinal) ? 2676 : 2672;
+                    table.nodes.Add(new UnityEditor.Node { path = "m_Script.m_FileID", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = pointerId });
+                    table.nodes.Add(new UnityEditor.Node { path = "m_Script.pointerMissing", type = UnityEditor.SerializedPropertyType.ObjectReference, depth = 1 });
+                    table.nodes.Add(new UnityEditor.Node { path = "m_FileID", type = UnityEditor.SerializedPropertyType.Integer, number = 41 });
+                    table.nodes.Add(new UnityEditor.Node { path = "nested", type = UnityEditor.SerializedPropertyType.Generic });
+                    table.nodes.Add(new UnityEditor.Node { path = "nested.m_FileID", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = 43 });
+                    table.nodes.Add(new UnityEditor.Node { path = "nested.reference", type = UnityEditor.SerializedPropertyType.ObjectReference, depth = 1, reference = new UnityEngine.Object { localId = 9007199254740999L } });
+                    table.nodes.Add(new UnityEditor.Node { path = "nested.reference.m_PathID", type = UnityEditor.SerializedPropertyType.Integer, depth = 2, number = pointerId });
+                    table.nodes.Add(new UnityEditor.Node { path = "nested.afterReference", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = 47 });
+                    table.nodes.Add(new UnityEditor.Node { path = "managed", type = UnityEditor.SerializedPropertyType.ManagedReference, id = 42 });
+                    table.nodes.Add(new UnityEditor.Node { path = "managed.m_FileID", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = 53 });
+                    table.nodes.Add(new UnityEditor.Node { path = "managed.self", type = UnityEditor.SerializedPropertyType.ManagedReference, depth = 1, id = 42 });
+                    table.nodes.Add(new UnityEditor.Node { path = "managed.self.hidden", type = UnityEditor.SerializedPropertyType.Integer, depth = 2, number = 59 });
+                    table.nodes.Add(new UnityEditor.Node { path = "afterManaged", type = UnityEditor.SerializedPropertyType.Integer, number = 61 });
+                    table.nodes.Add(new UnityEditor.Node { path = "optional", type = UnityEditor.SerializedPropertyType.ObjectReference, instanceId = 0 });
+                    table.nodes.Add(new UnityEditor.Node { path = "optional.m_FileID", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = pointerId });
+                    if (scenario.EndsWith("missing", StringComparison.Ordinal))
+                    {
+                        table.nodes.Add(new UnityEditor.Node { path = "missing", type = UnityEditor.SerializedPropertyType.ObjectReference });
+                        table.nodes.Add(new UnityEditor.Node { path = "missing.m_FileID", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = pointerId });
+                    }
+                }
                 UnityEngine.Object[] objects = new UnityEngine.Object[] { table };
                 if (scenario == "data" && index == 0)
                 {
@@ -48,8 +75,25 @@ static class Fixture
                 if (scenario == "data-errors" && index == 1) objects = new UnityEngine.Object[] { null };
                 if (scenario == "data-limits" && index == 0) Add(table, "values", UnityEditor.SerializedPropertyType.Generic, 0, 50);
                 if (scenario == "data-limits" && index == 1) objects = Enumerable.Range(0, 21).Select(i => (UnityEngine.Object)new Table { name = "Part" + i }).ToArray();
+                if (request.dataCapture)
+                {
+                    table.nodes.Add(new UnityEditor.Node { path = "scores", type = UnityEditor.SerializedPropertyType.Generic, array = true, element = "byte" });
+                    table.nodes.Add(new UnityEditor.Node { path = "scores.Array.size", type = UnityEditor.SerializedPropertyType.ArraySize, depth = 1, number = 2 });
+                    table.nodes.Add(new UnityEditor.Node { path = "scores.Array.data[0]", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = 7 });
+                    table.nodes.Add(new UnityEditor.Node { path = "scores.Array.data[1]", type = UnityEditor.SerializedPropertyType.Integer, depth = 1, number = 9 });
+                    if (scenario == "data-capture-unsupported") table.nodes.Add(new UnityEditor.Node { path = "curve", type = UnityEditor.SerializedPropertyType.AnimationCurve });
+                    if (scenario == "data-capture-floats")
+                    {
+                        table.nodes.Add(new UnityEditor.Node { path = "negativeFloat", type = UnityEditor.SerializedPropertyType.Float, single = BitConverter.ToSingle(BitConverter.GetBytes(unchecked((int)0x80000000)), 0) });
+                        table.nodes.Add(new UnityEditor.Node { path = "negativeDouble", type = UnityEditor.SerializedPropertyType.Float, declaredType = "double", real = BitConverter.Int64BitsToDouble(long.MinValue) });
+                        table.nodes.Add(new UnityEditor.Node { path = "largeIntVector", type = UnityEditor.SerializedPropertyType.Vector3Int, integers = new UnityEngine.Vector3Int { x = int.MaxValue, y = int.MinValue, z = 16777217 } });
+                    }
+                    if (scenario == "data-capture-limits") Add(table, "scores.Array.data", UnityEditor.SerializedPropertyType.Integer, 1, 50);
+                    var hidden = new Table { name = "Hidden" };hidden.nodes.Add(new UnityEditor.Node { path = "label", type = UnityEditor.SerializedPropertyType.String, text = "hidden value" });
+                    objects = new UnityEngine.Object[] { table, hidden, new UnityEngine.Object() };
+                }
                 dataAssets[assetPath] = objects;
-                entries.Add(new EditorValidation.Entry { assetId = "asset" + index, path = assetPath, kind = "asset" });
+                entries.Add(new EditorValidation.Entry { assetId = request.dataCapture ? "asset:0123456789abcdef0123456789abcdef" : "asset" + index, path = assetPath, kind = "asset" });
             }
         }
         else
@@ -109,12 +153,28 @@ static class Fixture
 class Attachable : UnityEngine.Component { }
 abstract class AbstractComponent : UnityEngine.Component { }
 class GenericComponent<T> : UnityEngine.Component { }
-class PlainClass { }
+class PlainClass {
+    public class PlainNested { public class Deep { } }
+    private abstract class AbstractNested : UnityEngine.Component { }
+    public class GenericNested<T> : UnityEngine.Component { }
+    public class ConcreteNested : UnityEngine.Component { }
+}
 class Table : UnityEngine.ScriptableObject { }
 
 namespace UnityEngine
 {
-    public class Object { public string name = "Object"; public List<UnityEditor.Node> nodes = new List<UnityEditor.Node>(); }
+    public class Object { static long nextId = 9007199254740993L; public long localId = nextId++; public string name = "Object"; public List<UnityEditor.Node> nodes = new List<UnityEditor.Node>(); }
+    public struct Vector2 { public float x, y; }
+    public struct Vector3 { public float x, y, z; }
+    public struct Vector4 { public float x, y, z, w; }
+    public struct Color { public float r, g, b, a; }
+    public struct Rect { public float x, y, width, height; }
+    public struct Bounds { public Vector3 center, extents; }
+    public struct Quaternion { public float x, y, z, w; }
+    public struct Vector2Int { public int x, y; }
+    public struct Vector3Int { public int x, y, z; }
+    public struct RectInt { public int x, y, width, height; }
+    public struct BoundsInt { public Vector3Int position, size; }
     public class ScriptableObject : Object { }
     public class Component : Object { public GameObject gameObject; public Transform transform { get { return gameObject == null ? null : gameObject.transform; } } }
     public class GameObject : Object
@@ -156,7 +216,7 @@ namespace UnityEditor
             if (Fixture.scenario == "data-errors" && path.EndsWith("Table2.asset")) throw new Exception("fixture data load failure");
             return Fixture.dataAssets[path];
         }
-        public static bool TryGetGUIDAndLocalFileIdentifier(UnityEngine.Object target, out string guid, out long id) { guid = "0123456789abcdef0123456789abcdef"; id = 11500000; return true; }
+        public static bool TryGetGUIDAndLocalFileIdentifier(UnityEngine.Object target, out string guid, out long id) { guid = "0123456789abcdef0123456789abcdef"; id = target is MonoScript ? 11500000 : target.localId; return true; }
     }
     public static class PrefabUtility
     {
@@ -170,8 +230,8 @@ namespace UnityEditor
         public static void UnloadPrefabContents(UnityEngine.GameObject root) { }
     }
     public static class GameObjectUtility { public static int GetMonoBehavioursWithMissingScriptCount(UnityEngine.GameObject target) { return 0; } }
-    public enum SerializedPropertyType { Generic, Integer, Boolean, Float, String, ObjectReference, ManagedReference }
-    public class Node { public string path, element; public SerializedPropertyType type; public int depth; public bool array; public long id; public UnityEngine.Object reference; public int instanceId = 1; }
+    public enum SerializedPropertyType { Generic, Integer, Boolean, Float, String, ObjectReference, ManagedReference, ArraySize, Character, FixedBufferSize, Enum, Vector2, Vector3, Vector4, Color, Rect, Bounds, Quaternion, Vector2Int, Vector3Int, RectInt, BoundsInt, AnimationCurve }
+    public class Node { public string path, element, declaredType, text = ""; public long number; public float single; public double real; public UnityEngine.Vector3Int integers; public SerializedPropertyType type; public int depth; public bool array; public long id; public UnityEngine.Object reference; public int instanceId = 1; }
     public class SerializedObject : IDisposable
     {
         UnityEngine.Object target;
@@ -186,6 +246,26 @@ namespace UnityEditor
         public bool Next(bool children) { int depth = index < 0 ? -1 : nodes[index].depth; index++; if (!children) while (index < nodes.Count && nodes[index].depth > depth) index++; return index < nodes.Count; }
         public SerializedPropertyType propertyType { get { return nodes[index].type; } }
         public string propertyPath { get { return nodes[index].path; } }
+        public string type { get { return nodes[index].declaredType ?? propertyType.ToString(); } }
+        public long longValue { get { return nodes[index].number; } }
+        public int intValue { get { return (int)nodes[index].number; } }
+        public bool boolValue { get { return nodes[index].number != 0; } }
+        public double doubleValue { get { return nodes[index].real; } }
+        public float floatValue { get { return nodes[index].single; } }
+        public string stringValue { get { return nodes[index].text; } }
+        public string[] enumNames { get { return new string[] { "First", "Second" }; } }
+        public string managedReferenceFullTypename { get { return "Fixture Table"; } }
+        public UnityEngine.Vector2 vector2Value { get { return new UnityEngine.Vector2(); } }
+        public UnityEngine.Vector3 vector3Value { get { return new UnityEngine.Vector3(); } }
+        public UnityEngine.Vector4 vector4Value { get { return new UnityEngine.Vector4(); } }
+        public UnityEngine.Color colorValue { get { return new UnityEngine.Color(); } }
+        public UnityEngine.Rect rectValue { get { return new UnityEngine.Rect(); } }
+        public UnityEngine.Bounds boundsValue { get { return new UnityEngine.Bounds(); } }
+        public UnityEngine.Quaternion quaternionValue { get { return new UnityEngine.Quaternion(); } }
+        public UnityEngine.Vector2Int vector2IntValue { get { return new UnityEngine.Vector2Int(); } }
+        public UnityEngine.Vector3Int vector3IntValue { get { return nodes[index].integers; } }
+        public UnityEngine.RectInt rectIntValue { get { return new UnityEngine.RectInt(); } }
+        public UnityEngine.BoundsInt boundsIntValue { get { return new UnityEngine.BoundsInt(); } }
         public bool isArray { get { return nodes[index].array; } }
         public string arrayElementType { get { return nodes[index].element; } }
         public int arraySize { get { return 1; } }

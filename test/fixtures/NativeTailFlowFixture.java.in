@@ -1,0 +1,64 @@
+import java.util.*;
+
+// Minimal in-memory API fakes only. The validation and predicate come verbatim
+// from RetkAnalysis.java; this is not Ghidra decoding or transaction coverage.
+public class NativeTailFlowFixture {
+ record Address(int value) {}
+ static class AddressSetView {
+  final Set<Address> addresses=new HashSet<>();
+  AddressSetView(int... values){for(int v:values)addresses.add(new Address(v));}
+  boolean contains(Address a){return addresses.contains(a);}
+  boolean intersects(AddressSetView other){return addresses.stream().anyMatch(other::contains);}
+ }
+ record FlowType(boolean call,boolean conditional,boolean computed,boolean jump){
+  boolean isCall(){return call;}boolean isConditional(){return conditional;}
+  boolean isComputed(){return computed;}boolean isJump(){return jump;}
+ }
+ record Instruction(String mnemonic,FlowType type,Address fall,Address[] flows){
+  String getMnemonicString(){return mnemonic;}FlowType getFlowType(){return type;}
+  Address getFallThrough(){return fall;}Address[] getFlows(){return flows;}
+ }
+ record Function(Address entry,AddressSetView body){Address getEntryPoint(){return entry;}AddressSetView getBody(){return body;}}
+ static class FunctionManager {
+  final Map<Address,Function> entries=new HashMap<>();
+  Function getFunctionAt(Address a){return entries.get(a);}
+ }
+ static class Listing {Instruction instruction;Iterator<Instruction> getInstructions(AddressSetView body,boolean forward){return List.of(instruction).iterator();}}
+ static class Program {
+  String language="AARCH64:LE:64:v8A";final FunctionManager manager=new FunctionManager();final Listing listing=new Listing();
+  String getLanguageID(){return language;}FunctionManager getFunctionManager(){return manager;}Listing getListing(){return listing;}
+ }
+ static class Monitor {void checkCancelled(){}}
+ final Program program=new Program();
+ IllegalArgumentException bad(String message){return new IllegalArgumentException(message);}
+ /* SOURCE_HELPER */
+ void validate(AddressSetView body){Monitor scoped=new Monitor();/* SOURCE_VALIDATION */}
+ public static void main(String[] args){
+  NativeTailFlowFixture f=new NativeTailFlowFixture();String scenario=args[0];
+  Address local=new Address(0x1000),external=new Address(0x1100);
+  AddressSetView body=new AddressSetView(0x1000,0x1001,0x1002,0x1003);
+  f.program.manager.entries.put(external,new Function(external,new AddressSetView(0x1100,0x1101,0x1102,0x1103)));
+  String mnemonic="B";FlowType flow=new FlowType(false,false,false,true);Address fall=null;Address[] targets={external};
+  boolean accepted=Set.of("known-tail","lowercase-tail","local-branch","ordinary-call").contains(scenario);
+  switch(scenario){
+   case "lowercase-tail" -> mnemonic="b";
+   case "unknown-external" -> f.program.manager.entries.clear();
+   case "interior-target" -> targets=new Address[]{new Address(0x1101)};
+   case "overlapping-callee" -> f.program.manager.entries.put(external,new Function(external,new AddressSetView(0x1100,0x1000)));
+   case "wrong-language" -> f.program.language="x86:LE:64:default";
+   case "wrong-mnemonic" -> mnemonic="JMP";
+   case "conditional" -> flow=new FlowType(false,true,false,true);
+   case "computed" -> flow=new FlowType(false,false,true,true);
+   case "non-jump" -> flow=new FlowType(false,false,false,false);
+   case "multiple-targets" -> targets=new Address[]{external,new Address(0x1200)};
+   case "fallthrough" -> fall=new Address(0x1004);
+   case "local-fallthrough" -> fall=local;
+   case "local-branch" -> targets=new Address[]{local};
+   case "ordinary-call" -> {mnemonic="BL";flow=new FlowType(true,false,false,false);f.program.manager.entries.clear();}
+   case "indirect-local" -> {mnemonic="BR";flow=new FlowType(false,false,true,true);targets=new Address[]{local};}
+  }
+  f.program.listing.instruction=new Instruction(mnemonic,flow,fall,targets);
+  try{f.validate(body);if(!accepted)throw new AssertionError(scenario+" must reject");}
+  catch(IllegalArgumentException e){if(accepted)throw new AssertionError(scenario+" must accept; actual: "+e.getMessage(),e);}
+ }
+}

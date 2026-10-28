@@ -14,19 +14,19 @@ export const milestoneUsage=`Diagnostics and evidence handoff
   handoff create <Game> [--out <folder|zip>] [--evidence <folder>]
                     [--include-dummy-dll] [--include-assets] [--include-binaries]
   handoff verify <folder|zip>
-  evidence capture <Game> --kind decompile|xrefs|functions [--selector <name/address>]
-                    [--direction to|from] [--limit <1..1000>] [--out <external-folder>]
+  evidence capture <Game> --kind decompile|xrefs|functions|instructions [--selector <name/address>]
+                    [--end-address <inclusive hex>] [--direction to|from] [--limit <1..1000>] [--out <external-folder>]
   jev request <bundle> --questions <json> --out <request.json> [--against <bundle>]
                     [--file <relative-path>]... [--model <id>] [--max-state-bytes <n>]
   jev run <request.json> --out <result.json> [--timeout <seconds>]
 Global: --root <toolkit>, --json. Request creation is offline; jev run sends selected data.
 `;
-const values=new Set(['root','task','out','evidence','kind','selector','direction','limit','questions','against','file','model','max-state-bytes','timeout']);
+const values=new Set(['root','task','out','evidence','kind','selector','end-address','direction','limit','questions','against','file','model','max-state-bytes','timeout']);
 const flags=new Set(['json','probe','include-dummy-dll','include-assets','include-binaries','help']);
 const camel=value=>value.replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase());
 const specs={doctor:[0,1,['task','probe','timeout']],status:[1,1,['task','probe','timeout']],
  'handoff.create':[1,1,['out','evidence','includeDummyDll','includeAssets','includeBinaries']], 'handoff.verify':[1,1,[]],
- 'evidence.capture':[1,1,['kind','selector','direction','limit','out']],
+ 'evidence.capture':[1,1,['kind','selector','endAddress','direction','limit','out']],
  'jev.request':[1,1,['questions','out','against','files','model','maxStateBytes']], 'jev.run':[1,1,['out','timeout']]};
 export function isMilestoneCommand(raw){
  for(let i=0;i<raw.length;i++){const item=raw[i];if(item==='--')return ['doctor','status','handoff','evidence','jev'].includes(raw[i+1]);
@@ -56,8 +56,9 @@ export function parseMilestoneArgs(raw){
  }
  if(['doctor','status'].includes(command)&&options.timeout>30)throw artifactError('invalid_argument','Diagnostic timeout must be 1..30 seconds');
  if(command==='evidence.capture'){
-  if(!['decompile','xrefs','functions'].includes(options.kind))throw artifactError('invalid_argument','Evidence requires --kind decompile|xrefs|functions');
+  if(!['decompile','xrefs','functions','instructions'].includes(options.kind))throw artifactError('invalid_argument','Evidence requires --kind decompile|xrefs|functions|instructions');
   if(options.kind!=='functions'&&!options.selector)throw artifactError('invalid_argument','This evidence kind requires --selector');
+  if(options.kind==='instructions'&&!options.endAddress||options.kind!=='instructions'&&options.endAddress)throw artifactError('invalid_argument','Only instructions require --end-address');
   if(options.direction&&!['to','from'].includes(options.direction))throw artifactError('invalid_argument','Direction must be to|from');
  }
  if(command==='jev.request'&&(!options.questions||!options.out))throw artifactError('invalid_argument','Jev request requires --questions and --out');

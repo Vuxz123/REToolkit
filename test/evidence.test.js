@@ -6,12 +6,19 @@ import path from 'node:path';
 import {createToolkit} from '../src/toolkit.js';
 import {captureEvidence} from '../src/evidence.js';
 import {publishJson} from '../src/artifacts.js';
+import {validateEvidence} from '../src/evidence-schema.js';
 async function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-evidence-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const toolkit=createToolkit(root,{log:()=>{}});await toolkit.init('Game');fs.mkdirSync(path.join(root,'input'));
  fs.writeFileSync(path.join(root,'input/GameAssembly.dll'),'MZowned');fs.writeFileSync(path.join(root,'input/global-metadata.dat'),'owned metadata');await toolkit.scan('Game',path.join(root,'input'));return toolkit;}
 function observed(toolkit){const project=toolkit.read('Game');return {ok:true,runId:'11111111-1111-4111-8111-111111111111',revision:1,
  programIdentity:{program:project.ghidraProgramName,sha256:project.identities.native.sha256,projectName:'Game',imageBase:'ram:0x1000'},
  result:{address:'ram:0xffffffffffffffff',items:[{line:1,text:'untrusted target content'}],nextCursor:Buffer.from(JSON.stringify({runId:'11111111-1111-4111-8111-111111111111',method:'functions.decompile',revision:1,offset:1,binding:{selector:'Method'}})).toString('base64url')},limitations:['Observed loaded Program']};}
+test('bounded instruction capture binds exact range and rejects malformed provider rows',async t=>{
+ const toolkit=await fixture(t);let calls=0;const query=async(_toolkit,_name,method,params)=>{calls++;assert.equal(method,'instructions.list');assert.deepEqual(params,{address:'0x1000',endAddress:'ram:0x1007',limit:100});const reply=observed(toolkit);reply.result={items:[{address:'ram:0x1000',length:4,text:'nop'},{address:'ram:0x1004',length:4,text:'ret'}],nextCursor:null};return reply;};
+ const {evidence}=await captureEvidence(toolkit,'Game',{kind:'instructions',selector:'0x1000',endAddress:'ram:0x1007'},{query});assert.equal(validateEvidence(evidence),'observations');assert.equal(calls,1);
+ for(const endAddress of [undefined,'0xfff','other:0x1007','0x11000','0x8000000000001000'])await assert.rejects(captureEvidence(toolkit,'Game',{kind:'instructions',selector:'0x1000',endAddress},{query}));assert.equal(calls,1);
+ for(const mutate of [e=>e.result.items[1].address='ram:0x1008',e=>e.result.items[1].address='ram:0x1000',e=>e.result.items[0].length=0,e=>e.result.items[0].address='other:0x1000']){const value=structuredClone(evidence);mutate(value);assert.throws(()=>validateEvidence(value));}
+});
 test('capture binds observed result and exports outside the workspace without touching project state',async t=>{
  const toolkit=await fixture(t);const before=fs.readFileSync(toolkit.projectPath('Game'));let calls=0;
  const result=await captureEvidence(toolkit,'Game',{kind:'decompile',selector:'Method',limit:1},{query:async(_tk,name,method,params)=>{

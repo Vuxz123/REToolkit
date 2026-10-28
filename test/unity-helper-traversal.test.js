@@ -5,6 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+test('Unity validation helper compiles against installed Editor API references without launching it',async t=>{
+ const data='C:/Program Files/Unity/Hub/Editor/2022.3.62f2/Editor/Data';
+ const dotnet=path.join(data,'NetCoreRuntime/dotnet.exe');
+ try{await fs.access(dotnet);}catch{return t.skip('exact installed Unity bundled compiler unavailable');}
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'retk-helper-api-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));
+ const managed=path.join(data,'Managed'),engine=path.join(managed,'UnityEngine');
+ const refs=[path.join(data,'NetStandard/ref/2.1.0/netstandard.dll'),...(await fs.readdir(managed)).filter(name=>/^UnityEditor.*\.dll$/.test(name)).map(name=>path.join(managed,name)),...(await fs.readdir(engine)).filter(name=>/\.dll$/.test(name)).map(name=>path.join(engine,name))];
+ const result=spawnSync(dotnet,[path.join(data,'DotNetSdkRoslyn/csc.dll'),'-nologo','-noconfig','-target:library','-nostdlib+',`-out:${path.join(directory,'Helper.dll')}`,...refs.map(file=>`-r:${file}`),path.resolve('templates/Unity/REToolkitValidation.cs')],{encoding:'utf8',windowsHide:true,timeout:30000,maxBuffer:4*1024**2});
+ assert.equal(result.status,0,result.stdout+result.stderr);
+});
+
 // Executes the actual helper against an owned, deliberately small Unity API fixture.
 // This is C# behavior/compilation coverage, not an actual Editor acceptance run.
 test('Unity helper bounds each asset, skips only safe payloads, checkpoints and classifies compiler sources', async t => {
@@ -19,7 +30,7 @@ test('Unity helper bounds each asset, skips only safe payloads, checkpoints and 
   const executable = path.join(directory, 'fixture.exe');
   const compilation = spawnSync(compiler, ['/nologo', '/out:' + executable, helper, path.resolve('test/fixtures/unity-helper/Fixture.cs')], { encoding: 'utf8' });
   assert.equal(compilation.status, 0, compilation.stdout + compilation.stderr);
-  for (const scenario of ['payloads', 'limits', 'classes', 'error', 'logerror','data','data-errors','data-missing-script','data-limits']) {
+  for (const scenario of ['payloads', 'limits', 'classes', 'error', 'logerror','data','data-errors','data-missing-script','data-limits','data-capture','data-capture-unsupported','data-capture-limits','data-capture-floats']) {
     const runDirectory = path.join(directory, scenario);
     await fs.mkdir(path.join(runDirectory, 'project', 'Assets'), { recursive: true });
     const reportFile = path.join(runDirectory, 'report.json');
@@ -31,7 +42,12 @@ test('Unity helper bounds each asset, skips only safe payloads, checkpoints and 
     assert.equal(report.schemaVersion, 1);
     assert.deepEqual(report.traversal, { policy: 'reference-scan-v2' });
     assert.equal(report.compilation.state, 'succeeded');
-    if (scenario === 'data') {
+    if(scenario.startsWith('data-capture')){
+      const data=report.assets[0].data;assert.equal(data.policy,'scriptable-data-v2');
+      if(scenario==='data-capture-limits'){assert.equal(report.complete,false);assert.equal(data.complete,false);}
+      else{assert.equal(report.complete,true);assert.equal(data.complete,scenario!=='data-capture-unsupported');assert.equal(data.objects.length,3);assert.equal(data.objects[1].properties[0].value,'hidden value');assert.equal(data.objects[0].properties.find(p=>p.path==='scores.Array.data[1]').value,'9');assert(BigInt(data.objects[0].fileID)>BigInt(Number.MAX_SAFE_INTEGER));assert.equal(data.unsupportedProperties,scenario==='data-capture-unsupported'?1:0);}
+      if(scenario==='data-capture-floats'){const fields=new Map(data.objects[0].properties.map(p=>[p.path,p.value]));assert.equal(fields.get('negativeFloat'),'f32:80000000');assert.equal(fields.get('negativeDouble'),'f64:8000000000000000');assert.equal(fields.get('largeIntVector'),'2147483647;-2147483648;16777217');}
+    } else if (scenario === 'data') {
       assert.equal(report.complete,true);assert.equal(report.assets.length,2);assert.ok(report.assets.every(a=>a.kind==='asset'&&a.traversal.complete));assert.equal(report.assets[0].traversal.objects,3);assert.equal(report.assets[0].missingReferences,2);assert.equal(report.assets[1].traversal.objects,1);
     } else if (scenario === 'data-errors') {
       assert.equal(report.complete,false);assert.ok(report.assets.slice(0,3).every(a=>!a.traversal.complete&&a.traversal.stopReason==='asset_error'));assert.equal(report.assets[3].traversal.complete,true);
@@ -43,7 +59,7 @@ test('Unity helper bounds each asset, skips only safe payloads, checkpoints and 
       assert.equal(report.complete, true);
       assert.equal(report.assets[0].missingReferences, 5, 'reference arrays, nested/primitive-named structs and IDs scoped to each component stay traversable');
       assert.equal(report.assets[0].traversal.complete, true);
-      assert.equal(report.assets[0].traversal.skippedSubtrees, 4, 'string, primitive arrays and repeated managed ID are skipped');
+      assert.equal(report.assets[0].traversal.skippedSubtrees, 9, 'string, primitive arrays, object references and repeated managed ID are skipped');
     } else if (scenario === 'limits') {
       assert.equal(report.complete, false);
       assert.equal(report.assets.length, 3);
@@ -63,6 +79,12 @@ test('Unity helper bounds each asset, skips only safe payloads, checkpoints and 
       assert.equal(report.scripts[4].fullName, null);
       assert.equal(report.scripts[4].assembly, 'FixtureAssembly');
       assert.equal(report.scripts[5].assembly, null, 'unknown source is not compiler-backed');
+      assert.deepEqual(report.scripts[0].nonAttachableTypes, []);
+      assert.deepEqual(report.scripts[1].nonAttachableTypes, ['AbstractComponent']);
+      assert.deepEqual(report.scripts[2].nonAttachableTypes, ['GenericComponent`1']);
+      assert.deepEqual(report.scripts[3].nonAttachableTypes, ['PlainClass','PlainClass+AbstractNested','PlainClass+GenericNested`1','PlainClass+PlainNested','PlainClass+PlainNested+Deep']);
+      assert.equal(Object.hasOwn(report.scripts[4],'nonAttachableTypes'),false);
+      assert.equal(Object.hasOwn(report.scripts[5],'nonAttachableTypes'),false);
     } else {
       assert.equal(report.complete, false);
       assert.equal(report.assets[0].traversal.stopReason, 'asset_error');

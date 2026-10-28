@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {measurePhase,countPhaseWork} from '../workflow/metrics.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
@@ -46,10 +47,11 @@ async function fileHash(file,before){
  const handle=await fs.open(file,'r');try{
   const opened=await handle.stat();if(!opened.isFile()||!sameFile(before,opened))fail('stale_graph','Source changed before hashing');
   const h=crypto.createHash('sha256');let size=0;for await(const bytes of handle.createReadStream({autoClose:false})){size+=bytes.length;if(size>before.size)fail('stale_graph','Source grew during hashing');h.update(bytes);}
-  const after=await handle.stat(),current=await fs.lstat(file);if(size!==before.size||current.isSymbolicLink()||!current.isFile()||!sameFile(before,after)||!sameFile(before,current))fail('stale_graph','Source changed during hashing');return h.digest('hex');
+  const after=await handle.stat(),current=await fs.lstat(file);if(size!==before.size||current.isSymbolicLink()||!current.isFile()||!sameFile(before,after)||!sameFile(before,current))fail('stale_graph','Source changed during hashing');countPhaseWork('inventory.verify',size,1);return h.digest('hex');
  }finally{await handle.close();}
 }
-async function inventory(root,requestedLimits,maxGraphBytes=MAX_GRAPH){await noLinks(root);const limits=inventoryLimits(requestedLimits),files=[],fileSnapshots=[],directorySnapshots=[],absentRoots=[],pending=new Set();let totalBytes=0,directories=0,fileCount=0,metadataBytes=2,failure;
+async function inventory(root,requestedLimits,maxGraphBytes=MAX_GRAPH){return measurePhase('inventory.verify',()=>inventoryCore(root,requestedLimits,maxGraphBytes));}
+async function inventoryCore(root,requestedLimits,maxGraphBytes=MAX_GRAPH){await noLinks(root);const limits=inventoryLimits(requestedLimits),files=[],fileSnapshots=[],directorySnapshots=[],absentRoots=[],pending=new Set();let totalBytes=0,directories=0,fileCount=0,metadataBytes=2,failure;
  async function enqueue(absolute){
   if(fileCount>=limits.maxFiles)fail('file_count_limit');const index=fileCount++;
   const task=(async()=>{const stat=await fs.lstat(absolute);if(stat.isSymbolicLink())fail('unsafe_symlink',absolute);if(!stat.isFile())fail('stale_graph','Source file type changed during discovery');totalBytes+=stat.size;if(totalBytes>64*1024*1024*1024)fail('source_bytes_limit');const record={path:path.relative(root,absolute).split(path.sep).join('/'),size:stat.size,sha256:await fileHash(absolute,stat)};metadataBytes+=Buffer.byteLength(JSON.stringify(record))+1;if(metadataBytes>maxGraphBytes)metadataLimit({metadataBytes,files:fileCount,assets:0,nodes:0,edges:0,lastRecordKind:'inventory',maxGraphBytes});files[index]=record;fileSnapshots[index]={dev:stat.dev,ino:stat.ino,size:stat.size,mtimeMs:stat.mtimeMs,ctimeMs:stat.ctimeMs};})().catch(error=>{failure??=error;}).finally(()=>pending.delete(task));
@@ -80,7 +82,12 @@ function safeYaml(text,label,{classID,summaries=[]}={}){
  if(doc.errors.length||doc.warnings.length)fail('invalid_yaml',`${label}: ${doc.errors[0]?.message??doc.warnings[0]?.message}`);
  let count=0;const policy=BULK_PAYLOADS.get(classID);
  function validateNode(node,depth){if(depth>100||++count>500000)fail('yaml_resource_limit',label);if(YAML.isAlias(node)||node?.anchor)fail('yaml_alias_not_supported',label);if(node?.tag&&!['tag:yaml.org,2002:str','tag:yaml.org,2002:int','tag:yaml.org,2002:float','tag:yaml.org,2002:bool','tag:yaml.org,2002:null','tag:yaml.org,2002:map','tag:yaml.org,2002:seq'].includes(node.tag))fail('yaml_tag_not_supported',label);}
- function mapKey(key){if(!YAML.isScalar(key)||typeof key.value!=='string')fail('invalid_yaml_key',label);if(['__proto__','prototype','constructor','<<'].includes(key.value))fail('unsafe_yaml_key',label);return key.value;}
+ function mapKey(key,parts=[]){
+  // Sprite's render-data pair is keyed by a GUID, including the all-zero GUID.
+  // YAML otherwise resolves all-digit keys as integers and loses their width.
+  if(classID===213&&parts.length===2&&parts[0]==='Sprite'&&parts[1]==='m_RenderDataKey'&&YAML.isScalar(key)&&key.type==='PLAIN'&&!key.tag&&typeof key.source==='string'&&guidPattern.test(key.source))return key.source;
+  if(!YAML.isScalar(key)||typeof key.value!=='string')fail('invalid_yaml_key',label);if(['__proto__','prototype','constructor','<<'].includes(key.value))fail('unsafe_yaml_key',label);return key.value;
+ }
  function numericOnly(node,depth,checked=false){if(!checked)validateNode(node,depth);if(YAML.isScalar(node))return typeof node.value==='bigint'||typeof node.value==='number'&&Number.isFinite(node.value);if(YAML.isSeq(node))return node.items.every(n=>numericOnly(n,depth+1));if(YAML.isMap(node))return node.items.every(p=>{validateNode(p.key,depth+1);const key=mapKey(p.key);return !['fileID','guid'].includes(key)&&numericOnly(p.value,depth+1);});return false;}
  function project(node,depth,parts){
   if(!policy||parts[0]!==policy.type||parts.some(p=>typeof p!=='string'||p.includes('.'))||!policy.paths.has(parts.slice(1).join('.'))||!node?.range)return null;
@@ -89,7 +96,17 @@ function safeYaml(text,label,{classID,summaries=[]}={}){
   const field=parts.slice(1).join('.'),summary={kind:'opaque-payload',type:YAML.isSeq(node)?'numeric-array':'yaml-scalar',length:YAML.isSeq(node)?node.items.length:serializedBytes,lengthUnit:YAML.isSeq(node)?'items':'serialized-bytes',sha256:hash(raw),encoding:'unity-yaml-utf8',serializedBytes,readOnly:true};summaries.push({field,serializedBytes});return summary;
  }
  function convert(node,depth=0,parts=[]){validateNode(node,depth);const projected=project(node,depth,parts);if(projected)return projected;
-  if(YAML.isMap(node)){const result={};for(const pair of node.items){const key=mapKey(pair.key),converted=convert(pair.value,depth+1,[...parts,key]);if(key==='fileID'){if(!YAML.isScalar(pair.value))fail('invalid_file_id',label);const raw=pair.value.type==='PLAIN'?pair.value.source:pair.value.value;if(typeof raw!=='string'||!decimal.test(raw))fail('invalid_file_id',label);result[key]=raw;}else if(key==='guid'&&YAML.isScalar(pair.value))result[key]=pair.value.type==='PLAIN'?pair.value.source:converted;else result[key]=converted;}return result;}
+  // Unity packs the font's uint32 glyph array as unquoted little-endian hex.
+  // A value such as 39000000e2010000 resembles a float exponent to YAML.
+  // Preserve these exact bytes before numeric coercion, only at this schema
+  // path; ordinary nonfinite floats and reference identifiers remain checked.
+  if(classID===114&&parts.length===5&&parts[0]==='MonoBehaviour'&&parts[1]==='m_FontFeatureTable'&&parts[2]==='m_LigatureSubstitutionRecords'&&Number.isSafeInteger(parts[3])&&parts[4]==='m_ComponentGlyphIDs'&&YAML.isScalar(node)&&node.type==='PLAIN'&&!node.tag&&typeof node.source==='string'&&/^(?:[0-9a-fA-F]{8})+$/.test(node.source))return node.source;
+  // Other serialized user fields can also contain packed arrays. Without a
+  // field type, do not claim a number or an element encoding. Keep the whole
+  // ambiguous lexeme (including finite exponent lookalikes) as read-only data.
+  // This never projects a map/sequence; fileID/guid checks below still apply.
+  if(classID!==undefined&&YAML.isScalar(node)&&node.type==='PLAIN'&&!node.tag&&typeof node.value==='number'&&typeof node.source==='string'&&/[eE]/.test(node.source)&&/^(?:[0-9a-fA-F]{8}){2,}$/.test(node.source))return {kind:'ambiguous-unity-scalar',source:node.source,readOnly:true};
+  if(YAML.isMap(node)){const result={};for(const pair of node.items){const key=mapKey(pair.key,parts),converted=convert(pair.value,depth+1,[...parts,key]);if(key==='fileID'){if(!YAML.isScalar(pair.value))fail('invalid_file_id',label);const raw=pair.value.type==='PLAIN'?pair.value.source:pair.value.value;if(typeof raw!=='string'||!decimal.test(raw))fail('invalid_file_id',label);result[key]=raw;}else if(key==='guid'&&YAML.isScalar(pair.value))result[key]=pair.value.type==='PLAIN'?pair.value.source:converted;else result[key]=converted;}return result;}
   if(YAML.isSeq(node))return node.items.map((n,i)=>convert(n,depth+1,[...parts,i]));if(node==null)return null;if(!YAML.isScalar(node))fail('invalid_yaml_node',label);const value=node.value;if(typeof value==='bigint')return value<=BigInt(Number.MAX_SAFE_INTEGER)&&value>=BigInt(Number.MIN_SAFE_INTEGER)?Number(value):value.toString();if(typeof value==='number'&&!Number.isFinite(value))fail('invalid_yaml_number',label);return value;
  }
  return convert(doc.contents);

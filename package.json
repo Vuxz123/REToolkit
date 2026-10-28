@@ -18,6 +18,7 @@
     "test": "node --test test/*.test.js",
     "test:ghidra": "node test/real-ghidra.mjs",
     "test:ghidra-session": "node test/real-ghidra-session.mjs",
+    "test:ghidra-analysis": "node test/real-ghidra-analysis.mjs",
     "test:ghidra-symbols": "node test/real-ghidra-symbols.mjs",
     "test:mcp": "node test/real-mcp.mjs",
     "test:handoff": "node test/real-handoff.mjs",

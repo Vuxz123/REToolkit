@@ -23,6 +23,65 @@ lease can be safely acquired: no live owner and no uncertain engine marker.
 It does not remove an engine marker or claim interrupted writes were saved.
 Reopen the session to verify Program ledger and disk receipt consistency.
 
+## Optional agent-directed analysis
+
+Full preparation remains the default. Enable **Analysis theo yêu cầu** in the
+desktop preparation options (also available when creating a project), or run:
+
+```powershell
+retk prepare Game --analysis-mode on-demand
+retk analysis targets Game --focus gameplay --limit 100 --json
+retk session start Game --write
+retk analysis ensure Game 0x1000 --end 0x10ff --kind disassemble --reason "Inspect input code" --dry-run
+retk analysis ensure Game 0x1000 --end 0x10ff --kind function --reason "Recover input handler"
+retk decompile Game 0x1000 --json
+retk session stop Game
+```
+
+Addresses above are examples. Use loaded Program addresses; verify catalog RVA
+against the Program image base or establish that VA matches loaded memory.
+The catalog streams the current verified `dump.cs`, preserves exact hex strings,
+and never infers method ends from neighboring addresses. Its default gameplay
+focus hides recognized advertising/telemetry SDK namespaces; `--focus all`
+includes them. Unknown code and supporting libraries remain visible. These are
+classification hints, not proof of ownership or a complete SDK inventory.
+Follow scene/prefab bindings, gameplay code, required dependencies and game-side
+ad reward callbacks. No package, asset or binary bytes are deleted.
+
+Preparation in on-demand mode requires a verified import and records whole-program
+analysis/bulk symbols as `deferred`, without claiming global native readiness.
+Assets continue independently. The saved run retains its mode; to change between
+full/on-demand, change the checkbox and start a new preparation run. Existing
+analyzed programs and their symbols are preserved. Turning the checkbox off
+restores normal full preparation; it does not undo earlier scoped work.
+
+`analysis ensure` is explicit: no query starts analysis. Required fields are
+`address`, inclusive `endAddress`, `kind`, and `reason`. A scope must fit within
+one initialized executable block and 64 KiB. Kinds are:
+
+- `disassemble`: decode reachable instructions within the requested range.
+- `function`: also create/update the exact function using decoded control flow;
+  reject overlap, truncated flow and unresolved indirect branches.
+- `stack`: analyze only an existing exact function fully contained in the range.
+
+The analysis deadline is 1..300 seconds (default 60); snapshot/save overhead is
+outside that computation budget. Unsupported ARM/Thumb scopes fail closed.
+Analysis uses the existing write-session backup, preview/revision, operation UUID,
+packed snapshot, rollback/save/readback and receipt path. It never patches bytes,
+clears user data, sets global analyzed/symbol flags or claims complete xrefs.
+Matching scoped coverage can be reused at the same Program revision; another
+mutation invalidates that reuse. The native headless owner suppresses Program
+change events and headless auto analysis for its lifetime, and flushes its own
+decompiler cache after edits; there are no live GUI listeners in that owner.
+
+For agents, `jobs_start` operations `ghidra.analysis.targets` and
+`ghidra.analysis.ensure` expose the same typed parameters. `targets` needs no
+Ghidra session. `ensure` requires the existing owned write session; job IDs bind
+mutation UUIDs before launch. Poll the same job after transport loss and inspect
+its exact receipt. Scoped observations leave global callers/xrefs incomplete;
+an empty list does not prove that no references exist. Expand dependencies
+deliberately; there is no implicit global fallback.
+
 ## Queries
 
 ```powershell
@@ -139,6 +198,8 @@ Run unit/legacy suites with `npm test` and `npm run test:legacy`. Engine checks:
 ```powershell
 npm run test:ghidra-session -- C:/path/to/REToolkit
 npm run test:ghidra-symbols -- C:/path/to/REToolkit
+node test/real-ghidra-analysis.mjs C:/path/to/REToolkit x86
+node test/real-ghidra-analysis.mjs C:/path/to/REToolkit arm64
 node test/real-ghidra-symbols-streaming.mjs C:/path/to/REToolkit
 ```
 

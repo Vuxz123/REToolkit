@@ -1,5 +1,20 @@
 # REToolkit tool contracts for reconstruction
 
+## ScriptableObject data contracts
+
+Discover `data_capture {assetIds}` (1..64 exact exported .asset GUID IDs),
+`data_verify {baselineId}` and `data_report {operationId,section,limit,cursor}`.
+Use typed jobs for capture/verify and the same artifact/revision via recovery_run
+when that is the chosen branch. Raw .asset/.meta copies survive blocked/partial
+Editor capture; only a complete typed baseline can establish preservation later.
+Inspect objects/properties/differences pages, exact totals and coverage gaps.
+Keep baselineId and exact assetIds in a workflow dimension data step; only the
+matching current data.verify receipt can verify it. Its domain Unity receipt may
+also prove compilation and binding for the same scope without another Editor run.
+Do not drop scene/prefab scope that is outside that receipt. Unsupported values
+remain partial; source/field migration gates are unchanged. Runtime/gameplay
+remain unverified. Checkout `docs/scriptable-object-data.md` has CLI/GUI recipes.
+
 Read only the section needed by the current step. All commands below are current
 Node CLI routes; substitute an explicitly selected workspace for `Game`. Run
 `node <absolute-checkout>/re.js` instead of `retk` if the global shim is unavailable.
@@ -70,6 +85,18 @@ optional `binary`/`metadata` selectors), `workspace.dump`, `workspace.import` (o
 `reimport`) and `workspace.analyze`. For an owned persistent Ghidra session use
 `ghidra.session.start` (`write`, optional `timeoutMs`/`idleMs`), `.status`, `.stop`.
 Stop any GUI owner first; do not start a competing Ghidra owner.
+
+Preparation `options.analysisMode` defaults to `full`. With `on-demand`, global
+analysis and bulk symbols are intentionally deferred. Use `ghidra.analysis.targets`
+(`focus:gameplay|all`, `query`, `limit`, `cursor`) to inspect a verified method
+catalog. Gameplay focus hides recognized ads/tracking SDK implementations while
+retaining unknown code and supporting dependencies. Select exact loaded addresses
+from that evidence, then `ghidra.analysis.ensure` with `address`, inclusive
+`endAddress`, `kind:disassemble|function|stack`, `reason`, optional
+`timeoutSeconds:1..300`, `dryRun`, `operationId`. It needs an owned write session;
+the maximum executable range is 64 KiB. Inspect receipts before decompile/xrefs.
+No package is deleted, no global-analysis fallback occurs, and scoped xrefs never
+prove a complete caller inventory. See docs/ghidra-bridge.md and the native skill.
 
 For unresolved extracted inputs use
 `{"operation":"workspace.inputs.resolve","params":{}}` once, then poll its job.
@@ -371,3 +398,68 @@ not binary assets/screenshots/video. Add supported text reports explicitly when
 needed. Keys stay in the configured environment/session, never prompts or files.
 A synthetic connection test is not game assessment. Jev feedback does not change
 local verification results and cannot establish whole-game equivalence.
+# Shared reconstruction artifacts
+
+For a task that combines recovered source, local library imports and supported
+binding migrations, prefer the explicit `recovery_*` tools when installed. Create
+one artifact from the verified export, save artifactId/revision in the feature
+ledger and run whitelisted domain operations through `recovery_run`. Carry the
+returned revision to every next call. The artifact UUID revision and the domain
+graph SHA256 revision are distinct. Existing direct commands retain their old
+output branch semantics; never mix their receipts with the artifact.
+
+`recovery_diagnose` returns bounded, snapshot-bound pages with source capability,
+binding counts, unverified runtime DLLs and next operations. Runtime rows are not
+confirmed stubs and a query filter does not prove dependency closure. Select an
+actual catalog version for a library trial. Existing type/assembly collision and
+unsupported migration gates still apply; no stub replacement is added here.
+
+Successful library/migration stages are adopted only after receipt and full
+inventory checks. Run `reconstruct.validate` through recovery on the current
+combined artifact; the old library verification stage is a different artifact.
+Read domain result/report independently from the artifact's unaggregated status.
+Prefer durable `jobs_start` for create/run; observe `recoveryProgress` and final
+domain coverage without restarting work. A pending intent blocks further actions.
+Inspect ownership and receipts before an explicit `recovery_abandon` with exact
+intent/revision; it retains candidate evidence, never kills processes or retries.
+
+See checkout `docs/recovery-artifacts.md` for DTO examples and limitations.
+
+## Qualifying retained data baselines
+
+For a historical data baseline whose typed SO capture was complete but global
+source identity blocked its original readiness, `data_qualify {baselineId}`
+rechecks the original helper, packets, raw assets and per-SO script identities.
+It appends qualification evidence without changing the partial baseline receipt
+or its values. Continue data_verify using that same baseline ID; do not recapture
+current values as an original baseline. Use recovery_run on the selected artifact
+for both operations. Missing/unsupported data cannot qualify; gameplay and global
+source identity are separate. See checkout docs/scriptable-object-data.md.
+
+## Component and current-library mapping
+
+Discover six `components_*` tools. `components_scan {}` streams full serialized
+component counts with bounded samples; page saved `groups` and `targets` through
+`components_report {operationId,section,limit,cursor,query}`. Stripped/opaque nodes
+without m_GameObject are outside this coverage; ScriptableObjects use data tools.
+
+Use `components_observe {componentIds:[exactObjectId]}` through jobs_start, then
+`components_plan {observationId,mappings:[{componentId,targetId}]}`. Mappings are
+optional explicit picks from this observation's targets. Native engine records
+cannot be rebound. Read plan decisions and blockers before applying: no blind
+type-name/GUID replacement, duplicate-type removal or unsupported field migration.
+Package-cache/DLL targets stay read-only; managed inventoried Packages sources
+can be migration targets when the existing schema gates pass. Library hints use
+available actual catalog releases first and do not prove installation/runtime.
+
+`components_apply {operationId:componentPlanId}` returns migration operationId
+plus componentPlanId. Through recovery_run its canonical stage is adopted into
+the current artifact. Carry the returned artifact revision. Observe the combined
+candidate again before `components_verify {operationId:componentPlanId,
+observationId:newObservationId}`. Direct staging observation additionally accepts
+`stageOperationId:migrationOperationId`. Verification checks all selected native,
+preserved and rewritten identities. No observation gives inventory-only integrity;
+a no-change plan can reuse its still-current canonical observation. Recovery
+rejects historical stages after later inventory changes. Component verification
+is not a workflow acceptance shortcut: use scoped reconstruct_validate and data
+verification as applicable, then the saved gameplay scenarios.

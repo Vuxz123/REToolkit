@@ -1,4 +1,4 @@
-const labels={'workspace.import':'Import Ghidra','workspace.analyze':'Auto Analysis','workspace.symbols':'Áp symbol','ghidra.symbols.plan':'Lập kế hoạch symbol','ghidra.symbols.apply':'Áp symbol','ghidra.session.start':'Mở session Ghidra'};
+const labels={'workspace.import':'Import Ghidra','workspace.analyze':'Auto Analysis','ghidra.analysis.ensure':'Analysis theo yêu cầu','workspace.symbols':'Áp symbol','ghidra.symbols.plan':'Lập kế hoạch symbol','ghidra.symbols.apply':'Áp symbol','ghidra.session.start':'Mở session Ghidra'};
 const states={running:'Đang chạy',queued:'Đang chờ',succeeded:'Hoàn tất',failed:'Thất bại',unknown:'Chưa xác minh', 'awaiting-user':'Chờ thao tác',pending:'Chưa chạy',stale:'Cần kiểm tra lại'};
 const elapsed=seconds=>seconds===null?'Chưa rõ':`${Math.floor(seconds/3600)} giờ ${Math.floor(seconds%3600/60)} phút ${seconds%60} giây`;
 const local=value=>value?new Date(value).toLocaleString('vi-VN'):'Chưa có';

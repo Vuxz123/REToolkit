@@ -12,6 +12,10 @@ test('running source apply exposes its observed index refresh separately from co
  assert(model.sections.some(section=>section.title==='Tiến độ source / index'));
  assert(!model.metrics.some(metric=>metric.label==='Gameplay'&&metric.value==='Đã xác minh'));
 });
+test('running recovery job displays snapshot progress as structured details',()=>{
+ const model=build({operation:'recovery.create',state:'running',recoveryProgress:{phase:'snapshot.copying',completedFiles:3,totalFiles:20}});
+ assert.ok(model.sections.some(s=>s.title==='Tiến độ bản tái dựng'));
+});
 test('workspace previews show step and ABI tables directly without nested JSON inspectors',()=>{
  const model=build({operation:'workspace.add',state:'succeeded',storedResult:'C:/saved/result.json',result:{kind:'retoolkit-workspace-preview',schemaVersion:1,name:'Game',steps:{extract:{state:'succeeded'},scan:{state:'awaiting-user'}},inputSelection:{state:'needs-selection',binaries:[{path:'lib/arm64-v8a/libil2cpp.so',abi:'arm64-v8a'},{path:'lib/armeabi-v7a/libil2cpp.so',abi:'armeabi-v7a'}],metadata:[{path:'assets/global-metadata.dat'}],selection:{}},nextSteps:['Choose ABI']}});
  assert.equal(model.status.tone,'warn');assert.equal(model.sections.find(section=>section.title==='Binary / ABI').node.kind,'table');assert.equal(model.sections.find(section=>section.title==='Binary / ABI').node.rows.length,2);assert.equal(model.sections.find(section=>section.title==='Trạng thái các bước').node.kind,'table');assert.equal(model.sections.find(section=>section.title==='Bước tiếp theo').node.kind,'list');

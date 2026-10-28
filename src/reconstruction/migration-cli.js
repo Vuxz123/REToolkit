@@ -4,13 +4,14 @@ import {randomUUID} from 'node:crypto';
 import {createToolkit} from '../toolkit.js';
 import {fingerprint,withWorkspaceLock} from '../state.js';
 import {acquireToolchainRead} from '../toolchain/lease.js';
-import {assetPaths,assertAssetPath,selectedAssetBinding,safeAssetExportPath} from '../assets/context.js';
+import {assetPaths,assertAssetPath,selectedAssetBinding,assetProjectPath} from '../assets/context.js';
 import {handleOwnedAssetOperation,readAssetJson,indexOwnedGraph} from '../assets/service.js';
 import {hasAssetSession} from '../assets/session.js';
 import {locateUnityProject,indexUnityProject,verifyGraphFiles,UNITY_PROJECT_LIMITS} from '../assets/graph.js';
 import {createMigrationPlan,applyMigrationPlan,verifyMigration} from './migration.js';
 import {observeMigration} from './migration-observation.js';
 import {isSqliteGraph,focusStoredGraph} from '../assets/graph-storage.js';
+import {enrichComponentGraph} from '../components/registry.js';
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const allowed={observe:['receipt','editor','timeoutSeconds','components'],plan:['request','observations'],apply:['plan','observations'],verify:['receipt','observations']};
@@ -74,25 +75,25 @@ export async function runMigrationOperation(toolkit,name,command,params={},depen
    // this same caller owns the workspace lease. Its result stays bounded.
    const current=await handleOwnedAssetOperation(toolkit,name,'assets.list',{limit:1}),selected=selectedAssetBinding(toolkit,name);let graph=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);
    check(current.revision===graph.revision&&fingerprint(graph.binding)===fingerprint(selected.binding),'Asset graph changed while selecting migration inputs','stale_graph');
-   const original=await locateUnityProject(safeAssetExportPath(paths.workspace,selected.project.reconstructedSourceDir??path.join(paths.workspace,'05_ReconstructedSource'),selected.inputPath));await verifyGraphFiles(original,graph);
+   const original=await locateUnityProject(assetProjectPath(toolkit,name,selected));await verifyGraphFiles(original,graph);
    if(command==='observe'){
     const saved=params.receipt?await savedReceipt(params,base,paths.workspace,selected.binding):null,projectDir=saved?.projectDir??original,operationId=randomUUID(),runDir=assertAssetPath(path.join(base,operationId),paths.workspace);
     const originalStorage=isSqliteGraph(graph),sourceGraph=saved?await indexOwnedGraph(projectDir,selected.binding,paths,{storage:originalStorage?'sqlite':'json',graphLimitBytes:graph.profile?.limits?.maxGraphBytes}):graph;
     const ids=params.components?componentScope(readAssetJson(path.resolve(params.components),1024**2)):undefined;
-    const targetGraph=migrationScope(sourceGraph,paths.graphFile,ids);
+    const targetGraph=await enrichComponentGraph(projectDir,migrationScope(sourceGraph,paths.graphFile,ids));
 
     const observed=await (dependencies.observeMigration??observeMigration)({projectDir,graph:targetGraph,runDir,templateRoot:path.join(toolkit.root,'templates'),editor:params.editor?assertAssetPath(path.resolve(params.editor)):selected.project.unityEditorPath,lockDirectory:path.join(paths.workspace,'.retk-lock'),toolkitRoot:toolkit.root,timeoutSeconds:params.timeoutSeconds??600},dependencies);
     sourceUnchanged(toolkit,name,selected.binding);const file=path.join(runDir,'observations.json');await json(file,observed.observation);
     return {state:'observed',operationId,graphRevision:targetGraph.revision,complete:observed.observation.complete,compileReady:observed.observation.compilation.state==='succeeded',bindingsVerified:false,migratedValuesVerified:false,behavior:'unverified',scripts:observed.observation.scripts.length,components:observed.observation.components.length,storedObservations:relative(paths.workspace,file),storedEditorOutput:relative(paths.workspace,path.join(runDir,'editor-output.txt'))};
    }
    if(command==='plan'){
-    const request=readAssetJson(path.resolve(params.request),8*1024**2),observations=readAssetJson(path.resolve(params.observations),32*1024**2);graph=migrationScope(graph,paths.graphFile,requestScope(request));const plan=await createMigrationPlan({projectDir:original,graph,observations,request});sourceUnchanged(toolkit,name,selected.binding);
+    const request=readAssetJson(path.resolve(params.request),8*1024**2),observations=readAssetJson(path.resolve(params.observations),32*1024**2);graph=await enrichComponentGraph(original,migrationScope(graph,paths.graphFile,requestScope(request)));const plan=await createMigrationPlan({projectDir:original,graph,observations,request});sourceUnchanged(toolkit,name,selected.binding);
     const directory=assertAssetPath(path.join(base,plan.operationId),paths.workspace);await fs.mkdir(directory,{recursive:true});const file=path.join(directory,'plan.json');await json(file,plan);await json(path.join(directory,'observations.json'),observations);
     return {state:'planned',operationId:plan.operationId,graphRevision:graph.revision,files:plan.changes.length,rebindings:request.rebindings.length,fieldRenames:request.fieldRenames.length,payloadSha256:plan.payloadSha256,compileReady:false,bindingsVerified:false,migratedValuesVerified:false,behavior:'unverified',storedPlan:relative(paths.workspace,file),storedObservations:relative(paths.workspace,path.join(directory,'observations.json'))};
    }
    if(command==='apply'){
     const plan=readAssetJson(path.resolve(params.plan),128*1024**2),observations=readAssetJson(path.resolve(params.observations),32*1024**2);check(uuid.test(plan.operationId??''),'Invalid migration operation UUID');const directory=assertAssetPath(path.join(base,plan.operationId),paths.workspace),runDir=path.join(directory,'apply');
-    graph=migrationScope(graph,paths.graphFile,requestScope(plan.request));
+    graph=await enrichComponentGraph(original,migrationScope(graph,paths.graphFile,requestScope(plan.request)));
     // Validate the untrusted plan before creating its fixed operation directory.
     const {payloadSha256:givenHash,...candidate}=plan;check(givenHash===fingerprint(candidate),'Migration plan payload hash changed');
     const {operationId,payloadSha256,...rest}=await createMigrationPlan({projectDir:original,graph,observations,request:plan.request});check(fingerprint({...plan,operationId:undefined,payloadSha256:undefined})===fingerprint({...rest,operationId:undefined,payloadSha256:undefined}),'Migration plan/hash/patches do not match current source');

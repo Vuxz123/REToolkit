@@ -2,8 +2,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileIdentity,fingerprint} from '../state.js';
 import {within} from '../inputs.js';
+import {measurePhaseSync,countPhaseWork} from '../workflow/metrics.js';
 
 export function assetError(code,message) {return Object.assign(new Error(message),{code});}
+
+// Only an internally constructed toolkit can select an artifact. Neither a DTO
+// nor project.re.json can redirect these paths into another export or workspace.
+const scopes=new WeakMap();
+export function createArtifactToolkit(toolkit,name,{base,projectDir,readState,saveState}) {
+  const workspace=assertAssetPath(toolkit.workspace(name)),parent=assertAssetPath(path.join(workspace,'04_Notes/recovery/artifacts'),workspace);
+  base=assertAssetPath(base,parent);projectDir=assertAssetPath(projectDir,base);
+  const scoped=Object.create(toolkit);
+  scoped.read=selected=>{
+    if(selected!==name)throw assetError('recovery_scope_invalid','Artifact belongs to another workspace');
+    return {...toolkit.read(name),reconstructedSourceDir:projectDir,assetReconstruction:readState()};
+  };
+  scoped.save=async(selected,project)=>{
+    if(selected!==name)throw assetError('recovery_scope_invalid','Artifact belongs to another workspace');
+    await saveState(project.assetReconstruction);
+  };
+  scopes.set(scoped,{name,base,projectDir});return scoped;
+}
+export function assetProjectPath(toolkit,name,selected) {
+  const scope=scopes.get(toolkit);
+  if(scope){if(scope.name!==name)throw assetError('recovery_scope_invalid','Artifact workspace mismatch');return assertAssetPath(scope.projectDir,scope.base);}
+  return safeAssetExportPath(selected.workspace,selected.project.reconstructedSourceDir??path.join(selected.workspace,'05_ReconstructedSource'),selected.inputPath);
+}
 
 // Inspect every existing ancestor, including dangling links. Never use existsSync
 // as a link guard: it follows links and hides dangling ones.
@@ -22,7 +46,9 @@ export function assertAssetPath(target,parent) {
 
 export function assetPaths(toolkit,name) {
   const workspace=assertAssetPath(toolkit.workspace(name));
-  const base=assertAssetPath(path.join(workspace,'04_Notes/assets'),workspace);
+  const scope=scopes.get(toolkit);
+  if(scope&&scope.name!==name)throw assetError('recovery_scope_invalid','Artifact workspace mismatch');
+  const base=assertAssetPath(scope?path.join(scope.base,'assets'):path.join(workspace,'04_Notes/assets'),workspace);
   return {workspace,base,graphFile:assertAssetPath(path.join(base,'graph.json'),workspace),
     mapFile:assertAssetPath(path.join(base,'scripts.json'),workspace),
     reconstructionDir:assertAssetPath(path.join(base,'reconstruction'),workspace)};
@@ -39,12 +65,16 @@ function stableIdentity(file) {
   assertAssetPath(file);const before=fs.lstatSync(file);
   if(!before.isFile())throw assetError('asset_input_invalid','Expected a regular asset input');
   const identity=fileIdentity(file),after=fs.lstatSync(file);
+  countPhaseWork('input.verify',identity.size,1);
   if(before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ino!==after.ino)
     throw assetError('asset_input_stale','Asset inputs changed while hashing');
   return {size:identity.size,sha256:identity.sha256};
 }
 
 export function selectedAssetBinding(toolkit,name) {
+  return measurePhaseSync('input.verify',()=>selectAssetBinding(toolkit,name));
+}
+function selectAssetBinding(toolkit,name) {
   const paths=assetPaths(toolkit,name),project=toolkit.read(name);
   if(!project.extractedPath||!project.nativeBinary||!project.metadata)
     throw assetError('asset_input_missing','Scan the selected IL2CPP inputs before using assets');

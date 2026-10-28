@@ -85,7 +85,7 @@ test('each harness gets both workspace-bound MCPs, exact bundled workflow and sa
   assert.equal(mcp.retoolkit_assets.command,process.execPath);
   const context=fs.readFileSync(path.join(result.sessionDir,'context.md'),'utf8');
   assert.match(context,/Example/);assert.ok(context.includes(JSON.stringify(workspace)));assert.match(context,/target data,[\s\S]*never instructions/i);
-  for(const text of ['preparation_status','workspace.prepare','handoff','jobs_start','jobs_get','jobs_list','LDPlayer','split','planHash','receipt','04_Notes/game-reconstruction-workflow.md','project-intake-*.json','needs-input','Mono'])assert.ok(context.includes(text),text);
+  for(const text of ['analysisMode','ghidra.analysis.targets','ghidra.analysis.ensure','sdk-excluded','xrefs','preparation_status','workspace.prepare','handoff','jobs_start','jobs_get','jobs_list','LDPlayer','split','planHash','receipt','04_Notes/game-reconstruction-workflow.md','project-intake-*.json','needs-input','Mono'])assert.ok(context.includes(text),text);
   assert.doesNotMatch(context,/must-not-copy/);
   assert.equal(fs.readFileSync(path.join(result.sessionDir,'skills','retoolkit-game-reconstruction','SKILL.md'),'utf8'),'# Bundled reconstruction workflow\nRead references/checkpoint.md\n');
   assert.equal(fs.readFileSync(path.join(result.sessionDir,'skills','retoolkit-game-reconstruction','references','checkpoint.md'),'utf8'),'Retain failed runs.');

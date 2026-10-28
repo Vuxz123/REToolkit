@@ -12,6 +12,29 @@ retk prepare MyGame --symbols plan --address-mode rva --json
 retk preparation MyGame --json
 ```
 
+Mặc định `--analysis-mode full` giữ quy trình phân tích toàn bộ Ghidra và symbol
+hiện có. Trong GUI, checkbox **Analysis theo yêu cầu** mặc định tắt. Bật checkbox
+hoặc dùng CLI sau để hoãn công việc native toàn bộ:
+
+```cmd
+retk prepare MyGame --analysis-mode on-demand --json
+```
+
+Chế độ `on-demand` vẫn dump và import Ghidra. Chỉ sau khi bằng chứng import được
+xác minh, pipeline ghi `analyze` và symbol hàng loạt là `deferred`; export asset,
+index và mapping script tiếp tục theo profile. Không cần chọn RVA/VA cho bước
+symbol đã hoãn. `nativeAnalysis` ghi `{state: "deferred", mode: "on-demand"}` và
+symbol coverage vẫn `unverified`; hoàn tất setup không có nghĩa đã phân tích
+native toàn bộ, có đầy đủ xref hay gameplay đã được xác minh. Agent phải yêu cầu
+phân tích từng phạm vi khi cần. Chế độ không tự tạo trạng thái `analyzed` hay
+receipt symbol toàn bộ trong project.
+
+Chế độ được lưu trong `options.analysisMode` của preparation report, cùng chính
+sách symbol/profile/device. Resume giữ chế độ đã lưu; đổi chế độ cần tạo run mới.
+Report cũ không có trường này được hiểu là `full` và vẫn resume được. Không lưu
+thêm một bản cấu hình chế độ riêng trong project settings; agent đọc report gần
+nhất để chọn cách tiếp tục.
+
 `rva` chỉ là ví dụ: chọn đúng `rva` hoặc `va` cho bằng chứng địa chỉ của build.
 Mặc định là profile `reconstruction`, symbol `plan`, không chạy Unity baseline.
 Không có address mode thì riêng bước symbol bị chặn; các bước độc lập vẫn chạy.
@@ -31,6 +54,15 @@ qua luồng cài đặt hiện có rồi chạy lại phù hợp. Analysis chọ
 với phần dành cho hệ điều hành; cấu hình `GHIDRA_HEADLESS_MAXMEM` tường minh được
 tôn trọng. Thiếu RAM báo blocker ngay, không lặp chờ vô hạn.
 
+Prerequisite phân biệt điều kiện để chạy với bằng chứng kết quả đã có. Trên project
+mới, doctor có thể báo `DUMP_EVIDENCE_STALE`/`IMPORT_EVIDENCE_STALE` vì chưa tạo
+dump/import. Pipeline ghi đúng hai mục này vào `pendingOutputs` và thực hiện các
+bước còn thiếu, thay vì coi chúng là thiếu engine. Doctor vẫn chỉ báo prepared
+khi output đã được xác minh. Thiếu tool, input sai hash, ownership/khóa, report
+không đủ phạm vi hoặc trạng thái chưa xác minh vẫn chặn. Kiểm tra RAM và policy
+heap giữ nguyên; bước bị chặn vì RAM trả mã memory cụ thể, không hướng dẫn cài
+lại SDK như thể runtime bị thiếu.
+
 ## Kiểm tra split và dữ liệu Android
 
 Chọn rõ serial/package trong GUI hoặc truyền:
@@ -48,6 +80,19 @@ Pipeline đọc manifest binary XML và quan hệ `uses-split`, split type bắt
 `isSplitRequired`, package và version 64 bit. ZIP chứa nhiều APK được kiểm tra
 từng APK bằng staging riêng; OBB không bị bung chỉ để đọc manifest. Một APK không
 có `libil2cpp.so` chưa đủ kết luận thiếu split: có thể là Mono hoặc build khác.
+
+Đọc entry bên trong APK phân biệt hoa/thường: `res/-N.png` và `res/-n.png` là
+hai resource khác nhau. Đây là đọc ZIP tại chỗ, không thay quy tắc materialize
+file trên Windows hay quy tắc của container XAPK. Entry trùng chính xác, biến thể
+gây nhập nhằng của `AndroidManifest.xml`, path nguy hiểm, link, size/CRC sai vẫn
+bị từ chối. APK-set không hợp lệ lưu thêm `inspectionIssues` có giới hạn và số
+mục bị lược để xác định nguyên nhân trong receipt.
+
+Worker đã kết thúc giữ nguyên báo cáo cũ. Sau cập nhật, kiểm tra ownership và
+resume đúng run/policy nếu workspace còn tồn tại; chỉ bước chưa đạt được chạy
+lại theo quy tắc resume. Nếu đã xóa project để tạo mới, tạo workspace mới rồi
+chuẩn bị từ APK gốc. Việc sửa toolkit không tự khởi động lại pipeline hoặc tắt app
+để giải phóng RAM.
 
 Trước khi pull toàn bộ, pipeline đọc danh sách APK cài đặt và kéo riêng base để
 so sánh **package, version, hash nguyên base APK và chứng thư đã xác minh** với

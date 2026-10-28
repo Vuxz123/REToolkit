@@ -100,7 +100,10 @@ export async function runAndroidPreflight(toolkit,name,params={},dependencies={}
   try{original=await collect(archive.path,path.join(directory,'original-apks'));}catch(error){if(error.code==='android_archive_unverified')return finish({reason:error.message});throw error;}
   const inspect=dependencies.inspectSet??(await import('./apk-inspection.js')).inspectApkSet;
   const inspectionOptions={toolkitRoot:toolkit.root},local=await inspect(original.apks,inspectionOptions);
-  if(local.state==='invalid')return finish({state:'blocked',reason:'Original APK set has conflicting identities or malformed declared split dependencies.'});
+  if(local.state==='invalid'){
+   const issues=(Array.isArray(local.reasons)?local.reasons:[]).filter(value=>typeof value==='string');
+   return finish({state:'blocked',reason:'Original APK set has conflicting identities or malformed declared split dependencies.',inspectionIssues:issues.slice(0,16).map(value=>value.slice(0,1024)),omittedInspectionIssues:Math.max(0,issues.length-16)});
+  }
   base.missingSplits=local.missingSplits??[];base.missingSplitTypes=local.missingSplitTypes??[];
   const packageName=params.packageName??local.packageName,serial=params.serial??project.ldplayerCapture?.serial;
   if(params.packageName!==undefined&&params.packageName!==local.packageName)return finish({state:'blocked',reason:'Selected package differs from the retained APK manifest.'});

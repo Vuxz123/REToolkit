@@ -33,9 +33,10 @@ function locations(toolkit,name,runId) {
  return {workspace,base,gate:assertAssetPath(path.join(base,'.gate'),base),current:path.join(base,'current.json'),runDirectory,reportPath:runDirectory?path.join(runDirectory,'report.json'):null,handoffPath:runDirectory?path.join(runDirectory,'handoff.json'):null};
 }
 function normalize(params,saved) {
- if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(key=>!['profile','symbols','addressMode','serial','packageName','autoPull','includeData','resumeRunId','baselineValidation'].includes(key)))throw fail('PREPARATION_PARAMS_INVALID','Unknown preparation options');
+ if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(key=>!['profile','analysisMode','symbols','addressMode','serial','packageName','autoPull','includeData','resumeRunId','baselineValidation'].includes(key)))throw fail('PREPARATION_PARAMS_INVALID','Unknown preparation options');
  const explicit={...params};delete explicit.resumeRunId;
- const options={profile:'reconstruction',symbols:'plan',includeData:true,baselineValidation:false,...saved,...explicit};
+ const options={profile:'reconstruction',analysisMode:'full',symbols:'plan',includeData:true,baselineValidation:false,...saved,...explicit};
+ if(!['full','on-demand'].includes(options.analysisMode))throw fail('PREPARATION_PARAMS_INVALID','Invalid preparation analysis mode');
  options.autoPull??=Boolean(options.serial&&options.packageName);
  if(!['native','reconstruction'].includes(options.profile)||!['plan','apply','skip'].includes(options.symbols)||options.addressMode!==undefined&&!['rva','va'].includes(options.addressMode)||['includeData','autoPull','baselineValidation'].some(key=>typeof options[key]!=='boolean')||options.serial!==undefined&&(typeof options.serial!=='string'||!options.serial||options.serial.length>256||/[\s\x00-\x1f]/.test(options.serial))||options.packageName!==undefined&&(typeof options.packageName!=='string'||!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(options.packageName)))throw fail('PREPARATION_PARAMS_INVALID','Invalid preparation profile, symbol policy or Android target');
  if(params.resumeRunId!==undefined&&!uuid(params.resumeRunId))throw fail('PREPARATION_RUN_INVALID','Preparation resume ID must be a UUID');
@@ -116,6 +117,7 @@ async function freshInspection(toolkit,name,record) {
    if(!valid)stale(stage,'Saved outputs or receipts no longer verify against the current workspace');
   }
  }
+ for(const stage of result.stages)if(stage.state==='deferred'&&(!bindingValid||result.stages.find(s=>s.id==='import')?.state!=='succeeded'))stale(stage,'Deferred analysis requires current verified import evidence');
  result.readiness=readiness(result);
  if(result.freshness==='stale')result.state='stale';
  return publicReport(result);
@@ -126,7 +128,7 @@ function readiness(record) {
  const symbols=stage('symbols'),validation=ready('validation')?stage('validation')?.result:null,android=stage('android')?.result;
  const validationUnavailable={state:stage('validation')?.state==='stale'?'stale':'unverified',...(stage('validation')?.result?.coverage?{coverage:stage('validation').result.coverage}:{})};
  return {
-  nativeAnalysis:{state:ready('analyze')?'ready':stage('analyze')?.state??'unverified'},
+  nativeAnalysis:{state:ready('analyze')?'ready':stage('analyze')?.state??'unverified',...(record.options?.analysisMode==='on-demand'?{mode:'on-demand'}:{})},
   symbols:{state:ready('symbols')?(record.options?.symbols==='apply'?(symbols.result?.coverage==='complete'?'ready':'partial'):'planned'):symbols?.state??'unverified',coverage:symbols?.result?.coverage??'unverified'},
   assetsIndex:{state:ready('index')?'ready':stage('index')?.state??'unverified',storage:stage('index')?.result?.storage??null,coverage:stage('index')?.result?.coverage??'unverified'},
   downloadedData:compact(android?.downloadedData??android?.readiness?.downloadedData??{state:'unverified',limitations:['Remote/on-demand asset coverage is unverified.']}),
@@ -203,6 +205,20 @@ async function applyResources(context) {
  if(resources.native.state!=='ready')throw fail(resources.native.code??'PREPARATION_MEMORY_INSUFFICIENT',resources.native.message??'Insufficient memory for headless analysis','Free memory or change the explicit heap policy, then resume; preparation never waits indefinitely for RAM.');
  if(context.toolkit.env)context.toolkit.env.GHIDRA_HEADLESS_MAXMEM=`${resources.native.heapMiB}M`;
 }
+const pendingOutputCodes=new Map([['step.dump','DUMP_EVIDENCE_STALE'],['step.import','IMPORT_EVIDENCE_STALE']]);
+function pendingOutput(diagnostic){return diagnostic.status==='blocked'&&pendingOutputCodes.get(diagnostic.id)===diagnostic.code;}
+function nativePrerequisitesAvailable(report){
+ const task=report.tasks?.prepare;
+ if(!task||!['ready','available','blocked'].includes(task.state))return false;
+ // Doctor describes completed output readiness. Only exact pending-work codes
+ // may be disregarded by setup; tool/input/ownership/unknown blockers remain.
+ const ids=task.diagnosticIds;
+ if(!Array.isArray(ids))return false;
+ const diagnostics=report.diagnostics??[],selected=diagnostics.filter(d=>ids.includes(d.id));
+ if(ids.some(id=>typeof id!=='string'||!selected.some(d=>d.id===id))||selected.some(d=>!['ready','available','blocked'].includes(d.status)))return false;
+ const blocked=selected.filter(d=>d.status==='blocked');
+ return !blocked.some(d=>!pendingOutput(d))&&(task.state!=='blocked'||blocked.length>0);
+}
 async function defaults(id,context) {
  const {toolkit,name,options,dependencies,record}=context;
  const p=()=>toolkit.read(name);
@@ -212,11 +228,12 @@ async function defaults(id,context) {
   case 'prerequisites':{
    const diagnose=dependencies.diagnose??(await import('../diagnostics.js')).diagnose;
    const report=await diagnose(toolkit,{name,task:'prepare'});
-   const diagnostics=(report.diagnostics??[]).filter(d=>d.status==='blocked').map(item=>compact(item));
+   const diagnostics=(report.diagnostics??[]).filter(d=>d.status==='blocked'&&!pendingOutput(d)).map(item=>compact(item));
+   const pendingOutputs=(report.diagnostics??[]).filter(pendingOutput).map(item=>compact({...item,status:'pending'}));
    const resources=await resourcePolicy(record,dependencies);record.resources=resources;
    if(resources.native.state==='ready'&&toolkit.env)toolkit.env.GHIDRA_HEADLESS_MAXMEM=`${resources.native.heapMiB}M`;
    if(resources.native.state!=='ready')diagnostics.push(compact(resources.native));
-   return {state:'ready',native:report.tasks.prepare.state!=='blocked'&&resources.native.state==='ready',assets:report.tasks.assetripper.state!=='blocked'&&resources.assets.state==='ready',diagnostics,resources};
+   return {state:'ready',native:nativePrerequisitesAvailable(report)&&resources.native.state==='ready',assets:report.tasks.assetripper.state!=='blocked'&&resources.assets.state==='ready',diagnostics,pendingOutputs,resources};
   }
   case 'android':{
    const preflight=dependencies.androidPreflight??(await import('../adb/preparation.js')).runAndroidPreflight;
@@ -287,7 +304,7 @@ export async function runPreparation(toolkit,name,params={},dependencies={}) {
  const options=normalize(params,saved?.options),runId=saved?.runId??randomUUID(),paths=locations(toolkit,name,runId);
  const explicitHeap=toolkit.env?.GHIDRA_HEADLESS_MAXMEM??process.env.GHIDRA_HEADLESS_MAXMEM??null;
  const refusal=(code,message,state='blocked')=>uncheckedInspection({...saved,kind:'retoolkit-preparation',schemaVersion:1,name,runId,state,options,stages:saved?.stages??[],blockers:[{stage:'preparation',code,message}],readiness:saved?.readiness??readiness({stages:[]}),reportPath:paths.reportPath,handoffPath:paths.handoffPath});
- if(saved&&fingerprint(options)!==fingerprint(saved.options))return refusal('PREPARATION_OPTIONS_CHANGED','Resume options differ from the saved symbol/profile/device policy; start a separate run after review.');
+ if(saved&&fingerprint(options)!==fingerprint(normalize({},saved.options)))return refusal('PREPARATION_OPTIONS_CHANGED','Resume options differ from the saved analysis/symbol/profile/device policy; start a separate run after review.');
  if(saved?.resourceConfiguration&&saved.resourceConfiguration.explicitHeap!==explicitHeap)return refusal('PREPARATION_OPTIONS_CHANGED','Configured headless heap differs from this run; restore the saved policy or start a separate run.');
  if(saved?.state==='running'&&alive(saved.owner))return refusal('PREPARATION_BUSY','This preparation run still has a live owner; inspect progress rather than starting another worker.');
  if(saved&&(saved.state==='unknown'||saved.stages.some(s=>s.state==='unknown'||s.state==='running')))return uncheckedInspection(unknown(saved));
@@ -295,14 +312,14 @@ export async function runPreparation(toolkit,name,params={},dependencies={}) {
  let release;
  try{release=gate(base,runId);}catch(error){return refusal(error.code,error.message);}
  let record=saved?structuredClone(saved):{kind:'retoolkit-preparation',schemaVersion:1,name,runId,options,createdAt:now(),stages:stageIds.map(id=>({id,state:'pending'})),blockers:[]};
- record.resourceConfiguration??={explicitHeap};
+ record.options=options;record.resourceConfiguration??={explicitHeap};
  const priorHeap=toolkit.env?.GHIDRA_HEADLESS_MAXMEM,hadHeap=toolkit.env&&Object.hasOwn(toolkit.env,'GHIDRA_HEADLESS_MAXMEM');
  record.state='running';record.owner={pid:process.pid,token:ownerToken};record.blockers=[];record.reportPath=paths.reportPath;record.handoffPath=paths.handoffPath;
  fs.mkdirSync(paths.runDirectory,{recursive:true});
  const persist=()=>{record.updatedAt=now();record.readiness=readiness(record);assertAssetPath(paths.reportPath,paths.workspace);atomicJson(paths.reportPath,record);atomicJson(base.current,{runId});const report=publicReport(record);atomicJson(paths.handoffPath,{...report,instructions:['Preparation is setup evidence only. Preserve independent native, symbol, asset and downloaded-data coverage.','Compilation, bindings and gameplay remain unverified unless explicit fresh receipts establish their individual coverage.']});return report;};
  const emit=async(stage,state)=>{const event={kind:'preparation-progress',runId,stage,state,updatedAt:record.updatedAt,readiness:record.readiness};if(dependencies.onProgress)await dependencies.onProgress(event);};
  const discardResult=stage=>{if(stage.result){stage.previousResult=compact(stage.result);delete stage.result;}};
- const complete=async(stage,state,result,error)=>{if(state!=='succeeded'&&!result)discardResult(stage);Object.assign(stage,{state,completedAt:now(),...(result?{result:compact(result)}:{}),...(error?{error:errorView(error)}:{})});if(error)record.blockers.push({stage:stage.id,...errorView(error)});persist();await emit(stage.id,state);};
+ const complete=async(stage,state,result,error)=>{if(state!=='succeeded'&&!result)discardResult(stage);if(!error&&['succeeded','deferred','skipped'].includes(state))delete stage.error;Object.assign(stage,{state,completedAt:now(),...(result?{result:compact(result)}:{}),...(error?{error:errorView(error)}:{})});if(error)record.blockers.push({stage:stage.id,...errorView(error)});persist();await emit(stage.id,state);};
  try{
   persist();
   try{ownership(toolkit,name);}catch(error){record.state='unknown';record.blockers.push({stage:'ownership',...errorView(error)});return uncheckedInspection(persist());}
@@ -315,9 +332,21 @@ export async function runPreparation(toolkit,name,params={},dependencies={}) {
    if(id==='validation'&&(!options.baselineValidation||options.profile==='native')||['assets','index','scripts'].includes(id)&&options.profile==='native'||id==='symbols'&&options.symbols==='skip'){await complete(stage,'skipped');continue;}
    if(stage.reviewRequired){await complete(stage,'blocked',null,fail('PREPARATION_RECEIPT_INVALID','This stage requires explicit receipt recovery; repeated resume never replays an earlier successful write'));continue;}
    const native=['dump','import','analyze','symbols'].includes(id),assets=['assets','index','scripts','validation'].includes(id);
-   const required=stageDependencies[id]??[];
-   if(native&&prerequisites?.native===false||assets&&prerequisites?.assets===false){await complete(stage,'blocked',null,fail('PREPARATION_PREREQUISITE_MISSING',`${native?'Native':'Asset'} prerequisites are missing`,'Review prerequisite diagnostics and install/configure the exact SDK or engine version.'));continue;}
+   const defer=options.analysisMode==='on-demand'&&['analyze','symbols'].includes(id);
+   const required=defer?['dump','import']:stageDependencies[id]??[];
+   if(native&&prerequisites?.native===false||assets&&prerequisites?.assets===false){
+    const resource=prerequisites.resources?.[native?'native':'assets'];
+    const reason=resource?.state==='blocked'
+     ?fail(resource.code??(prerequisites.resources.native?.code==='PREPARATION_MEMORY_UNKNOWN'?'PREPARATION_MEMORY_UNKNOWN':'PREPARATION_MEMORY_INSUFFICIENT'),resource.message??'Available physical memory does not fit AssetRipper plus the OS reserve.','Free memory or review the explicit heap policy, then resume this run.')
+     :fail('PREPARATION_PREREQUISITE_MISSING',`${native?'Native':'Asset'} prerequisites are missing`,'Review prerequisite diagnostics and install/configure the exact SDK or engine version.');
+    await complete(stage,'blocked',null,reason);continue;
+   }
    if(!prerequisite(required)){await complete(stage,'blocked',null,fail('PREPARATION_DEPENDENCY_BLOCKED',`Required preparation stages are not ready: ${required.join(', ')}`));continue;}
+   if(defer){
+    const imported=record.stages.find(s=>s.id==='import');
+    if(!await existingEvidence(toolkit,name,'import',imported,dependencies)){await complete(stage,'blocked',null,fail('PREPARATION_IMPORT_UNVERIFIED','On-demand analysis requires current verified import evidence'));continue;}
+    await complete(stage,'deferred',{state:'deferred',mode:'on-demand',reason:'Whole-program analysis and bulk symbols are deferred; bounded analysis must be requested explicitly.'});continue;
+   }
    if(id==='symbols'&&!options.addressMode){await complete(stage,'blocked',null,fail('SYMBOL_ADDRESS_MODE_REQUIRED','Choose an explicit rva or va symbol address mode before creating or applying a plan'));continue;}
    if(saved&&stage.state==='succeeded'&&!['prerequisites','android','inputs'].includes(id)){
     if(await existingEvidence(toolkit,name,id,stage,dependencies)){stage.reused=true;persist();await emit(id,'succeeded');continue;}

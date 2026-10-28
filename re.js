@@ -10,6 +10,10 @@ import {isPythonRuntimeCommand,runPythonRuntimeCli} from './src/python-runtime/c
 import {prepareMcpCommand} from './src/python-runtime/launcher.js';
 import {acquireToolchainRead} from './src/toolchain/lease.js';
 import {isAssetCommand,runAssetCli} from './src/assets/cli.js';
+import {isRecoveryCommand,runRecoveryCli} from './src/recovery/cli.js';
+import {isWorkflowCommand,runWorkflowCli} from './src/workflow/cli.js';
+import {isDataCommand,runDataCli} from './src/data/cli.js';
+import {isComponentCommand,runComponentCli} from './src/components/cli.js';
 import {isLibraryCommand,runLibraryCli} from './src/libraries/cli.js';
 import {isSetupCommand,runSetupCli} from './src/setup/cli.js';
 import {isAdbCommand,runAdbCli} from './src/adb/cli.js';
@@ -34,10 +38,13 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   retk visual compare <Game> --request <json>
   retk visual report <Game> --operation <UUID>
   retk migration observe|plan|apply|verify <Game> ...
+  retk recovery create|status|history|diagnose|run|abandon <Game> ...
+  retk workflow create|status|next|claim|checkpoint|wait|pause|resume|cancel <Game> ...
+  retk data capture|verify|report <Game> ...
   node re.js doctor [Game] [--task prepare|headless|mcp|assetripper] [--probe]
   node re.js init <Game>
   node re.js create-project <Game> <APK/XAPK/APKS/ZIP>
-  retk prepare <Game> [--profile native|reconstruction] [--symbols plan|apply|skip]
+  retk prepare <Game> [--profile native|reconstruction] [--analysis-mode full|on-demand] [--symbols plan|apply|skip]
   retk preparation <Game> [--run <UUID>]
   retk jobs wait <Game> --job-id <UUID> [--timeout-seconds 25]
   retk agents wake-after <Game> --job-id <UUID> --thread-id <UUID> --task observe-job
@@ -68,7 +75,7 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
                   [--include-data]
   node re.js handoff create <Game> [--out <folder|zip>] [--evidence <folder>]
   node re.js handoff verify <folder|zip>
-  node re.js evidence capture <Game> --kind decompile|xrefs|functions [--selector <name/address>]
+  node re.js evidence capture <Game> --kind decompile|xrefs|functions|instructions [--selector <name/address>]
   node re.js jev request <bundle> --questions <json> --out <request.json>
   node re.js jev run <request.json> --out <result.json>
   node re.js assets session start|status|stop <Game>
@@ -76,6 +83,7 @@ const usage = `REToolkit JavaScript CLI (Node.js 24+)
   node re.js reconstruct plan|apply|verify|validate|validation <Game> ...
   node re.js libraries roots add <folder> | roots list | scan | list
   node re.js libraries identify|plan|import|verify <Game> ...
+  node re.js components scan|observe|plan|apply|verify|report <Game> ...
   node re.js ghidra-gui|pyghidra-gui|il2cppdumper|assetripper|assetripper-cli ...
 Global: --root <toolkit-directory>, --json
 Resume is the safe default. Dry-run does not create or change a workspace.
@@ -83,6 +91,7 @@ Existing Ghidra data requires a new workspace or explicit --reimport with backup
 Prepared does not mean analysis-ready: verify analysis, symbols and MCP program.
 Desktop, Ghidra/PyGhidra launch, native setup and ADB capture use JavaScript.
 Native headless queries: session start, function, decompile, disasm, xrefs, strings, bytes.
+Agent analysis: analysis targets <Game>; analysis ensure <Game> <address> --end <inclusive-address> --kind function --reason <text>.
 Use session start --help for bridge commands; GUI GhidraMCP remains available.
 Install the retk command from the toolkit checkout: npm ci, then npm run cli:install.
 `.replaceAll('node re.js','retk');
@@ -125,6 +134,10 @@ async function main() {
   if(isAdbCommand(raw))return runAdbCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isSetupCommand(raw))return runSetupCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isLibraryCommand(raw))return runLibraryCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isDataCommand(raw))return runDataCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isComponentCommand(raw))return runComponentCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isWorkflowCommand(raw))return runWorkflowCli(raw,path.dirname(fileURLToPath(import.meta.url)));
+  if(isRecoveryCommand(raw))return runRecoveryCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isAssetCommand(raw))return runAssetCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isPythonRuntimeCommand(raw))return runPythonRuntimeCli(raw,path.dirname(fileURLToPath(import.meta.url)));
   if(isToolchainCommand(raw))return runToolchainCli(raw,path.dirname(fileURLToPath(import.meta.url)));

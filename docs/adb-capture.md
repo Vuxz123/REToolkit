@@ -76,6 +76,13 @@ or authorize capturing an unrelated package. Restart the agent to discover new t
 
 ## Package integrity and preservation
 
+Offline APK member inspection is case-sensitive for Android resources, so
+`res/-N.png` and `res/-n.png` do not imply duplicate APK identity. Exact duplicates
+and ambiguous manifest casing remain invalid, as do existing unsafe path/link,
+size and CRC cases. This read-only rule does not relax Windows extraction or
+case-collision checks on captured payload filenames. Invalid Android preparation
+receipts include bounded `inspectionIssues` and `omittedInspectionIssues`.
+
 All base/split APK paths and OBB basenames are validated before pulls. Exact
 installed package identity is required. Duplicate/case-colliding filenames are
 rejected. Missing OBB directories are optional only when ADB explicitly reports

@@ -220,6 +220,36 @@ offline toàn bộ PAD/CDN đã tải. Xem [capture và coverage](docs/adb-captu
 
 ## 6. Đọc asset và tái dựng source
 
+Với ScriptableObject, dùng [baseline và đối chiếu dữ liệu](docs/scriptable-object-data.md):
+
+Baseline cũ có đủ typed data nhưng bị `partial` do định danh source khác có thể
+được kiểm tra lại bằng `retk data qualify MyGame --baseline <baselineId> --json`.
+Route này giữ nguyên dữ liệu/receipt gốc và không mở Editor; coverage thực sự
+thiếu vẫn bị chặn. Sau đó tiếp tục `data verify` với chính baseline ID cũ.
+`retk data capture MyGame --params-file scope.json --json`, rồi
+`retk data verify MyGame --baseline <baselineId> --json`. Toolkit giữ raw
+`.asset`/`.meta`, đối chiếu field/schema/reference qua Unity staging và hiện khác
+biệt trên GUI. Compile/binding thành công chưa tự xác minh dữ liệu hay gameplay.
+
+Để giữ checklist gameplay qua nhiều lượt agent/job, dùng
+[phiên tái dựng](docs/reconstruction-continuity.md):
+`retk workflow create MyGame --params-file goal.json --json`, rồi
+`retk workflow status MyGame --json`. Job hoàn tất chỉ kết thúc một bước;
+thông báo queued chưa xác nhận agent đã tiếp tục. GUI có thao tác workflow và
+bảng thời gian từng pha trong Evidence.
+
+Để ghép source recovery, thư viện và binding trên cùng một bản project có lịch
+sử revision, dùng [recovery artifacts](docs/recovery-artifacts.md):
+
+```powershell
+retk recovery create MyGame --json
+retk recovery diagnose MyGame --artifact <artifactId> --limit 20 --json
+```
+
+Các bước tiếp theo chạy qua `recovery run` với artifactId/revision vừa nhận về.
+Export gốc được giữ nguyên. Tính năng này nối các route hiện có; chưa tự thay DLL
+stub hay chứng minh gameplay. CLI/MCP và job worker dùng chung schema.
+
 Nếu chưa dùng preparation, chạy nhánh AssetRipper riêng:
 
 ```cmd
@@ -257,6 +287,24 @@ refresh script/index thay vì dựng lại toàn graph; SQLite vẫn cần copy/
 Xem `graphRefresh` và `assetProgress` để phân biệt ghi source với cập nhật index.
 
 ## 7. Thư viện Unity và migration
+
+Mapping component sang engine/package/thư viện hiện có dùng
+[component resolver](docs/component-resolver.md):
+
+```powershell
+retk components scan MyGame --json
+retk components report MyGame --operation <scanId> --section groups --limit 20 --json
+retk components observe MyGame --params-file observe.json --json
+retk components plan MyGame --observation <observationId> --json
+```
+
+`observe.json` chứa `componentIds` là mảng object ID cụ thể từ graph. Native
+component giữ nguyên; mapping script cần type/assembly/GUID/fileID do Editor xác
+nhận. Chọn bản library đang có trong catalog trước, chỉ tìm bản chính xác khi có
+bằng chứng không tương thích. `apply` chỉ tạo staging, `verify` cần observation
+mới sau apply để xác nhận binding; gameplay được kiểm chứng riêng. GUI và MCP có
+đủ sáu thao tác `components.scan/observe/plan/apply/verify/report`. Với artifact
+đang tái dựng, chạy qua `recovery.run` và dùng revision mới nhất.
 
 Đăng ký folder chứa ZIP thư viện; mặc định chưa có root:
 
@@ -322,6 +370,14 @@ visual fidelity vẫn `unverified`; fixture chỉ kiểm tra cơ chế so sánh.
 Xem [schema ảnh/video và diff](src/visual/README.md).
 
 ## 9. Ghidra, symbol và native evidence
+
+Tùy chọn **Analysis theo yêu cầu** trong phần chuẩn bị project cho phép Agent chọn
+từng hàm/vùng để phân tích, ưu tiên gameplay và bỏ qua SDK Ads/Tracking đã nhận
+diện. Mặc định tắt, giữ full analysis. CLI:
+`retk prepare MyGame --analysis-mode on-demand`. Xem mục
+[analysis theo yêu cầu](docs/ghidra-bridge.md#optional-agent-directed-analysis)
+để dùng `analysis targets` và `analysis ensure`. Chế độ này hoãn full analysis và
+symbol hàng loạt; kết quả xref/caller chỉ phản ánh phần đã phân tích.
 
 Chọn một owner: GUI hoặc headless. Lưu/đóng project GUI trước khi mở write session;
 không chạy cạnh tranh hai đường trên cùng project.

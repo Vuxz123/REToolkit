@@ -133,7 +133,11 @@ async function readApkManifest(file) {
     archive.on('end', () => { if (settled) return; settled = true; if (!manifest) reject(failure('APK AndroidManifest.xml is missing.')); else resolve({ manifest, delivery: { nativeAbis: sorted(nativeAbis), hasUnityData, hasMetadata, hasIl2cpp, coverage: 'unverified' } }); });
     archive.on('entry', entry => {
       (async () => {
-        safeEntry(entry); const key = entry.fileName.toLowerCase().replace(/\/$/, '');
+        safeEntry(entry);
+        // Read-only APK scanning never materializes members as Windows paths.
+        // Case-distinct Android resources are separate entries.
+        const key = entry.fileName.replace(/\/$/, '');
+        if (key.toLowerCase() === 'androidmanifest.xml' && entry.fileName !== 'AndroidManifest.xml') throw failure('Duplicate or ambiguous APK manifest casing.');
         if (names.has(key)) throw failure(`Duplicate APK ZIP entry: ${entry.fileName}`); names.add(key);
         total += entry.uncompressedSize;
         if (++entryCount > 200000 || total > 64 * 1024 ** 3) throw failure('APK ZIP aggregate size or entry count limit exceeded.');
@@ -141,7 +145,6 @@ async function readApkManifest(file) {
         hasIl2cpp ||= /^lib\/[^/]+\/libil2cpp\.so$/.test(entry.fileName);
         hasUnityData ||= /^assets\/bin\/Data\//.test(entry.fileName);
         hasMetadata ||= /(?:^|\/)global-metadata\.dat$/.test(entry.fileName);
-        if (key === 'androidmanifest.xml' && entry.fileName !== 'AndroidManifest.xml') throw failure('APK AndroidManifest.xml has invalid case.');
         if (entry.fileName !== 'AndroidManifest.xml') return;
         if (entry.uncompressedSize > MANIFEST_LIMIT) throw failure('APK manifest size limit exceeded.');
         const stream = await new Promise((res, rej) => archive.openReadStream(entry, (error, result) => error ? rej(error) : res(result)));
