@@ -33,3 +33,12 @@ test('late Agent launch observations cannot label the newly selected project',as
  globalThis.document=document;globalThis.window={retk:{agents:{list:async()=>[{id:'codex',label:'Codex',available:true}],launch:()=>new Promise(resolve=>release=resolve)}}};t.after(()=>Object.assign(globalThis,previous));
  const view=createProjectView({onCreated:()=>{},onMessage:()=>{}});await flush();const snapshot={workspaces:[{name:'Old'},{name:'New'}],jobs:[]};view.update(snapshot,'Old');document.querySelector('#open-agent').click();view.update(snapshot,'New');release({workspace:'old-workspace'});await flush();assert.doesNotMatch(document.querySelector('#agent-status').textContent,/old-workspace|Đang chuẩn bị context/);
 });
+
+test('GUI defaults to reconstruction and passes an exact resume session selection',async t=>{
+ const previousGlobals={document:globalThis.document,window:globalThis.window},document=fakeDocument(),calls=[];
+ globalThis.document=document;globalThis.window={retk:{agents:{list:async()=>[{id:'codex',label:'Codex',available:true}],sessions:async()=>[{id:'launch',sessionId:'019a30bb-f351-77ab-9e17-38b5755db88e',createdAt:'2026-10-29'}],launch:async(...args)=>{calls.push(args);return {workspace:'Game'};}}}};
+ t.after(()=>Object.assign(globalThis,previousGlobals));const view=createProjectView({onCreated:()=>{},onMessage:()=>{}});await flush();view.update({workspaces:[{name:'Game'}],jobs:[]},'Game');
+ document.querySelector('#open-agent').click();await flush();assert.deepEqual(calls[0],['Game','codex',{mode:'reconstruct'}]);
+ const mode=document.querySelector('#agent-mode');mode.value='resume';mode.dispatchEvent(new Event('change'));await flush();assert.equal(document.querySelector('#agent-session-id').value,'019a30bb-f351-77ab-9e17-38b5755db88e');
+ document.querySelector('#open-agent').click();await flush();assert.equal(calls[1][2].mode,'resume');assert.equal(calls[1][2].sessionId,'019a30bb-f351-77ab-9e17-38b5755db88e');
+});

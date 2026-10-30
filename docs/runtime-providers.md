@@ -48,3 +48,30 @@ For SS2 the installed 6000.0.66f2 Editor contains candidate assemblies in its
 These are explicit local trial inputs, not an automatic selection rule or proof
 of the game's original library version. Do not add `com.unity.ugui` beside an
 existing provider DLL: resolve duplicate provider ownership first.
+
+## Continuing an existing reconstruction workflow
+
+New runs may authorize `libraries.runtime.plan`, `libraries.runtime.apply`, and
+`libraries.runtime.verify`. Existing runs retain their saved policy. The owning
+agent can use `workflow.authorize` with `runId`, current `sequence`, `claimId`,
+`operations`, and a `reason` recording the user's authorization. Do not extend the
+user's task merely to bypass a blocker.
+
+If subsequent validation/data jobs already advanced the artifact before the
+provider job was checkpointed, use `workflow.reconcile` with the same ownership
+fields and `jobIds` in chronological mutation order. Supply every mutation from
+the workflow's saved revision through the current revision. It verifies successful
+durable job results, generation parent links, inventories and artifact history.
+Missing, reordered, failed, unauthorized or unrelated jobs are rejected. No
+apply, index, Editor or native operation is rerun.
+
+Reconciliation updates the tracked candidate and invalidates stale acceptance;
+it does not certify the DLL, compile, bindings, data or gameplay. Re-checkpoint
+current Unity/data jobs on the appropriate steps. A provider apply attached to a
+step may record progress, but cannot verify source or gameplay. Keep the original
+data baseline and unfinished gameplay scenarios. Never edit the run JSON or
+fabricate an old request revision to unblock a run.
+
+CLI: `retk workflow authorize|reconcile <Game> --params-file request.json`.
+MCP: `workflow_authorize` and `workflow_reconcile`. Restart an already-running
+MCP server/harness connection if its tool catalog predates these operations.

@@ -139,3 +139,52 @@ snapshot isolation hay engine ownership. Không tuyên bố speedup từ fixture
 Status giữ đủ checklist và reference receipt, lược danh sách hash file nội bộ
 trong từng proof để không tạo response lớn. Record có giới hạn đọc/ghi thống nhất
 16 MiB; vượt giới hạn sẽ từ chối trước khi ghi đè trạng thái cũ.
+
+## Continuing after an incomplete gameplay probe
+
+A loading bar reaching 100% is not scene-transition acceptance. Missing stubs or
+remaining native investigation stay actionable. `workflow.next` and `release`
+return the next eligible step and `continuationRequired`. Release transfers
+ownership; it does not schedule a new agent or authorize ending unfinished work.
+
+Use `workflow.expand` / MCP `workflow_expand` with current runId, sequence,
+claimId, target stepId, reason and up to 32 new steps (same schema as create).
+It adds prerequisites to that target, preserves existing steps/scenarios/scopes,
+rejects cycles/duplicate IDs and caps the run at 256 steps. Add a coherent source
+slice, then compilation/binding/data validation as needed. Do not give new source
+steps dependencies on checks that the source mutation will invalidate.
+
+A prose-only blocked note remains eligible for investigation or expansion,
+including in saved older runs. To record an external gate, include a `blocker`
+object in the blocked checkpoint: kind (`external-input`, `permission`, or
+`tool-capability`), attempted, missing, requiredFrom, resumeWhen. Failed or unknown
+jobs retain inspection gates; none of these changes replay a job or attest gameplay.
+A progress checkpoint may reopen an inspected/resolved blocker. Continue independent
+branches while external input is pending. Paused/canceled runs remain inactive.
+
+The toolkit exposes continuation instructions; harness termination, token limits
+and disconnected sessions still require a supported resume mechanism. Do not
+claim that a checklist entry or claim release installs a background watcher.
+
+## Transfer a pending continuation to another conversation
+
+After an explicit user request, the destination agent can call `workflow.transfer`
+(MCP `workflow_transfer`) with `runId`, current `sequence`, `previousThreadId`,
+`harness`, actual `threadId`, and `reason`. Codex requires the destination to match
+its real `CODEX_THREAD_ID`; transfer currently supports Codex only. Do not substitute the previous thread in the environment.
+
+The run must be active, without a controller. Its attached producer must have
+verified success, and its exact watcher must be terminal with a checked result.
+Unknown delivery is transferable only when the queue child has demonstrably
+closed (currently a saved process-exit diagnostic). Timeout, output-limit,
+interrupted observer, missing receipt and pending cleanup require inspection.
+
+Transfer uses the same workflow lock as queue dispatch, preserves the attachment,
+goal, authorization, candidate and proofs, and records the original watcher
+result/hash and unknown delivery. It disables further wake dispatch for that
+attachment. It does not notify, rerun anything, claim the destination or verify
+acceptance. The new agent then claims the returned sequence and checkpoints the
+original job normally. Old-thread claims are rejected. Paused/canceled runs and
+active controllers cannot be transferred.
+
+CLI: `retk workflow transfer Game --params-file transfer.json --json`.

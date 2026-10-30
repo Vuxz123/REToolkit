@@ -486,3 +486,15 @@ adapter PowerShell cÅ©.
 
 GUI chÃ­nh lÃ  Electron/Node. `re.ps1`, WinForms vÃ  [Tutorial.md](Tutorial.md) Ä‘Æ°á»£c
 giá»¯ cho tÆ°Æ¡ng thÃ­ch; vÃ­ dá»¥ PowerShell cÅ© khÃ´ng pháº£i luá»“ng khuyáº¿n nghá»‹.
+
+### M? Agent và b?t d?u tái d?ng
+
+Trong project, ch?n harness và ch? d? t?i **AI Agent**:
+
+- **Tái d?ng game ngay** (m?c d?nh): b?m **B?t d?u tái d?ng** d? giao s?n m?c tiêu chu?n b? build, khôi ph?c source/thu vi?n/binding, b?o toàn d? li?u, ki?m tra Unity và gameplay. Agent ti?p t?c workflow hi?n có n?u có; không c?n nh?p l?i task. Quy?n th?c thi và dang nh?p v?n do harness ki?m soát.
+- **Ti?p t?c session cu**: ch?n b?n ghi l?n m? tru?c và ki?m tra **Session ID c?a harness**. Codex l?y du?c ID t? workflow dã luu; phiên Claude m?i có ID du?c luu ngay khi m?. V?i phiên chua ghi nh?n ID, nh?p ID chính xác t? harness. ID thu m?c `agent-sessions` là ID l?n m? terminal, không ph?i ID h?i tho?i.
+- **M? d? trao d?i**: m? phiên m?i, gi? ph?m vi dã luu; n?u chua có task thì Agent h?i m?c tiêu.
+
+Gemini c?n ch?n dúng l?n m? tru?c d? dùng l?i kho session riêng. OpenCode dùng ID d?ng `ses_…`. Resume không dùng `--last`, không t? t?o phiên thay th? n?u ID sai, và không ch?y l?i các job dã hoàn t?t. B?n ghi l?n m? không ch?ng minh harness dã t?o phiên thành công. Ðóng terminal cu tru?c khi m? l?i cùng phiên; gi? nguyên các job n?n dang ch?y.
+
+Sau khi c?p nh?t toolkit, dóng/m? l?i `retk gui` d? t?i IPC và di?u khi?n m?i. Vi?c m? terminal chua ch?ng minh Agent/MCP dã dang nh?p ho?c k?t n?i thành công.

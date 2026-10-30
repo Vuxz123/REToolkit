@@ -25,3 +25,18 @@ test('typed CLI/MCP and recovery adoption use the same runtime provider plan',as
  assert.equal(fs.readFileSync(path.join(f.workspace,applied.project,'Assets/Plugins/UI.dll'),'utf8'),'after');assert.equal(fs.readFileSync(path.join(f.workspace,created.project,'Assets/Plugins/UI.dll'),'utf8'),'before');
  const verified=await call(applied.revision,'libraries.runtime.verify',{operationId:planned.result.operationId});assert.equal(verified.result.integrityVerified,true);assert.equal(verified.result.currentMatchesStage,true);assert.equal(verified.result.runtimeVerified,false);
 });
+
+test('workflow checkpoints a runtime DLL job as a candidate transition, never as compilation or gameplay',async t=>{
+ const {randomUUID}=await import('node:crypto');
+ const {runWorkflowOperation}=await import('../src/workflow/service.js');
+ const {startJob,executeJob}=await import('../src/jobs/service.js');
+ const f=await setup(t),a=await runRecoveryOperation(f.toolkit,'Game','create');
+ const workflow=(command,params)=>runWorkflowOperation(f.toolkit,'Game',command,params);
+ let run=await workflow('create',{artifactId:a.artifactId,goal:'Playable game',authorizedOperations:['recovery.run','libraries.runtime.apply'],steps:[{id:'compile',dimension:'compilation',label:'Compile',dependsOn:[]},{id:'play',dimension:'gameplay',label:'Play',dependsOn:['compile'],scenario:{entry:'Entry',actions:['start'],expected:'level plays'}}]});
+ run=await workflow('claim',{runId:run.runId,sequence:run.sequence,harness:'codex',threadId:process.env.CODEX_THREAD_ID??randomUUID()});
+ const plan=await runRecoveryOperation(f.toolkit,'Game','run',{artifactId:a.artifactId,revision:a.revision,operation:'libraries.runtime.plan',params:{dll:'Assets/Plugins/UI.dll',replacement:f.replacement}},{library:f.dependencies});
+ const job=await startJob(f.toolkit,'Game',{operation:'recovery.run',params:{artifactId:a.artifactId,revision:a.revision,operation:'libraries.runtime.apply',params:{operationId:plan.result.operationId}}},{spawn:()=>({pid:process.pid,once(){},unref(){}})});
+ const done=await executeJob(f.toolkit,'Game',job.jobId,{invoke:(toolkit,name,method,params)=>runRecoveryOperation(toolkit,name,'run',params,{library:f.dependencies})});assert.equal(done.state,'succeeded');
+ const result=await workflow('checkpoint',{runId:run.runId,sequence:run.sequence,claimId:run.controller.claimId,stepId:'compile',outcome:'job',jobId:job.jobId});
+ assert.notEqual(result.candidate.revision,a.revision);assert.equal(result.steps[0].state,'unverified');assert.equal(result.steps[1].state,'todo');assert.equal(result.complete,false);
+});

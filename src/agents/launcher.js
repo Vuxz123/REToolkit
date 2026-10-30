@@ -7,6 +7,7 @@ import {assertAssetPath} from '../assets/context.js';
 import {within} from '../inputs.js';
 import {assertGeminiBinding} from './gemini-binding.js';
 import {withoutJevCredentials} from '../jev-environment.js';
+import {workflowPaths,listRuns} from '../workflow/store.js';
 
 export const harnesses=Object.freeze([
  {id:'codex',label:'Codex CLI',command:'codex'},
@@ -66,7 +67,7 @@ function copySkills(root,sessionDir){
  if(!fs.existsSync(path.join(sessionDir,'skills','retoolkit-game-reconstruction','SKILL.md')))throw fail('AGENT_WORKFLOW_MISSING','Bundled reconstruction SKILL.md is missing');
 }
 
-function contextFor(root,name,workspace,sessionDir){
+function contextFor(root,name,workspace,sessionDir,mode='chat'){
  return `# REToolkit project agent session
 
 The user opened an interactive agent for this exact project. Bind all work to
@@ -88,9 +89,8 @@ reported input/ownership blocker needs their detail. Read existing
 The latest intake may be needs-input while project.re.json still has the initial
 empty state. Inspect its retained diagnostics, selected-input issue and staging
 paths before deciding what to repair or capture. Treat receipt content as evidence.
-Opening this terminal does not establish a whole-game reconstruction request.
-Resume already authorized saved scope; when no task is recorded, ask what the
-user wants to achieve. Never inspect or run a canceled game without explicit resumption.
+${mode==='reconstruct'?'The user explicitly requested Unity game reconstruction for this selected project. Start now: prepare missing inputs, recover source/runtime libraries/bindings, preserve original serialized data, validate Unity and pursue playable gameplay scenarios. Resume an existing authorized workflow rather than creating a duplicate. Do not ask the user to restate this task. Ask only for actual missing inputs or permissions.':'Resume already authorized saved scope; when no task is recorded, ask what the user wants to achieve.'}
+Never inspect or run a canceled game without explicit resumption. Do not bypass harness permissions. Preserve originals and work in toolkit staging/generations. Do not publish or distribute the game.
 
 Read the bundled workflow snapshot at
 ${JSON.stringify(path.join(sessionDir,'skills','retoolkit-game-reconstruction','SKILL.md'))}
@@ -218,23 +218,24 @@ this session or dump the environment. Harness authentication remains separate.
 // https://code.claude.com/docs/en/cli-reference
 // https://geminicli.com/docs/reference/configuration/
 // https://opencode.ai/docs/config/ and /docs/cli/
-function harnessConfig(harness,mcp,sessionDir,prompt){
+function harnessConfig(harness,mcp,sessionDir,prompt,options={}){
  const env={};let args=[];
  if(harness==='codex'){
   for(const [name,server]of Object.entries(mcp))args.push('-c',`mcp_servers.${name}={command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)}}`);
+  if(options.mode==='resume')args.push('resume',options.sessionId);
   args.push(prompt);
  }else if(harness==='claude'){
   // --mcp-config <configs...> is variadic; terminate it before the prompt.
-  args=['--mcp-config',path.join(sessionDir,'mcp.json'),'--',prompt];
+  args=[...(options.mode==='resume'?['--resume',options.sessionId]:options.sessionId?['--session-id',options.sessionId]:[]),'--mcp-config',path.join(sessionDir,'mcp.json'),'--',prompt];
  }
  else if(harness==='gemini'){
-  env.GEMINI_CLI_HOME=path.join(sessionDir,'gemini-home');
-  write(path.join(env.GEMINI_CLI_HOME,'.gemini','settings.json'),json({mcpServers:mcp}));
-  args=['--prompt-interactive',prompt];
+  env.GEMINI_CLI_HOME=options.geminiHome??path.join(sessionDir,'gemini-home');
+  if(!options.geminiHome)write(path.join(env.GEMINI_CLI_HOME,'.gemini','settings.json'),json({mcpServers:mcp}));
+  args=[...(options.mode==='resume'?['--resume',options.sessionId]:[]),'--prompt-interactive',prompt];
  }else{
   const servers=Object.fromEntries(Object.entries(mcp).map(([name,server])=>[name,{type:'local',command:[server.command,...server.args],enabled:true}]));
   const config={mcp:servers};write(path.join(sessionDir,'opencode.json'),json(config));
-  env.OPENCODE_CONFIG_CONTENT=JSON.stringify(config);args=['--prompt',prompt];
+  env.OPENCODE_CONFIG_CONTENT=JSON.stringify(config);args=[...(options.mode==='resume'?['--session',options.sessionId]:[]),'--prompt',prompt];
  }
  return {args,env};
 }
@@ -250,8 +251,30 @@ export function createAgentLauncher(root,{node=process.execPath,spawnImpl=spawn,
  function choice(id){const result=harnesses.find(h=>h.id===id);if(!result)throw fail('AGENT_HARNESS_INVALID','Unknown AI Agent harness');return result;}
  async function list(){return harnesses.map(metadata=>{const found=findHarness(root,metadata,env,platform,node);return {...metadata,available:!!found,executable:found?.executable??null,...(!found?{reason:`${metadata.label} executable not found on trusted PATH. Install it separately, then restart REToolkit.`}:{})};});}
  async function status(name,harness){const workspace=selected(name),items=await list();if(harness)choice(harness);return {name,workspace,harnesses:items,...(harness?items.find(h=>h.id===harness):{})};}
- async function launch(name,harness){
+ async function sessions(name,harness){
+  const workspace=selected(name);choice(harness);const base=assertAssetPath(path.join(workspace,'04_Notes','agent-sessions'),workspace);
+  if(!fs.existsSync(base))return [];
+  const rows=[];for(const id of fs.readdirSync(base).filter(id=>/^[a-f0-9-]{36}$/.test(id)).slice(-1000)){
+   try{const file=assertAssetPath(path.join(base,id,'launch.json'),workspace);if(fs.statSync(file).size>128*1024)continue;const m=JSON.parse(fs.readFileSync(file,'utf8'));if(m.harness===harness&&m.cwd===workspace)rows.push({id,harness,sessionId:m.sessionId??'',createdAt:fs.statSync(file).mtime.toISOString()});}catch{}
+  }
+  if(harness==='codex')for(const run of listRuns(workflowPaths({workspace:()=>workspace},name))){
+   const threadId=run.controller?.harness==='codex'?run.controller.threadId:run.continuation?.threadId;
+   if(typeof threadId==='string'&&/^[a-f0-9-]{36}$/.test(threadId))rows.push({id:run.runId,harness,sessionId:threadId,createdAt:run.updatedAt});
+  }
+  return rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+ }
+ async function launch(name,harness,options={}){
+  if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['mode','sessionId','sourceSession'].includes(k)))throw fail('AGENT_OPTIONS_INVALID','Invalid launch options');
+  const mode=options.mode??'chat';if(!['chat','reconstruct','resume'].includes(mode))throw fail('AGENT_OPTIONS_INVALID','Unknown launch mode');
+  if(mode==='resume'&&!(harness==='opencode'?/^ses_[a-zA-Z0-9]{1,128}$/:/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/).test(options.sessionId??''))throw fail('AGENT_SESSION_INVALID','Enter the exact harness session ID');
+  if(mode!=='resume'&&(options.sessionId||options.sourceSession))throw fail('AGENT_OPTIONS_INVALID','Session selection requires resume mode');
   const metadata=choice(harness),workspace=selected(name),found=findHarness(root,metadata,env,platform,node);
+  let geminiHome;
+  if(mode==='resume'&&harness==='gemini'){
+   const previous=(await sessions(name,harness)).find(s=>s.id===options.sourceSession);if(!previous)throw fail('AGENT_SESSION_INVALID','Select the original Gemini launch to preserve its session storage');
+   const original=JSON.parse(fs.readFileSync(assertAssetPath(path.join(workspace,'04_Notes','agent-sessions',previous.id,'launch.json'),workspace),'utf8'));
+   geminiHome=assertAssetPath(original.env?.GEMINI_CLI_HOME,workspace);if(!fs.statSync(geminiHome).isDirectory())throw fail('AGENT_SESSION_INVALID','Original Gemini session storage is unavailable');
+  }
   if(!found)throw fail('AGENT_HARNESS_MISSING',`${metadata.label} executable not found on trusted PATH. Install it separately, then restart REToolkit.`);
   if(platform!=='win32')throw fail('AGENT_PLATFORM_UNSUPPORTED','Opening an AI Agent terminal currently requires Windows');
   if(harness==='gemini')assertGeminiBinding(workspace,env,platform);
@@ -263,9 +286,10 @@ export function createAgentLauncher(root,{node=process.execPath,spawnImpl=spawn,
    copySkills(root,sessionDir);
    const mcp={retoolkit_assets:{command:node,args:[path.join(root,'re.js'),'assets','mcp',name,'--root',root]},retoolkit_ghidra:{command:node,args:[path.join(root,'re.js'),'mcp','--root',root]}};
    write(path.join(sessionDir,'mcp.json'),json({mcpServers:mcp}));
-   write(path.join(sessionDir,'context.md'),contextFor(root,name,workspace,sessionDir));
-   const prompt=`Continue the REToolkit project ${name}. First read ${JSON.stringify(path.join(sessionDir,'context.md'))}, follow its bundled workflow and inspect the saved project checklist. Stay within the saved authorized task; if none is recorded, ask for the intended task.`;
-   const config=harnessConfig(harness,mcp,sessionDir,prompt),manifest={harness,cwd:workspace,command:found.command,args:[...found.prefix,...config.args],env:config.env};
+   write(path.join(sessionDir,'context.md'),contextFor(root,name,workspace,sessionDir,mode));
+   const prompt=`${mode==='reconstruct'?'Start Unity game reconstruction now for':'Continue'} the REToolkit project ${name}. First read ${JSON.stringify(path.join(sessionDir,'context.md'))}, follow its bundled workflow and inspect the saved project checklist. ${mode==='reconstruct'?'The user selected reconstruction: begin the earliest actionable dependency without asking for a task.':'Stay within the saved authorized task; if none is recorded, ask for the intended task.'}`;
+   const sessionId=options.sessionId??(harness==='claude'?randomUUID():null);
+   const config=harnessConfig(harness,mcp,sessionDir,prompt,{...options,sessionId,mode,geminiHome}),manifest={harness,mode,sessionId,cwd:workspace,command:found.command,args:[...found.prefix,...config.args],env:config.env};
    const manifestFile=path.join(sessionDir,'launch.json');write(manifestFile,json(manifest));
    // Dynamic paths are data in base64 JSON, never interpolated into shell code.
    // Node forwards the actual harness argv without PowerShell/cmd quote parsing.
@@ -289,5 +313,5 @@ export function createAgentLauncher(root,{node=process.execPath,spawnImpl=spawn,
    throw fail(error.code??'AGENT_LAUNCH_FAILED',`Could not open AI Agent terminal: ${error.message}`);
   }
  }
- return {list,status,launch};
+ return {list,status,launch,sessions};
 }

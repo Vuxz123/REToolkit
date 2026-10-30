@@ -189,3 +189,157 @@ test('artifact source job advances the run to its exact new generation without c
  const updated=await f.call('checkpoint',{...withClaim(c),stepId:'code',outcome:'job',jobId:j.jobId});assert.notEqual(updated.candidate.revision,a.revision);assert.equal(updated.steps[0].state,'verified');assert.equal(updated.complete,false);assert.equal(updated.nextStep.id,'play');
  assert.equal(fs.readFileSync(path.join(f.workspace,'05_ReconstructedSource/Assets/Player.cs'),'utf8'),f.files['Assets/Player.cs']);
 });
+
+test('runtime provider operations can be explicitly added to an existing workflow without completing steps',async t=>{
+ const f=await setup(t),c=await f.claim(await f.create());
+ const r=await f.call('authorize',{...withClaim(c),operations:['libraries.runtime.plan','libraries.runtime.apply','libraries.runtime.verify'],reason:'User requested runtime DLL repair'});
+ assert(r.authorizedOperations.includes('libraries.runtime.apply'));
+ assert.equal(r.steps[0].state,'todo');assert.equal(r.complete,false);
+ assert.equal(r.policyChanges.length,1);
+ await assert.rejects(f.call('authorize',{...withClaim(r),operations:['shell.exec'],reason:'bad'}));
+ await assert.rejects(f.call('reconcile',{...withClaim(r),jobIds:[randomUUID()]}));
+});
+
+test('reconcile consumes a complete ordered mutation chain, never replays jobs or verifies gameplay',async t=>{
+ const f=await setup(t),a=await invokeAssetApi(f.toolkit,'Game','recovery.create',{});
+ const c=await f.claim(await f.create({artifactId:a.artifactId,authorizedOperations:['recovery.run','reconstruct.validate']}));
+ const jobs=[];let revision=a.revision;
+ for(let i=0;i<2;i++){
+  const job=await startJob(f.toolkit,'Game',{operation:'recovery.run',params:{artifactId:a.artifactId,revision,operation:'reconstruct.validate',params:{}}},{spawn:()=>({pid:process.pid,once(){},unref(){}})});
+  const done=await executeJob(f.toolkit,'Game',job.jobId);assert.equal(done.state,'succeeded');
+  const result=JSON.parse(fs.readFileSync(path.join(f.workspace,'04_Notes/jobs',job.jobId,'result.json')));
+  revision=result.revision;jobs.push(job.jobId);
+ }
+ const stale=await f.call('next',{runId:c.runId});assert.equal(stale.state,'needs-inspection');
+ for(const jobIds of [[jobs[0]],[jobs[1]],[...jobs].reverse(),[jobs[0],jobs[0]]])await assert.rejects(f.call('reconcile',{...withClaim(stale),jobIds}));
+ const r=await f.call('reconcile',{...withClaim(stale),jobIds:jobs});
+ assert.equal(r.candidate.revision,revision);assert.equal(r.complete,false);assert.equal(r.steps[1].state,'todo');assert.equal(r.steps[0].state,'todo');
+ assert.equal(r.reconciliations[0].jobs.length,2);assert.equal(r.reason,null);
+ await assert.rejects(f.call('reconcile',{...withClaim(r),jobIds:jobs}),{code:'workflow_candidate_stale'});
+});
+
+test('unfinished recovery remains actionable after a blocked note and release',async t=>{
+ const f=await setup(t),c=await f.claim(await f.create({steps:[{id:'play',label:'Startup',dimension:'gameplay',dependsOn:[],scenario:{entry:'EntryScene',actions:['start'],expected:'Gameplay'}}]}));
+ const r=await f.call('checkpoint',{...withClaim(c),stepId:'play',outcome:'blocked',note:'ChangeScene and CloseLoading are still stubs'});
+ assert.equal(r.nextStep.id,'play');assert.equal(r.continuationRequired,true);
+ const released=await f.call('release',withClaim(r));assert.equal(released.nextStep.id,'play');assert.equal(released.continuationRequired,true);
+});
+
+test('expand adds recovery dependencies without dropping the original gameplay goal',async t=>{
+ const f=await setup(t),c=await f.claim(await f.create());
+ const r=await f.call('expand',{...withClaim(c),stepId:'play',reason:'Recover startup before play',steps:[{id:'startup',label:'Restore scene transition',dimension:'source',sourcePaths:['Assets/Player.cs'],dependsOn:[]}]});
+ assert(r.steps.find(s=>s.id==='play').dependsOn.includes('startup'));assert.equal(r.steps.length,3);assert.equal(r.complete,false);
+ await assert.rejects(f.call('expand',{...withClaim(r),stepId:'play',reason:'cycle',steps:[{id:'cycle',label:'cycle',dimension:'compilation',dependsOn:['play']}]}));
+});
+
+test('an external blocker stops only its branch while independent work remains actionable',async t=>{
+ const f=await setup(t),c=await f.claim(await f.create());
+ const blocker={kind:'external-input',attempted:'Checked configured library roots',missing:'Licensed provider implementation',requiredFrom:'Project owner',resumeWhen:'Provider becomes available'};
+ let r=await f.call('checkpoint',{...withClaim(c),stepId:'code',outcome:'blocked',note:'Missing provider',blocker});
+ assert.equal(r.continuationRequired,false);assert.equal(r.nextStep,null);
+ r=await f.call('expand',{...withClaim(r),stepId:'play',reason:'Independent startup recovery',steps:[{id:'startup',label:'Startup',dimension:'source',sourcePaths:['Assets/Startup.cs'],dependsOn:[]}]});
+ assert.equal(r.nextStep.id,'startup');assert.equal(r.continuationRequired,true);assert.deepEqual(r.steps[0].blocker,blocker);
+ await assert.rejects(f.call('checkpoint',{...withClaim(r),stepId:'startup',outcome:'blocked',note:'Incomplete blocker',blocker:{kind:'external-input'}}));
+});
+
+test('reconcile consumes an exact completed attachment only after the full authenticated chain',async t=>{
+ const f=await setup(t),a=await invokeAssetApi(f.toolkit,'Game','recovery.create',{});
+ let c=await f.claim(await f.create({artifactId:a.artifactId,authorizedOperations:['recovery.run','reconstruct.validate']}));
+ const start=revision=>startJob(f.toolkit,'Game',{operation:'recovery.run',params:{artifactId:a.artifactId,revision,operation:'reconstruct.validate',params:{}}},{spawn:()=>({pid:process.pid,once(){},unref(){}})});
+ const first=await start(a.revision);
+ const w=await runWorkflowOperation(f.toolkit,'Game','wait',{...withClaim(c),stepId:'code',jobId:first.jobId},{startWatcher:async()=>{throw Error('dispatch unavailable');}});
+ c=await f.claim(w);
+ const runFile=path.join(f.workspace,'04_Notes/reconstruction-runs',c.runId+'.json');
+ async function rejectsUnchanged(jobIds){const bytes=fs.readFileSync(runFile);await assert.rejects(f.call('reconcile',{...withClaim(c),jobIds}));assert.deepEqual(fs.readFileSync(runFile),bytes);}
+ await rejectsUnchanged([first.jobId]); // still queued
+ assert.equal((await executeJob(f.toolkit,'Game',first.jobId)).state,'succeeded');
+ const resultPath=id=>path.join(f.workspace,'04_Notes/jobs',id,'result.json');
+ const firstResult=JSON.parse(fs.readFileSync(resultPath(first.jobId)));
+ const second=await start(firstResult.revision);
+ await rejectsUnchanged([first.jobId,second.jobId]); // second producer unfinished
+ assert.equal((await executeJob(f.toolkit,'Game',second.jobId)).state,'succeeded');
+ const secondResult=JSON.parse(fs.readFileSync(resultPath(second.jobId)));
+ for(const ids of [[first.jobId],[second.jobId],[second.jobId,first.jobId],[first.jobId,first.jobId]])await rejectsUnchanged(ids);
+ const original=fs.readFileSync(resultPath(first.jobId));
+ try{fs.appendFileSync(resultPath(first.jobId),' ');await rejectsUnchanged([first.jobId,second.jobId]);}finally{fs.writeFileSync(resultPath(first.jobId),original);}
+ const {seal,unseal}=await import('../src/recovery/artifacts.js');
+ async function rejectsEdited(file,edit,sealed=false){const bytes=fs.readFileSync(file);try{const raw=JSON.parse(bytes),value=sealed?unseal(raw):raw;edit(value);fs.writeFileSync(file,JSON.stringify(sealed?seal(value):value));await rejectsUnchanged([first.jobId,second.jobId]);}finally{fs.writeFileSync(file,bytes);}}
+ const requestFile=path.join(f.workspace,'04_Notes/jobs',first.jobId,'request.json');
+ await rejectsEdited(requestFile,v=>{v.params.artifactId=randomUUID();});
+ await rejectsEdited(requestFile,v=>{v.params.operation='migration.apply';});
+ await rejectsEdited(requestFile,v=>{v.params.revision=randomUUID();});
+ const artifactBase=path.join(f.workspace,'04_Notes/recovery/artifacts',a.artifactId);
+ await rejectsEdited(path.join(artifactBase,'generations',firstResult.revision,'revision.json'),v=>{v.parent=randomUUID();},true);
+ await rejectsEdited(path.join(artifactBase,'artifact.json'),v=>{v.pending={operation:'reconstruct.validate'};},true);
+ await rejectsEdited(runFile,v=>{v.waiting.stepId='missing-step';},true);
+ const nativeFile=path.join(f.workspace,'01_Extracted/libil2cpp.so'),nativeBytes=fs.readFileSync(nativeFile);
+ try{fs.appendFileSync(nativeFile,'changed');await rejectsUnchanged([first.jobId,second.jobId]);}finally{fs.writeFileSync(nativeFile,nativeBytes);}
+ const r=await f.call('reconcile',{...withClaim(c),jobIds:[first.jobId,second.jobId]});
+ assert.equal(r.waiting,null);assert.equal(r.candidate.revision,secondResult.revision);
+ assert.deepEqual(r.reconciliations.at(-1).consumedAttachment,w.waiting);
+ assert.deepEqual(r.continuation,c.continuation);assert.equal(r.steps[0].state,'unverified');
+ assert.equal(r.steps[0].evidence,undefined);assert.equal(r.steps[1].state,'todo');assert.equal(r.complete,false);
+ assert.equal(r.nextStep.id,'code');assert.equal(r.continuationRequired,true);
+ await assert.rejects(f.call('reconcile',{...withClaim(r),jobIds:[first.jobId,second.jobId]}),{code:'workflow_candidate_stale'});
+});
+
+for(const uncertain of [false,true])test('attached reconciliation rejects '+(uncertain?'unknown':'failed')+' producer without changing run',async t=>{
+ const f=await setup(t),a=await invokeAssetApi(f.toolkit,'Game','recovery.create',{});
+ let c=await f.claim(await f.create({artifactId:a.artifactId,authorizedOperations:['recovery.run','reconstruct.validate']}));
+ const j=await startJob(f.toolkit,'Game',{operation:'recovery.run',params:{artifactId:a.artifactId,revision:a.revision,operation:'reconstruct.validate',params:{}}},{spawn:()=>({pid:process.pid,once(){},unref(){}})});
+ const w=await runWorkflowOperation(f.toolkit,'Game','wait',{...withClaim(c),stepId:'code',jobId:j.jobId},{startWatcher:async()=>{throw Error('unavailable');}});c=await f.claim(w);
+ const done=await executeJob(f.toolkit,'Game',j.jobId,{invoke:async()=>{throw Object.assign(Error('test failure'),{code:uncertain?'cleanup_pending':'test_failure'});}});
+ assert.equal(done.state,uncertain?'unknown':'failed');
+ const file=path.join(f.workspace,'04_Notes/reconstruction-runs',c.runId+'.json'),bytes=fs.readFileSync(file);
+ await assert.rejects(f.call('reconcile',{...withClaim(c),jobIds:[j.jobId]}),{code:'workflow_evidence_invalid'});assert.deepEqual(fs.readFileSync(file),bytes);
+});
+
+async function pendingTransfer(t,{finishProducer=true,finishWatcher=true,wakeOverrides={}}={}){
+ const f=await setup(t),c=await f.claim(await f.create());
+ const job=await startJob(f.toolkit,'Game',{operation:'assets.index',params:{}},{spawn:()=>({pid:process.pid,once(){},unref(){}})});
+ let watcher;
+ const waiting=await runWorkflowOperation(f.toolkit,'Game','wait',{...withClaim(c),stepId:'code',jobId:job.jobId},{startWatcher:async(toolkit,name,request)=>{watcher=await startJob(toolkit,name,request,{spawn:()=>({pid:process.pid,once(){},unref(){}})});return watcher;}});
+ if(finishProducer)await executeJob(f.toolkit,'Game',job.jobId);
+ if(finishWatcher)await executeJob(f.toolkit,'Game',watcher.jobId,{invoke:async()=>({kind:'retoolkit-agent-wake',workspace:f.workspace,jobId:job.jobId,threadId:c.controller.threadId,task:'continue-reconstruction',state:'unknown',delivery:'unknown',cleanupPending:false,dispatchDiagnostic:{kind:'process-exit',exitCode:1,signaled:false},...wakeOverrides})});
+ return {...f,waiting,job,watcher,previousThreadId:c.controller.threadId};
+}
+
+test('pending continuation can transfer after closed uncertain delivery without replay or acceptance',async t=>{
+ const f=await pendingTransfer(t),threadId=randomUUID(),p={runId:f.waiting.runId,sequence:f.waiting.sequence,previousThreadId:f.previousThreadId,harness:'codex',threadId,reason:'User requested continuation in this new conversation'};
+ const call=(command,params)=>runWorkflowOperation(f.toolkit,'Game',command,params,{env:{CODEX_THREAD_ID:threadId}});
+ await assert.rejects(call('claim',{runId:p.runId,sequence:p.sequence,harness:'codex',threadId}),{code:'workflow_thread_invalid'});
+ const r=await call('transfer',p);
+ assert.deepEqual(r.waiting,f.waiting.waiting);assert.deepEqual(r.candidate,f.waiting.candidate);assert.deepEqual(r.authorizedOperations,f.waiting.authorizedOperations);
+ assert.equal(r.controller,null);assert.equal(r.agentResumed,false);assert.equal(r.complete,false);assert.equal(r.continuation.threadId,threadId);
+ assert.equal(r.transfers[0].watcherDelivery,'unknown');assert.equal(r.transfers[0].watcherDiagnostic.exitCode,1);
+ await assert.rejects(call('transfer',p),{code:'workflow_sequence_stale'});
+ const claimed=await call('claim',{runId:r.runId,sequence:r.sequence,harness:'codex',threadId});
+ const checked=await call('checkpoint',{...withClaim(claimed),stepId:'code',outcome:'job',jobId:f.job.jobId});
+ assert.equal(checked.waiting,null);assert.equal(checked.complete,false);
+});
+
+test('transfer rejects running producers/watchers, uncertain cleanup and missing dispatch closure',async t=>{
+ for(const options of [{finishProducer:false},{finishWatcher:false},{wakeOverrides:{cleanupPending:true}},{wakeOverrides:{dispatchDiagnostic:{kind:'timeout'}}},{wakeOverrides:{state:'dispatching'}}]){
+  const f=await pendingTransfer(t,options),threadId=randomUUID();
+  await assert.rejects(runWorkflowOperation(f.toolkit,'Game','transfer',{runId:f.waiting.runId,sequence:f.waiting.sequence,previousThreadId:f.previousThreadId,harness:'codex',threadId,reason:'User requested transfer'},{env:{CODEX_THREAD_ID:threadId}}),{code:'workflow_transfer_pending'});
+  assert.equal((await f.call('status',{runId:f.waiting.runId})).sequence,f.waiting.sequence);
+ }
+});
+
+test('transfer rejects wrong source/destination threads and revokes both old and new wake dispatch',async t=>{
+ const f=await pendingTransfer(t),threadId=randomUUID(),params={runId:f.waiting.runId,sequence:f.waiting.sequence,previousThreadId:f.previousThreadId,harness:'codex',threadId,reason:'User requested transfer'};
+ for(const [p,env] of [[{...params,previousThreadId:randomUUID()},{CODEX_THREAD_ID:threadId}],[params,{CODEX_THREAD_ID:randomUUID()}]])await assert.rejects(runWorkflowOperation(f.toolkit,'Game','transfer',p,{env}),{code:'workflow_thread_invalid'});
+ const r=await runWorkflowOperation(f.toolkit,'Game','transfer',params,{env:{CODEX_THREAD_ID:threadId}});
+ const {workflowWakeBinding}=await import('../src/workflow/service.js');
+ for(const id of [threadId,f.previousThreadId])assert.equal(workflowWakeBinding(f.toolkit,'Game',{runId:r.runId,jobId:f.job.jobId,threadId:id}),false);
+ await assert.rejects(runWorkflowOperation(f.toolkit,'Game','claim',{runId:r.runId,sequence:r.sequence,harness:'codex',threadId:f.previousThreadId},{env:{CODEX_THREAD_ID:f.previousThreadId}}),{code:'workflow_thread_invalid'});
+ const claim=await runWorkflowOperation(f.toolkit,'Game','claim',{runId:r.runId,sequence:r.sequence,harness:'codex',threadId},{env:{CODEX_THREAD_ID:threadId}});
+ await assert.rejects(runWorkflowOperation(f.toolkit,'Game','transfer',{...params,sequence:claim.sequence,previousThreadId:threadId,threadId:randomUUID()},{env:{}}),{code:'workflow_controller_exists'});
+});
+
+test('transfer cannot bypass destination identity with another harness',async t=>{
+ const f=await pendingTransfer(t);
+ for(const harness of ['claude','gemini','opencode'])await assert.rejects(runWorkflowOperation(f.toolkit,'Game','transfer',{runId:f.waiting.runId,sequence:f.waiting.sequence,previousThreadId:f.previousThreadId,harness,threadId:randomUUID(),reason:'Transfer'},{env:{}}));
+ const paused=await f.call('pause',{runId:f.waiting.runId,sequence:f.waiting.sequence}),threadId=randomUUID();
+ await assert.rejects(runWorkflowOperation(f.toolkit,'Game','transfer',{runId:paused.runId,sequence:paused.sequence,previousThreadId:f.previousThreadId,harness:'codex',threadId,reason:'Transfer'},{env:{CODEX_THREAD_ID:threadId}}),{code:'workflow_inactive'});
+});

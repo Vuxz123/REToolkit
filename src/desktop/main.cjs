@@ -43,7 +43,8 @@ function argument(key){const index=process.argv.indexOf(key);if(index<0||process
  ipcMain.handle('desktop:preparation:devices',async event=>{trusted(event);const {runAdbOperation}=await import('../adb/api.js');return runAdbOperation(toolkit,undefined,'adb.devices',{});});
  ipcMain.handle('desktop:preparation:packages',async(event,serial)=>{trusted(event);buildDesktopCommand('adb.packages',{serial});const {runAdbOperation}=await import('../adb/api.js');return runAdbOperation(toolkit,undefined,'adb.packages',{serial});});
  ipcMain.handle('desktop:agents:list',event=>{trusted(event);return agents.list();});
- ipcMain.handle('desktop:agents:launch',(event,name,harness)=>{trusted(event);if(settings.busy()||!broker.canQuit())throw Error('Wait for the current desktop task before opening an Agent');return agents.launch(name,harness);});
+ ipcMain.handle('desktop:agents:sessions',(event,name,harness)=>{trusted(event);return agents.sessions(name,harness);});
+ ipcMain.handle('desktop:agents:launch',(event,name,harness,options)=>{trusted(event);if(settings.busy()||!broker.canQuit())throw Error('Wait for the current desktop task before opening an Agent');return agents.launch(name,harness,options);});
  ipcMain.handle('desktop:copy',(event,text)=>{trusted(event);clipboard.writeText(validateDesktopCopyText(text));return {copied:true};});
  ipcMain.handle('desktop:run',(event,operation,payload)=>{trusted(event);if(settings.busy())throw Error('Wait for Jev settings to finish before starting a task');return broker.submit(operation,payload);});
  ipcMain.handle('desktop:settings:get',event=>{trusted(event);return settings.get();});

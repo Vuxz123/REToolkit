@@ -51,7 +51,7 @@ function fixedMessage(workspace,policy,job,statusReference,policyReference){
  const evidence=JSON.stringify({workspace,jobId:policy.jobId,operationId:policy.operationId,...(policy.runId?{runId:policy.runId}:{}),assetScope,policyReference,statusReference});
  const safeSuccess=job.state==='succeeded'&&job.outcomeVerified===true;
  const instruction=policy.task==='continue-reconstruction'
-  ?'Read workflow.status for this exact runId and original authorized goal. If not paused/canceled, use workflow.claim with its current sequence, your exact harness/thread identity, then inspect this job and checkpoint its actual result. Continue the earliest unfinished dependency using workflow.next within saved authorization; a completed job does not complete the gameplay goal. Unknown or failed operations require inspection, never automatic replay. Keep all unfinished scenarios visible; gameplay remains unverified without current observations.'
+  ?'Read workflow.status for this exact runId and original authorized goal. If not paused/canceled, use workflow.claim with its current sequence, your exact harness/thread identity, then inspect this job and checkpoint its actual result. Continue the earliest unfinished dependency using workflow.next within saved authorization; a completed job does not complete the gameplay goal. Unknown or failed operations require inspection, never automatic replay. Keep all unfinished scenarios visible; gameplay remains unverified without current observations. Missing implementations are actionable recovery work: use workflow.expand to add dependencies. When workflow.next reports continuationRequired, continue instead of ending after a checklist update. External blockers need attempted/missing/requiredFrom/resumeWhen details; claim release alone does not schedule another wake.'
   :policy.task==='verify-source-and-scoped-unity'&&safeSuccess
   ?'Read the immutable registered policyReference in this exact workspace; verify its asset scope hash and count against assetScope using SHA256 of JSON.stringify(policy.assetIds), preserving the saved sorted order. Inspect this exact job and the saved reconstruction apply receipt first. If the policy, operation, hashes and source identity still match, run reconstruct.verify for this operation. Only after source verification succeeds, run reconstruct.validate limited to the exact assetIds in that policy. Stop on any mismatch or recovery gate. Keep gameplay unverified.'
   :'Inspection only: inspect this exact job and its saved result or diagnostic references. Its state does not authorize source writes, Unity execution or validation. Keep gameplay unverified.';
@@ -67,11 +67,11 @@ async function childResult(found,args,{workspace,env,timeoutMs,spawnImpl=spawn})
   try{child=spawnImpl(found.command,[...(found.prefix??[]),...args],{cwd:workspace,env:withoutJevCredentials(env),shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});}
   catch{return finish({state:'spawn-failed'});}
   const releaseHandles=()=>{child.unref?.();child.stdout?.unref?.();child.stderr?.unref?.();};
-  const collect=data=>{bytes+=data.length;if(bytes<=32768)output+=data.toString();else {finish({state:'unknown',cleanupPending:true});releaseHandles();}};
+  const collect=data=>{bytes+=data.length;if(bytes<=32768)output+=data.toString();else {finish({state:'unknown',cleanupPending:true,diagnostic:{kind:'output-limit'}});releaseHandles();}};
   child.stdout?.on('data',collect);child.stderr?.on('data',collect);
   child.once('error',()=>finish({state:'spawn-failed'}));
-  child.once('close',(code,signal)=>finish(code===0&&!signal?{state:'accepted',output}:{state:'unknown'}));
-  timer=setTimeout(()=>{finish({state:'unknown',cleanupPending:true});releaseHandles();},timeoutMs);
+  child.once('close',(code,signal)=>finish(code===0&&!signal?{state:'accepted',output}:{state:'unknown',diagnostic:{kind:'process-exit',exitCode:Number.isInteger(code)?code:null,signaled:Boolean(signal)}}));
+  timer=setTimeout(()=>{finish({state:'unknown',cleanupPending:true,diagnostic:{kind:'timeout'}});releaseHandles();},timeoutMs);
  });
 }
 
@@ -147,7 +147,9 @@ export async function runAgentWake(toolkit,name,params,dependencies={}){
   let response;try{response=await transport.dispatch({threadId:policy.threadId,message,workspace});}catch{return save('unknown',{delivery:'unknown',reason:'agent_wake_dispatch_unverified'});}
   if(response?.state==='accepted')return save('queued',{delivery:'accepted',queuedAt:timestamp(),cleanupPending:false});
   if(response?.state==='spawn-failed')return save('failed',{delivery:'not-dispatched',reason:'agent_wake_spawn_failed'});
-  return save('unknown',{delivery:'unknown',cleanupPending:response?.cleanupPending===true,reason:response?.cleanupPending?'cleanup_pending':'agent_wake_dispatch_unverified'});
+  const diagnostic=response?.diagnostic;
+  const dispatchDiagnostic=diagnostic&&['process-exit','timeout','output-limit'].includes(diagnostic.kind)?{kind:diagnostic.kind,...(diagnostic.kind==='process-exit'?{exitCode:Number.isInteger(diagnostic.exitCode)?diagnostic.exitCode:null,signaled:diagnostic.signaled===true}:{})}:{kind:'unverified-response'};
+  return save('unknown',{delivery:'unknown',cleanupPending:response?.cleanupPending===true,reason:response?.cleanupPending?'cleanup_pending':'agent_wake_dispatch_unverified',dispatchDiagnostic,recovery:{action:'resume-existing-thread',threadId:policy.threadId,jobId:policy.jobId,...(policy.runId?{runId:policy.runId}:{}),replayJob:false,retryDispatch:false}});
   };
   return policy.task==='continue-reconstruction'?await withWorkflowDispatch(toolkit,name,policy,dispatch):await dispatch(true);
  }catch{

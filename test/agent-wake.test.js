@@ -148,3 +148,14 @@ test('feature preflight fails before observing a pending job and late probe clea
   assert.equal(f.calls().length,1);await f.run();assert.equal(f.calls().length,1);
  }
 });
+
+test('failed queue retains safe exit diagnostics and exact manual continuation without output leakage',async t=>{
+ const f=await fixture(t,{mode:'failure'}),result=await f.run();
+ assert.equal(result.dispatchDiagnostic.exitCode,1);
+ assert.equal(result.dispatchDiagnostic.kind,'process-exit');
+ assert.equal(result.recovery.action,'resume-existing-thread');
+ assert.equal(result.recovery.threadId,f.params.threadId);
+ assert.equal(result.recovery.jobId,f.params.jobId);
+ assert.equal(result.recovery.replayJob,false);
+ assert.doesNotMatch(JSON.stringify(result),/NEVER-REPORT-THIS/);
+});

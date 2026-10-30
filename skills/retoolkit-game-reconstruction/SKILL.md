@@ -48,6 +48,31 @@ Retain unfinished gameplay when only source/compile is proven. The current
 workflow has no generic gameplay acceptance adapter; record the exact blocker
 and continue independent work instead of shrinking the checklist.
 
+Missing implementation is remaining work, not an external stopping condition.
+For example, loading reaching 100% while EntryScene persists requires continuing
+ChangeScene, scene coroutine and CloseLoading recovery within the authorized goal.
+Use `workflow.expand` to add source and validation dependencies to the unfinished
+gameplay step, preserving its scenario and original data scope. A plain blocked
+note remains actionable. External blockers require `blocker` details: kind
+(`external-input`, `permission`, `tool-capability`), attempted, missing,
+requiredFrom and resumeWhen. Do not classify evidence you can still collect as
+unavailable external input. Failed/unknown jobs require inspection, not replay.
+Before ending a turn, read `workflow.next`: if `continuationRequired` is true,
+continue investigation/recovery or expand the missing dependencies. Releasing a
+claim and updating the checklist do not complete or suspend the authorized task.
+Only hand off for a registered wait, explicit pause, a real external blocker,
+or harness limits; preserve the exact next action in the last case. The toolkit
+reports continuation intent; it cannot force a closed harness to keep running.
+
+When the user explicitly requests continuation in a different conversation and
+claim rejects a pending old thread, inspect `workflow.transfer`. Supply current
+sequence, exact previousThreadId, actual destination harness/threadId and reason.
+Transfer currently supports Codex only. The producer must have verified success; the old watcher must have closed with
+known dispatch-process closure, even if delivery remains unknown. Never edit run
+JSON, impersonate the old thread, replay a producer/watcher, or transfer an active
+controller. After transfer, claim as yourself and checkpoint the same completed
+job before starting further mutations. Transfer is not gameplay acceptance.
+
 Create or resume `04_Notes/game-reconstruction-workflow.md` in the selected
 workspace. This is an agent-authored ledger, not toolkit state or a receipt.
 Follow [checkpoint and recovery](references/checkpoint-and-recovery.md). Capture

@@ -17,9 +17,12 @@ export function listRuns(paths){
  return names.map(n=>readRun(paths,n.slice(0,-5))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
 }
 export const inactive=r=>['paused','canceled','completed'].includes(r.state);
+export const actionableStep=r=>r.steps.find(s=>s.state!=='verified'&&!(s.state==='blocked'&&(s.blocker||s.jobId))&&s.dependsOn.every(id=>r.steps.find(d=>d.id===id)?.state==='verified'))??null;
 export function publicRun(r,{freshness='not-rechecked',nextStep=null,...extra}={}){
  const staleController=Boolean(r.controller&&Date.now()-Date.parse(r.controller.heartbeatAt)>120000);
  const staleCompletion=r.state==='completed'&&r.completionFreshness==='stale';
+ const continuationRequired=!inactive(r)&&r.state!=='needs-inspection'&&!r.waiting&&Boolean(actionableStep(r));
+ extra={...extra,continuationRequired,continuationAction:continuationRequired?'Continue the actionable step; use workflow.expand for missing recovery dependencies. A checklist update is not a stopping condition.':null};
  const proof=value=>{if(!value)return value;const {files,candidate,...rest}=value;return {...rest,...(files?{filesCount:files.length}:{}),...(candidate?{inventorySha256:candidate.inventorySha256}: {})};};
  const step=s=>s?{...s,...(s.evidence?{evidence:proof(s.evidence)}:{}),...(s.staleEvidence?{staleEvidence:proof(s.staleEvidence)}:{})}:null;
  return {...r,steps:r.steps.map(step),...(staleCompletion?{state:'needs-inspection',recordedState:'completed'}:{}),complete:r.state==='completed'&&!staleCompletion,agentResumed:Boolean(r.controller)&&!staleController,controller:r.controller?{...r.controller,heartbeatStale:staleController}:null,freshness:staleCompletion?'stale':freshness,nextStep:step(nextStep),...extra};

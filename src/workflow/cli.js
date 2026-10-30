@@ -7,7 +7,7 @@ import {workflowDefinitions} from './definitions.js';
 export const workflowUsage=`Durable reconstruction task (job completion is not gameplay completion)
   retk workflow create <Game> --params-file goal.json
   retk workflow status|next <Game> [--run <UUID>]
-  retk workflow claim|heartbeat|release|checkpoint|wait <Game> --params-file step.json
+  retk workflow claim|heartbeat|release|checkpoint|wait|authorize|reconcile|expand|transfer <Game> --params-file step.json
   retk workflow pause|resume|cancel <Game> --run <UUID> --sequence <integer>
 Every mutation returns sequence; use it on the next controller operation.
 Use --params <JSON> instead of --params-file for small typed requests.

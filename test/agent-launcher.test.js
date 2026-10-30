@@ -112,12 +112,12 @@ test('Claude keeps the initial prompt outside its variadic MCP config list throu
  // Claude --mcp-config <configs...> consumes every following non-option until --.
  // A quoted prompt is still one more config without this boundary.
  const boundary=manifest.args.indexOf('--');
- assert.equal(boundary,2,'end the MCP config list before the positional prompt');
- assert.deepEqual(manifest.args.slice(0,boundary),['--mcp-config',path.join(result.sessionDir,'mcp.json')]);
+ const mcpStart=manifest.args.indexOf('--mcp-config');assert.equal(boundary,mcpStart+2,'end the MCP config list before the positional prompt');
+ assert.deepEqual(manifest.args.slice(mcpStart,boundary),['--mcp-config',path.join(result.sessionDir,'mcp.json')]);
  assert.equal(manifest.args.length,boundary+2);
  const prompt=manifest.args[boundary+1];assert.match(prompt,/^Continue the REToolkit project Example\./);
  assert.ok(prompt.includes(JSON.stringify(path.join(result.sessionDir,'context.md'))));
- assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(manifest.args[1],'utf8')).mcpServers).sort(),['retoolkit_assets','retoolkit_ghidra']);
+ assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(manifest.args[mcpStart+1],'utf8')).mcpServers).sort(),['retoolkit_assets','retoolkit_ghidra']);
  const {runAgentTerminal}=await import('../src/agents/terminal-runner.js');
  const calls=[],child=new EventEmitter();
  runAgentTerminal(file,{env:{},spawnImpl:(...args)=>{calls.push(args);return child;}});
@@ -207,4 +207,34 @@ test('launch reports a terminal spawn failure and retains bounded session diagno
  await assert.rejects(()=>launcher.launch('Example','codex'),/terminal.*fixture terminal missing/i);
  const sessions=path.join(root,'workspaces','Example','04_Notes','agent-sessions');const session=path.join(sessions,fs.readdirSync(sessions)[0]);
  assert.equal(JSON.parse(fs.readFileSync(path.join(session,'launch-status.json'))).state,'failed');
+});
+
+test('explicit reconstruction launch starts the authorized workflow without asking for a task',async t=>{
+ const {launcher}=await fixture(t),r=await launcher.launch('Example','codex',{mode:'reconstruct'});
+ const manifest=JSON.parse(fs.readFileSync(path.join(r.sessionDir,'launch.json'))),context=fs.readFileSync(path.join(r.sessionDir,'context.md'),'utf8');
+ assert.equal(manifest.mode,'reconstruct');assert.match(context,/explicitly requested.*reconstruction/i);assert.doesNotMatch(context,/Opening this terminal does not establish/);
+ assert.match(manifest.args.at(-1),/Start.*reconstruction now/i);
+});
+
+test('resume uses an exact session ID and keeps project MCP configuration for all harnesses',async t=>{
+ const {launcher}=await fixture(t);
+ for(const harness of ['codex','claude','gemini','opencode']){
+  const id=harness==='opencode'?'ses_example123':'019a30bb-f351-77ab-9e17-38b5755db88e';
+  const original=harness==='gemini'?await launcher.launch('Example',harness):null;
+  const r=await launcher.launch('Example',harness,{mode:'resume',sessionId:id,...(original?{sourceSession:path.basename(original.sessionDir)}:{})});
+  const m=JSON.parse(fs.readFileSync(path.join(r.sessionDir,'launch.json')));
+  assert(m.args.includes(id));assert.equal(m.mode,'resume');assert(!m.args.includes('--last'));assert(!m.args.includes('--continue'));
+ }
+ await assert.rejects(launcher.launch('Example','codex',{mode:'resume',sessionId:'--last'}));
+});
+
+test('Claude native session ID is retained and Gemini repeated resume reuses the original home',async t=>{
+ const {launcher}=await fixture(t),claude=await launcher.launch('Example','claude');
+ const rows=await launcher.sessions('Example','claude');assert.equal(rows.length,1);assert.match(rows[0].sessionId,/^[a-f0-9-]{36}$/);assert.equal(rows[0].id,path.basename(claude.sessionDir));
+ const first=await launcher.launch('Example','gemini'),id='019a30bb-f351-77ab-9e17-38b5755db88e';
+ const second=await launcher.launch('Example','gemini',{mode:'resume',sessionId:id,sourceSession:path.basename(first.sessionDir)});
+ const third=await launcher.launch('Example','gemini',{mode:'resume',sessionId:id,sourceSession:path.basename(second.sessionDir)});
+ const home=r=>JSON.parse(fs.readFileSync(path.join(r.sessionDir,'launch.json'))).env.GEMINI_CLI_HOME;
+ assert.equal(home(first),home(third));
+ await assert.rejects(launcher.launch('Example','gemini',{mode:'resume',sessionId:id,sourceSession:'../escape'}));
 });
