@@ -4,7 +4,38 @@ import {createToolkit} from '../src/toolkit.js';
 import {spawnSync} from 'node:child_process';
 const api=()=>import('../src/toolchain/lease.js');
 const idle=async()=>({state:'idle',processes:[]});
+const residentId='ee8f0230-7253-4b0e-8c58-8759d05f8e5d';
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'retk-tool-lease-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;}
+test('persistent resident readers block writers until exact explicit release',async t=>{
+ const root=fixture(t),{acquirePersistentToolchainRead,releasePersistentToolchainRead,withToolchainWrite}=await api();
+ const token=acquirePersistentToolchainRead(root,residentId);
+ const marker=path.join(root,'.cache/toolchain/readers',`resident-${residentId}.json`),owner=JSON.parse(fs.readFileSync(marker,'utf8'));
+ assert.equal(owner.sessionId,residentId);assert.equal(owner.token,token);assert.equal(owner.pid,undefined);
+ await assert.rejects(withToolchainWrite(root,()=>assert.fail('writer must remain excluded'),{inspectProcesses:idle}),{code:'TOOLCHAIN_BUSY'});
+ assert.throws(()=>acquirePersistentToolchainRead(root,residentId),{code:'TOOLCHAIN_BUSY'});
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,residentId),{code:'TOOLCHAIN_BUSY'});assert.ok(fs.existsSync(marker));
+ releasePersistentToolchainRead(root,residentId,token);assert.ok(!fs.existsSync(marker));
+ await withToolchainWrite(root,()=>assert.throws(()=>acquirePersistentToolchainRead(root,residentId),{code:'TOOLCHAIN_BUSY'}),{inspectProcesses:idle});
+});
+test('persistent reader release rejects altered ownership and unsafe session names',async t=>{
+ const root=fixture(t),{acquirePersistentToolchainRead,releasePersistentToolchainRead}=await api();
+ assert.throws(()=>acquirePersistentToolchainRead(root,'../escape'),{code:'TOOLCHAIN_BUSY'});
+ const token=acquirePersistentToolchainRead(root,residentId),marker=path.join(root,'.cache/toolchain/readers',`resident-${residentId}.json`);
+ const owner=JSON.parse(fs.readFileSync(marker,'utf8'));fs.writeFileSync(marker,JSON.stringify({...owner,sessionId:token}));
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,token),{code:'TOOLCHAIN_BUSY'});assert.ok(fs.existsSync(marker));
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,token,{allowMissing:true}),{code:'TOOLCHAIN_BUSY'});assert.ok(fs.existsSync(marker));
+});
+test('confirmed-stop retry may explicitly tolerate a missing reader without relaxing ownership checks',async t=>{
+ const root=fixture(t),{acquirePersistentToolchainRead,releasePersistentToolchainRead}=await api();
+ const token=acquirePersistentToolchainRead(root,residentId);
+ releasePersistentToolchainRead(root,residentId,token);
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,token),{code:'TOOLCHAIN_BUSY'});
+ assert.doesNotThrow(()=>releasePersistentToolchainRead(root,residentId,token,{allowMissing:true}));
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,'invalid',{allowMissing:true}),{code:'TOOLCHAIN_BUSY'});
+ const next=acquirePersistentToolchainRead(root,residentId);
+ assert.throws(()=>releasePersistentToolchainRead(root,residentId,token,{allowMissing:true}),{code:'TOOLCHAIN_BUSY'});
+ releasePersistentToolchainRead(root,residentId,next,{allowMissing:true});
+});
 test('toolchain readers and writers exclude one another and release on known failures',async t=>{
  const root=fixture(t),{acquireToolchainRead,withToolchainWrite}=await api();
  const one=acquireToolchainRead(root),two=acquireToolchainRead(root);

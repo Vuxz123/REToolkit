@@ -30,6 +30,23 @@ test('launcher exports only the four fixed harness choices and reports availabil
  assert.ok((await launcher.list()).every(h=>h.available&&path.isAbsolute(h.executable)));
  const status=await launcher.status('Example','codex');assert.equal(status.name,'Example');assert.equal(status.available,true);
 });
+
+test('each harness receives quiet execution instructions in new and resumed sessions',async t=>{
+ const {launcher}=await fixture(t);
+ for(const harness of ['codex','claude','gemini','opencode']){
+  const original=await launcher.launch('Example',harness,{mode:'reconstruct'});
+  const resumed=await launcher.launch('Example',harness,{mode:'resume',sessionId:harness==='opencode'?'ses_quietfixture':'12345678-1234-4234-8234-123456789abc',...(harness==='gemini'?{sourceSession:path.basename(original.sessionDir)}:{})});
+  for(const session of [original,resumed]){
+   const context=fs.readFileSync(path.join(session.sessionDir,'context.md'),'utf8');
+   assert.match(context,/Quiet execution/);
+   assert.match(context,/Keep working within the saved authorization/);
+   assert.match(context,/Do not end at an intermediate checkpoint/);
+   assert.match(context,/durable continuation/);
+   assert.match(context,/required progress updates to one short sentence/);
+   assert.match(context,/evidence paths/);
+  }
+ }
+});
 test('all harness bootstraps and terminal runners omit Jev credentials while retaining harness authentication',async t=>{
  const {root,workspace,bin}=await fixture(t),{createAgentLauncher}=await import(moduleUrl),{runAgentTerminal}=await import('../src/agents/terminal-runner.js');
  const env={PATH:bin,TYPESAFE_API_KEY:'private-gui-key',JEV_OLD_KEY:'old-private-key',typesafe_mixed:'mixed-private-key',jev_lower:'lower-private-key',OPENAI_API_KEY:'codex-auth',ANTHROPIC_API_KEY:'claude-auth',GEMINI_API_KEY:'gemini-auth',CODEX_THREAD_ID:'retained-thread',GEMINI_CLI_SYSTEM_SETTINGS_PATH:path.join(root,'system','settings.json')};

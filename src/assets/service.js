@@ -17,7 +17,7 @@ import {stepFingerprint,within} from '../inputs.js';
 import {acquireToolchainRead} from '../toolchain/lease.js';
 
 const MiB=1024**2;
-export const assetMethods=new Set(['assets.index','assets.list','assets.get','assets.tree','assets.refs','assets.scripts','assets.source','reconstruct.plan','reconstruct.apply','reconstruct.verify','reconstruct.validate','reconstruct.validation']);
+export const assetMethods=new Set(['assets.index','assets.list','assets.get','assets.tree','assets.refs','assets.scripts','assets.source','reconstruct.plan','reconstruct.apply','reconstruct.verify','reconstruct.validate','reconstruct.validation','reconstruct.resident-status','reconstruct.resident-stop']);
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
 export function readAssetJson(file,maxBytes=128*MiB) {
   assertAssetPath(file);const stat=fs.lstatSync(file);
@@ -92,6 +92,7 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
   if(!assetMethods.has(method))throw assetError('asset_method_invalid','Unknown asset operation');
   const paths=assetPaths(toolkit,name);
   if(!ownsWorkspaceLock(paths.workspace))throw assetError('asset_lease_required','Asset operation requires the workspace lease');
+  if(['reconstruct.resident-status','reconstruct.resident-stop'].includes(method)){paramsShape(params,[]);const {residentSessionOperation}=await import('../unity/resident.js');return residentSessionOperation(toolkit,name,method.endsWith('status')?'status':'stop',dependencies.validation?.resident);}
   const selected=selectedAssetBinding(toolkit,name),projectDir=await exportRoot(selected,toolkit,name);
   if(method==='assets.index') {
     paramsShape(params,['graphMaxMiB','storage']);if(params.storage!==undefined&&!['json','sqlite'].includes(params.storage)||params.graphMaxMiB!==undefined&&(![128,256,512].includes(params.graphMaxMiB)||params.storage==='sqlite'))throw assetError('asset_params_invalid','Invalid graph storage or JSON budget');
@@ -181,10 +182,10 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     const graph=await createValidationSourceSnapshot({projectDir,binding:selected.binding});
     const {validateUnityProject,readUnityValidation}=await import('../unity/validation.js');
     if(method==='reconstruct.validation'){paramsShape(params,['operationId','section','limit','cursor']);return readUnityValidation({toolkit,name,projectDir,graph,...params});}
-    paramsShape(params,['timeoutSeconds','resumeOperationId','assetIds','dataCapture']);
+    paramsShape(params,['timeoutSeconds','resumeOperationId','assetIds','dataCapture','mode']);
     const {hasAssetSession}=await import('./session.js');
     if(hasAssetSession(toolkit,name))throw assetError('asset_session_active','Stop the owned AssetRipper session before starting Unity validation');
-    const result=await validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds:params.timeoutSeconds??600,resumeOperationId:params.resumeOperationId,assetIds:params.assetIds,dataCapture:params.dataCapture??false},dependencies.validation);
+    const result=await validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds:params.timeoutSeconds??600,resumeOperationId:params.resumeOperationId,assetIds:params.assetIds,dataCapture:params.dataCapture??false,mode:params.mode??'clean'},dependencies.validation);
     const project=toolkit.read(name),previous=project.assetReconstruction;
     project.assetReconstruction={...(previous?.binding&&fingerprint(previous.binding)===fingerprint(selected.binding)?previous:{}),binding:selected.binding,state:result.state==='partial'?'partial':result.compileReady?(result.bindingsVerified?'bindings_verified':'compile_ready'):result.state,validationState:result.state,compilation:result.compilation,compileReady:result.compileReady,bindingsVerified:result.bindingsVerified,scopeBindingsVerified:result.scopeBindingsVerified,validationScope:result.scope,validationCoverage:result.coverage,behavior:'unverified',validationOperation:result.operationId};await toolkit.save(name,project);
     return result;
@@ -236,6 +237,6 @@ export async function runAssetOperation(toolkit,name,method,params={},dependenci
   }
   const paths=assetPaths(toolkit,name),lease=acquireToolchainRead(toolkit.root);let uncertain=false;
   try{return await withWorkspaceLock(paths.workspace,async()=>{
-    try{return await handleOwnedAssetOperation(toolkit,name,method,params,dependencies);}catch(error){uncertain=['reconstruction_recovery_required','unity_recovery_required'].includes(error.code);throw error;}
+    try{return await handleOwnedAssetOperation(toolkit,name,method,params,dependencies);}catch(error){uncertain=!error.residentSessionProtected&&['reconstruction_recovery_required','unity_recovery_required'].includes(error.code);throw error;}
   });}finally{if(!uncertain)lease.release();}
 }

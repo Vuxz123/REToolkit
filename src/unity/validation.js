@@ -9,6 +9,8 @@ import {verifyGraphFiles} from '../assets/graph.js';
 import {managedLibraries} from '../libraries/managed.js';
 import {validateUnityObservation,validateUnityRequest} from './report.js';
 import {sourceExcludesComponentInheritance} from '../assets/csharp.js';
+import {stageResidentProject,runResidentEditor} from './resident.js';
+import {verifyResidentExecution,validationExecutionComplete} from './execution.js';
 import {classifyMetaFreeSources} from './source-identities.js';
 
 const MiB=1024**2,versionPattern=/^\d{4}\.\d+\.\d+[abfp]\d+$/;
@@ -131,6 +133,7 @@ function readArtifacts({paths,operationId,graph}){
   const observed=new Map((observation?.assets??[]).map(a=>[a.assetId,a]));
   for(const row of checkpoint.assets)if(observed.has(row.assetId))check(same(row,observed.get(row.assetId)),'Checkpoint differs from current observation');
  }
+ verifyResidentExecution(directory,receipt);
  return {directory,receipt,payload,request,observation,checkpoint};
 }
 async function scriptBindingsMatch(graph,projectDir,scripts,editorPath){
@@ -166,7 +169,8 @@ async function scriptBindingsMatch(graph,projectDir,scripts,editorPath){
  });
  return {matches,reason:sourceClasses.reason};
 }
-export async function validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds=600,resumeOperationId,assetIds,dataCapture=false},dependencies={}){
+export async function validateUnityProject({toolkit,name,projectDir,graph,timeoutSeconds=600,resumeOperationId,assetIds,dataCapture=false,mode='clean'},dependencies={}){
+ check(['clean','resident'].includes(mode),'Unknown Unity validation mode');
  const paths=assetPaths(toolkit,name);check(ownsWorkspaceLock(paths.workspace),'Unity validation requires the workspace lease','asset_lease_required');
  check(Number.isSafeInteger(timeoutSeconds)&&timeoutSeconds>=1&&timeoutSeconds<=3600,'Validation timeout must be 1..3600 seconds');
  const selected=selectedAssetBinding(toolkit,name);check(fingerprint(graph.binding)===fingerprint(selected.binding),'Validation source build changed','stale_graph');
@@ -182,14 +186,16 @@ export async function validateUnityProject({toolkit,name,projectDir,graph,timeou
  let reused=[];
  if(resumeOperationId!==undefined){
   const parentScope=parent.receipt.scope??validationScope(graph);
-  check(parent.request&&parent.receipt.process?.closed===true&&same(parent.receipt.editor,editorIdentity)&&parent.receipt.helperSha256===helperSha256&&same(parentScope,scope),'Resume Editor, helper or exact asset scope changed','unity_resume_mismatch');
+  check(parent.request&&validationExecutionComplete(parent.receipt)&&same(parent.receipt.editor,editorIdentity)&&parent.receipt.helperSha256===helperSha256&&same(parentScope,scope),'Resume Editor, helper or exact asset scope changed','unity_resume_mismatch');
   check(parent.request.unityVersion===graph.unityVersion,'Resume Unity version changed','unity_resume_mismatch');
   // Self-contained sealed rows make parent reads constant-depth, regardless of
   // how many earlier resumptions produced this parent.
   reused=parent.checkpoint?.assets??completeRows(parent.observation);
  }
  const pendingIds=scope.assetIds.filter(id=>!reused.some(a=>a.assetId===id));
- const staged=await measurePhase('unity.stage',()=>stageUnityProject({projectDir,graph,runDir,templateRoot:path.join(toolkit.root,'templates'),runId:operationId,assetIds:pendingIds,dataCapture}));
+ const request=boundRequest(graph,operationId,pendingIds);if(dataCapture)request.dataCapture=true;
+ if(mode==='resident'){assertPortablePackages(projectDir,graph.files);validateUnityRequest(request);}
+ const staged=await measurePhase('unity.stage',()=>mode==='resident'?stageResidentProject({toolkit,name,projectDir,graph,runDir,request,editor,timeoutSeconds},dependencies.resident):stageUnityProject({projectDir,graph,runDir,templateRoot:path.join(toolkit.root,'templates'),runId:operationId,assetIds:pendingIds,dataCapture}));
  check(staged.helperSha256===helperSha256,'Validation helper changed during staging','unity_resume_mismatch');
  const {runUnityEditor}=await import('./runner.js');const run=dependencies.runEditor??runUnityEditor;
  const emitProgress=observed=>{
@@ -198,10 +204,10 @@ export async function validateUnityProject({toolkit,name,projectDir,graph,timeou
   try{toolkit.onValidationProgress({operationId,requestedAssets:scope.assetIds.length,completedAssets,pendingAssets:scope.assetIds.length-completedAssets,...(current?{currentAsset:current.path}:{})});}catch{/* Telemetry cannot release ownership or interrupt validation. */}
  };
  emitProgress(null);
- const progressTimer=typeof toolkit.onValidationProgress==='function'?setInterval(()=>{try{emitProgress(validateUnityObservation(readJson(staged.reportFile),staged.request));}catch{/* Atomic checkpoint may not exist yet. */}},2000):null;
+ const progressTimer=typeof toolkit.onValidationProgress==='function'?setInterval(()=>{try{emitProgress(validateUnityObservation(readJson(staged.progressReportFile??staged.reportFile),staged.request));}catch{/* Atomic checkpoint may not exist yet. */}},2000):null;
  progressTimer?.unref();let processResult;
- try{processResult=await measurePhase('unity.execute',()=>run({editor,projectDir:staged.projectDir,requestFile:staged.requestFile,reportFile:staged.reportFile,lockDirectory:path.join(paths.workspace,'.retk-lock'),toolkitRoot:toolkit.root,timeoutSeconds}));}finally{if(progressTimer)clearInterval(progressTimer);}
- if(processResult.closed!==true)throw Object.assign(assetError('unity_recovery_required','Unity child close is not confirmed'),{preserveToolchainGate:true});
+ try{processResult=await measurePhase('unity.execute',()=>mode==='resident'?runResidentEditor({toolkit,name,staged,editor,timeoutSeconds},dependencies.resident):run({editor,projectDir:staged.projectDir,requestFile:staged.requestFile,reportFile:staged.reportFile,lockDirectory:path.join(paths.workspace,'.retk-lock'),toolkitRoot:toolkit.root,timeoutSeconds}));}finally{if(progressTimer)clearInterval(progressTimer);}
+ if(mode==='resident'?processResult.completed!==true:processResult.closed!==true)throw Object.assign(assetError('unity_recovery_required','Unity child close is not confirmed'),{preserveToolchainGate:true});
  check(fingerprint(selectedAssetBinding(toolkit,name).binding)===fingerprint(selected.binding),'Source build changed during Unity validation','stale_graph');await verifyGraphFiles(projectDir,graph);
  check(fileIdentity(editor).sha256===editorIdentity.sha256,'Editor executable changed during validation','unity_editor_mismatch');
  check(fileIdentity(staged.requestFile).sha256===staged.requestSha256,'Validation request bytes changed during Editor work');
@@ -232,7 +238,7 @@ export async function validateUnityProject({toolkit,name,projectDir,graph,timeou
  json(path.join(runDir,'checkpoint.json'),checkpoint);
  const receipt={kind:'retoolkit-unity-validation',schemaVersion:1,operationId,state:compilation.state==='failed'?'validation_failed':coverageComplete&&compileReady?'validated':'partial',graphRevision:graph.revision,binding:graph.binding,unityVersion:graph.unityVersion,sourceSnapshot:sourceSnapshot(graph),
   compilation,compileReady,bindingsVerified,scopeBindingsVerified,scope,behavior:'unverified',editor:{...editorIdentity},helperSha256:staged.helperSha256,observationSha256,checkpointSha256:fileIdentity(path.join(runDir,'checkpoint.json')).sha256,
-  requestSha256,process:{exitCode:processResult.exitCode,timedOut:processResult.timedOut,closed:true},reportError,diagnostics,counts:{scripts:staged.request.scripts.length,assets:staged.request.assets.length},coverage:{state:coverageComplete?'observed':'partial',source:'staging-editor',requestedAssets:scope.assetIds.length,completedAssets:completedIds.size,pendingAssets,reusedAssets:reused.length},nextAction:compilation.state==='failed'?'fix-compilation':pendingAssets?'resume':scopeBindingsVerified?'none':'inspect-bindings',...(pendingAssets&&compilation.state!=='failed'?{resume:{operationId,pendingAssets}}:{}),...(resumeOperationId?{resumedFrom:resumeOperationId}:{})};
+  requestSha256,...(processResult.execution?{execution:processResult.execution,resident:processResult.resident}:{}),process:{exitCode:processResult.exitCode,timedOut:processResult.timedOut,closed:processResult.closed===true},reportError,diagnostics,counts:{scripts:staged.request.scripts.length,assets:staged.request.assets.length},coverage:{state:coverageComplete?'observed':'partial',source:'staging-editor',requestedAssets:scope.assetIds.length,completedAssets:completedIds.size,pendingAssets,reusedAssets:reused.length},nextAction:compilation.state==='failed'?'fix-compilation':pendingAssets?'resume':scopeBindingsVerified?'none':'inspect-bindings',...(pendingAssets&&compilation.state!=='failed'?{resume:{operationId,pendingAssets}}:{}),...(resumeOperationId?{resumedFrom:resumeOperationId}:{})};
  json(path.join(runDir,'receipt.json'),{...receipt,receiptSha256:fingerprint(receipt)});
  fs.writeFileSync(path.join(runDir,'editor-output.txt'),String(processResult.logTail??'').slice(-4*MiB),{flag:'wx',mode:0o600});
  return summary(receipt,path.relative(paths.workspace,path.join(runDir,'receipt.json')).split(path.sep).join('/'));

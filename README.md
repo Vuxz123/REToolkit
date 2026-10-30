@@ -498,3 +498,8 @@ Trong project, ch?n harness và ch? d? t?i **AI Agent**:
 Gemini c?n ch?n dúng l?n m? tru?c d? dùng l?i kho session riêng. OpenCode dùng ID d?ng `ses_…`. Resume không dùng `--last`, không t? t?o phiên thay th? n?u ID sai, và không ch?y l?i các job dã hoàn t?t. B?n ghi l?n m? không ch?ng minh harness dã t?o phiên thành công. Ðóng terminal cu tru?c khi m? l?i cùng phiên; gi? nguyên các job n?n dang ch?y.
 
 Sau khi c?p nh?t toolkit, dóng/m? l?i `retk gui` d? t?i IPC và di?u khi?n m?i. Vi?c m? terminal chua ch?ng minh Agent/MCP dã dang nh?p ho?c k?t n?i thành công.
+
+
+### Reuse Unity during reconstruction
+
+Use `retk reconstruct validate MyGame --mode resident --json` to reuse a dedicated Unity 6 Editor and synchronize changed source. `clean` remains the default. See [resident validation and agent workflow](docs/unity-resident-validation.md) for data checks, session status/stop, recovery artifacts and limits.

@@ -30,6 +30,8 @@ test('terminal apply queues one fixed scoped message with actual child argv and 
  assert.equal(result.delivery,'accepted');assert.ok(result.statusReference.startsWith('04_Notes/agent-wakes/'));
  const calls=f.calls();assert.equal(calls.length,2);assert.deepEqual(calls[0],['queue','--help']);
  assert.deepEqual(calls[1].slice(0,4),['queue','--thread',f.params.threadId,'--message']);
+ assert.match(calls[1][4],/Work quietly within saved authorization/);
+ assert.match(calls[1][4],/preserve logs, evidence and verified job continuation/);
  assert.match(calls[1][4],/reconstruct\.verify/);assert.match(calls[1][4],/gameplay.*unverified/i);assert.match(calls[1][4],/never.*apply/i);
  assert.ok(!calls[1][4].includes(JSON.stringify(f.params.assetIds)));assert.ok(calls[1][4].includes(f.params.operationId));
  const duplicate=await f.run();assert.equal(duplicate.duplicate,true);assert.equal(duplicate.state,'queued');assert.equal(f.calls().length,2);

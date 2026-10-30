@@ -8,6 +8,7 @@ import {within} from '../inputs.js';
 import {assertGeminiBinding} from './gemini-binding.js';
 import {withoutJevCredentials} from '../jev-environment.js';
 import {workflowPaths,listRuns} from '../workflow/store.js';
+import {quietExecutionPolicy,quietReminder} from './communication.js';
 
 export const harnesses=Object.freeze([
  {id:'codex',label:'Codex CLI',command:'codex'},
@@ -69,6 +70,8 @@ function copySkills(root,sessionDir){
 
 function contextFor(root,name,workspace,sessionDir,mode='chat'){
  return `# REToolkit project agent session
+
+${quietExecutionPolicy}
 
 The user opened an interactive agent for this exact project. Bind all work to
 workspace ${JSON.stringify(name)} at ${JSON.stringify(workspace)}.
@@ -287,7 +290,7 @@ export function createAgentLauncher(root,{node=process.execPath,spawnImpl=spawn,
    const mcp={retoolkit_assets:{command:node,args:[path.join(root,'re.js'),'assets','mcp',name,'--root',root]},retoolkit_ghidra:{command:node,args:[path.join(root,'re.js'),'mcp','--root',root]}};
    write(path.join(sessionDir,'mcp.json'),json({mcpServers:mcp}));
    write(path.join(sessionDir,'context.md'),contextFor(root,name,workspace,sessionDir,mode));
-   const prompt=`${mode==='reconstruct'?'Start Unity game reconstruction now for':'Continue'} the REToolkit project ${name}. First read ${JSON.stringify(path.join(sessionDir,'context.md'))}, follow its bundled workflow and inspect the saved project checklist. ${mode==='reconstruct'?'The user selected reconstruction: begin the earliest actionable dependency without asking for a task.':'Stay within the saved authorized task; if none is recorded, ask for the intended task.'}`;
+   const prompt=`${mode==='reconstruct'?'Start Unity game reconstruction now for':'Continue'} the REToolkit project ${name}. First read ${JSON.stringify(path.join(sessionDir,'context.md'))}, follow its bundled workflow and inspect the saved project checklist. ${mode==='reconstruct'?'The user selected reconstruction: begin the earliest actionable dependency without asking for a task.':'Stay within the saved authorized task; if none is recorded, ask for the intended task.'} ${quietReminder}`;
    const sessionId=options.sessionId??(harness==='claude'?randomUUID():null);
    const config=harnessConfig(harness,mcp,sessionDir,prompt,{...options,sessionId,mode,geminiHome}),manifest={harness,mode,sessionId,cwd:workspace,command:found.command,args:[...found.prefix,...config.args],env:config.env};
    const manifestFile=path.join(sessionDir,'launch.json');write(manifestFile,json(manifest));

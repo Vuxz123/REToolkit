@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {validationExecutionComplete} from '../unity/execution.js';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {fingerprint} from '../state.js';
@@ -52,7 +53,7 @@ export async function acceptance(step,operation,result,candidate){
   // observation and checkpoint hashes. Do not create a second acceptance rule.
   const graph=await createValidationSourceSnapshot({projectDir:candidate.project,binding:candidate.binding});
   const receipt=await readUnityValidation({toolkit:candidate.toolkit,name:candidate.name,projectDir:candidate.project,graph,operationId:id});
-  if(!receipt.process?.closed||receipt.process.exitCode!==0||receipt.process.timedOut||!receipt.compileReady)return {verified:false,reason:'validation_not_ready'};
+  if(!validationExecutionComplete(receipt)||!receipt.compileReady)return {verified:false,reason:'validation_not_ready'};
   if(step.dimension==='bindings')check(step.assetIds?.length&&step.assetIds.every(id=>receipt.scope.assetIds.includes(id)),'Validation does not cover saved asset scope','workflow_scope_invalid');
   return {verified:step.dimension==='compilation'||receipt.scopeBindingsVerified===true,reference:path.relative(candidate.base,file),operationId:id};
  }

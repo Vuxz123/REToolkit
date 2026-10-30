@@ -2,6 +2,9 @@ import {once} from 'node:events';
 import {definitions,validateAssetParams,invokeAssetApi} from './api.js';
 const MAX_INPUT=1024**2,MAX_OUTPUT=2*1024**2;
 const jobDescriptions={
+ 'reconstruct.validate':'Validate compile and bindings. mode=resident reuses a dedicated Unity 6 Editor and syncs changed source; clean is the default/final acceptance mode. Resident completion is an invocation receipt, not process exit or gameplay proof.',
+ 'reconstruct.resident-status':'Read the dedicated resident Unity session identity and pending invocation.',
+ 'reconstruct.resident-stop':'Close only the dedicated resident project Editor and release its toolchain ownership after confirmed closure.',
  'evidence.capture':'Capture same-build native evidence from the owned active session. For instructions require exact selector/endAddress and limit up to 1000; records only that bounded window, never complete control flow. Use full contiguous accessor windows from verified dump RVAs for event-storage provenance; native field-use review remains required.',
  'libraries.runtime.plan':'Inspect an explicit local replacement DLL as metadata/IL, compare assembly/type/API/serialized fields, and save immutable trial bytes. dll is an existing Assets path with original .meta; replacement is an absolute local DLL. Trivial IL is a heuristic; no runtime success is inferred. Returns planned or concrete incompatibilities.',
  'libraries.runtime.apply':'Rederive a saved runtime DLL plan and stage exactly that replacement while preserving original metadata and other project bytes. Prefer recovery_run to adopt the stage. Then run fresh scoped Unity validation, original data comparison and relevant behavior checks.',

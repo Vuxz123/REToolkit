@@ -14,7 +14,8 @@ export const assetUsage=`AssetRipper AI bridge (exported Unity project)
   node re.js assets raw <Game> --format json --bundle 0,1 --collection 0 --path-id <signed64>
   node re.js reconstruct plan <Game> --request <json> [--evidence <json>]
   node re.js reconstruct apply|verify <Game> --operation <UUID>
-  node re.js reconstruct validate <Game> [--timeout-seconds 600] [--resume-operation <UUID>] [--asset-ids <JSON-array>]
+  node re.js reconstruct validate <Game> [--mode clean|resident] [--timeout-seconds 600] [--resume-operation <UUID>] [--asset-ids <JSON-array>]
+  node re.js reconstruct resident-status|resident-stop <Game>
   node re.js reconstruct validation <Game> --operation <UUID>
 Global: --root <directory>, --json; paging: --limit 1..1000, --cursor <cursor>
 Stub filling preserves GUID/meta/YAML. Validate in Unity separately; behavior stays unverified.

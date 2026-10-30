@@ -7,7 +7,7 @@ import {validationProgressPreview} from '../unity/progress.js';
 export const dataUsage=`ScriptableObject serialized data contracts (staged Editor, never Play Mode)
   retk data capture <Game> --asset-ids <JSON-array-of-asset:GUID>
   retk data qualify <Game> --baseline <retained baseline UUID>
-  retk data verify <Game> --baseline <baseline UUID> [--reuse-verification <saved verify UUID>]
+  retk data verify <Game> --baseline <baseline UUID> [--mode clean|resident] [--reuse-verification <saved verify UUID>]
   retk data report <Game> --operation <UUID> [--section summary|objects|properties|differences]
 Capture/verify: --timeout-seconds 1..3600. Report: --limit 1..100, --cursor, --query.
 Alternative DTO: --params-file <JSON-file>. Global: --root, --json, --help.
@@ -15,7 +15,7 @@ Baseline records initial observed data; verification is not gameplay equivalence
 `;
 export const isDataCommand=argv=>argv[0]==='data';
 export async function runDataCli(argv,defaultRoot){
- check(argv.length<=40&&Buffer.byteLength(JSON.stringify(argv))<=256*1024,'Data CLI exceeds argument budget');const positional=[],params={},options={},seen=new Set(),keys={'asset-ids':'assetIds',baseline:'baselineId','reuse-verification':'reuseVerificationId',operation:'operationId',section:'section',limit:'limit',cursor:'cursor',query:'query','timeout-seconds':'timeoutSeconds'};
+ check(argv.length<=40&&Buffer.byteLength(JSON.stringify(argv))<=256*1024,'Data CLI exceeds argument budget');const positional=[],params={},options={},seen=new Set(),keys={mode:'mode','asset-ids':'assetIds',baseline:'baselineId','reuse-verification':'reuseVerificationId',operation:'operationId',section:'section',limit:'limit',cursor:'cursor',query:'query','timeout-seconds':'timeoutSeconds'};
  for(let i=0;i<argv.length;i++){
   const token=argv[i];if(!token.startsWith('--')){positional.push(token);continue;}
   const key=token.slice(2);check(!seen.has(key),'Duplicate data option');seen.add(key);if(['json','help'].includes(key)){options[key]=true;continue;}

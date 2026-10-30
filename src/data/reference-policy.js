@@ -8,7 +8,9 @@ import {assetPaths,assertAssetPath,assetError} from '../assets/context.js';
 export const atomicReferencePolicy='persistent-object-reference-v1';
 const policyFile=fileURLToPath(import.meta.url);
 const normalizerFile=fileURLToPath(new URL('./contracts.js',import.meta.url));
+// Resident entry points reuse the unchanged scriptable-data-v2 observer.
 const helperPolicies=new Map([
+ ['c4c719a1a6a2174ac74bdb540a8e4af7c2e54631eff9c0b8b9d3b8396a23837d','scriptable-data-v2'],
  ['1c7f47100785c317a3c63a10049fc322631fb5c315efb8b4e179f0dc2a4c201e','scriptable-data-v1'],
  ['2c60cb50e12ec42d48dece6e67386e49f3afef083e3729073a5efac8fce93d92','scriptable-data-v1'],
  ['99907d89481e3463cf00c6a3f5650c4076531e190fe0b6926a0afa0f79a25cc9','scriptable-data-v2'],

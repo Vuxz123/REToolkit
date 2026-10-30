@@ -21,6 +21,30 @@ export function acquireToolchainRead(root){
  if(fs.existsSync(paths.writer)){removeOwner(file,token);throw busy('Toolchain update acquired the gate before engine launch');}
  let released=false;return {release(){if(released)return;removeOwner(file,token);released=true;}};
 }
+const sessionPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+function persistentReader(root,sessionId){
+ if(typeof sessionId!=='string'||!sessionPattern.test(sessionId))throw busy('Invalid persistent toolchain session identity');
+ const paths=directories(root),file=path.join(paths.readers,`resident-${sessionId}.json`);rejectOutputLinks(file);return {...paths,file};
+}
+// A resident Editor outlives its invoking Node process. These markers have no
+// PID-based expiration; only the session owner may release after verified stop.
+export function acquirePersistentToolchainRead(root,sessionId){
+ const paths=persistentReader(root,sessionId);if(fs.existsSync(paths.writer))throw busy('A toolchain writer prevents resident session launch');
+ const token=randomUUID();
+ try{fs.writeFileSync(paths.file,JSON.stringify({kind:'retoolkit-resident-toolchain-reader',schemaVersion:1,sessionId,token,startedAt:new Date().toISOString()}),{flag:'wx',mode:0o600});}
+ catch(error){if(error.code==='EEXIST')throw busy('Resident session already owns a persistent toolchain reader; inspect existing ownership');throw error;}
+ if(fs.existsSync(paths.writer)){releasePersistentToolchainRead(root,sessionId,token);throw busy('Toolchain update acquired the gate before resident launch');}
+ return token;
+}
+export function releasePersistentToolchainRead(root,sessionId,token,{allowMissing=false}={}){
+ const {file}=persistentReader(root,sessionId);let owner;
+ if(typeof token!=='string'||!sessionPattern.test(token))throw busy('Invalid persistent toolchain reader token');
+ // Explicitly permitted only after independent confirmation of Editor closure:
+ // a previous stop may have removed the marker before saving session state.
+ try{const stat=fs.lstatSync(file);if(!stat.isFile()||stat.size>4096)throw Error();owner=JSON.parse(fs.readFileSync(file,'utf8'));}catch(error){if(allowMissing===true&&error.code==='ENOENT')return;throw busy('Persistent toolchain reader ownership could not be verified; inspection required');}
+ if(owner.kind!=='retoolkit-resident-toolchain-reader'||owner.schemaVersion!==1||owner.sessionId!==sessionId||owner.token!==token)throw busy('Persistent toolchain reader ownership changed; inspection required');
+ fs.unlinkSync(file);
+}
 function projectBusy(root){
  const workspaces=path.join(root,'workspaces');rejectOutputLinks(workspaces);if(!fs.existsSync(workspaces))return false;
  const walk=(folder,depth=0)=>{

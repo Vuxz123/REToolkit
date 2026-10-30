@@ -84,6 +84,14 @@ async function runRecoveryCore(toolkit,name,command,params={},dependencies={}){
    writeJson(paths.manifest,seal(manifest),{exclusive:true});progress(toolkit,'snapshot.complete',{artifactId,revision});return {...summary(paths,manifest,generation),state:'created'};
   }
   const paths=artifactPaths(toolkit,name,params.artifactId),manifest=loadArtifact(paths,params.artifactId),generation=loadGeneration(paths,manifest);
+  if(command==='run'&&['reconstruct.resident-status','reconstruct.resident-stop'].includes(params.operation)){
+   // Session ownership is independent of a pending or stale source generation.
+   // Closing an exact artifact Editor must remain possible during recovery.
+   const {validateAssetParams}=await import('../assets/api.js');validateAssetParams(params.operation,params.params);
+   const {residentSessionOperation}=await import('../unity/resident.js');
+   const result=await residentSessionOperation(scopedToolkit(toolkit,name,paths,generation.project),name,params.operation.endsWith('-stop')?'stop':'status',dependencies.validation?.resident);
+   return {...summary(paths,manifest,generation),operation:params.operation,result};
+  }
   if(command==='abandon'){
    check(manifest.revision===params.revision&&manifest.pending?.invocationId===params.intentId,'Intent or revision changed; inspect again','recovery_revision_stale');await verifyCurrent(toolkit,name,manifest,generation,metrics);
    const intent=unseal(readJson(path.join(paths.base,'intents',params.intentId+'.json')));check(fingerprint(intent)===fingerprint(manifest.pending),'Pending intent differs','recovery_receipt_invalid');
@@ -99,7 +107,7 @@ async function runRecoveryCore(toolkit,name,command,params={},dependencies={}){
   check(params.revision===manifest.revision,'Artifact revision changed; inspect current status','recovery_revision_stale');
   const {invokeAssetApi,validateAssetParams}=await import('../assets/api.js');validateAssetParams(params.operation,params.params);
   validateMigrationScope(paths,params.operation,params.params,generation);
-  const mutates=projectMutations.has(params.operation)&&!(params.operation==='data.verify'&&params.params.reuseVerificationId),revision=mutates?randomUUID():manifest.revision,invocationId=randomUUID();let target=scoped,fork;
+  const mutates=projectMutations.has(params.operation)&&!(['reconstruct.validate','data.verify'].includes(params.operation)&&params.params.mode==='resident')&&!(params.operation==='data.verify'&&params.params.reuseVerificationId),revision=mutates?randomUUID():manifest.revision,invocationId=randomUUID();let target=scoped,fork;
   if(mutates){
    manifest.pending={invocationId,operation:params.operation,paramsSha256:fingerprint(params.params),revision,parent:manifest.revision,startedAt:new Date().toISOString()};
    writeJson(path.join(paths.base,'intents',invocationId+'.json'),seal(manifest.pending),{exclusive:true});writeJson(paths.manifest,seal(manifest));
@@ -118,7 +126,7 @@ async function runRecoveryCore(toolkit,name,command,params={},dependencies={}){
     const {runLibraryOperation}=await import('../libraries/service.js');return runLibraryOperation(target,name,params.operation,params.params,dependencies.library);
    }else return invokeAssetApi(target,name,params.operation,params.params);
   });
-  }catch(error){uncertain=error.preserveToolchainGate===true||['unity_recovery_required','library_recovery_required','reconstruction_recovery_required','migration_recovery_required'].includes(error.code);throw error;}
+  }catch(error){uncertain=!error.residentSessionProtected&&(error.preserveToolchainGate===true||['unity_recovery_required','library_recovery_required','reconstruction_recovery_required','migration_recovery_required'].includes(error.code));throw error;}
   await verifyCurrent(toolkit,name,manifest,generation,metrics);
   let published=generation;
   if(mutates){

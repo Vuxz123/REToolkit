@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {verifyResidentExecution,validationExecutionComplete} from '../unity/execution.js';
 import path from 'node:path';
 import {fingerprint,fileIdentity} from '../state.js';
 import {assetPaths,assertAssetPath,assetError} from '../assets/context.js';
@@ -20,8 +21,9 @@ export function readCapturedValidation(toolkit,name,operationId){
  check(receipt.scope?.kind==='assets'&&fingerprint([...request.assets.map(a=>a.assetId)].sort())===fingerprint(receipt.scope.assetIds),'Data validation scope differs');
  if(!receipt.observationSha256)return {receipt,request,rows:[],ready:false,reason:'unity_data_observation_unavailable'};
  const file=path.join(base,'observation.json');check(fileIdentity(file).sha256===receipt.observationSha256,'Data observation bytes changed');const observation=validateUnityObservation(readJson(file,16*1024**2),request);
+ verifyResidentExecution(base,receipt);
  const rows=observation.assets.map(a=>({assetId:a.assetId,path:a.path,data:a.data}));
- let ready=receipt.compileReady===true&&receipt.scopeBindingsVerified===true&&receipt.process?.closed===true&&receipt.process.exitCode===0&&!receipt.process.timedOut&&observation.complete&&observation.compilation.state==='succeeded'&&!observation.diagnostics.some(d=>d.severity==='error');
+ let ready=receipt.compileReady===true&&receipt.scopeBindingsVerified===true&&validationExecutionComplete(receipt)&&observation.complete&&observation.compilation.state==='succeeded'&&!observation.diagnostics.some(d=>d.severity==='error');
  const scripts=new Map(observation.scripts.filter(s=>s.resolved).map(s=>[s.guid.toLowerCase()+':'+s.fileID,s]));let scriptable=0;
  for(const row of rows){if(!row.data?.complete)ready=false;for(const o of row.data?.objects??[])if(o.scriptable){scriptable++;const ref=o.properties.find(p=>p.path==='m_Script'&&p.kind==='ObjectReference'),script=scripts.get(ref?.value?.toLowerCase());if(!script||script.fullName!==o.fullName||script.assembly!==o.assembly)ready=false;}}
  ready=Boolean(ready&&scriptable>0&&rows.length===request.assets.length);

@@ -453,29 +453,7 @@ namespace REToolkit
                 observer.report.compilation.state = "succeeded";
                 Application.logMessageReceived += observer.Log;
                 subscribed = true;
-                observer.checkpoint = () => WriteReport(reportFile, observer);
-                foreach (var entry in request.scripts)
-                {
-                    observer.currentPath = entry.path;
-                    try { observer.Script(entry); }
-                    catch (Exception error) { observer.Diagnostic("error", error.Message, entry.path); }
-                }
-                // A checkpoint is useful even if the Editor is stopped before the first asset.
-                WriteReport(reportFile, observer);
-                foreach (var entry in request.assets)
-                {
-                    observer.currentPath = entry.path;
-                    try { observer.Asset(entry); }
-                    catch (Exception error) { observer.Diagnostic("error", error.Message, entry.path); }
-                    WriteReport(reportFile, observer);
-                }
-                if (EditorApplication.isCompiling || EditorUtility.scriptCompilationFailed)
-                {
-                    observer.report.compilation.state = "failed";
-                    observer.Diagnostic("error", "Compilation changed during observation.");
-                }
-                observer.report.complete = !observer.errors && observer.report.scripts.Count == request.scripts.Length && observer.report.assets.Count == request.assets.Length;
-                foreach (var row in observer.report.assets) if (!row.traversal.complete) observer.report.complete = false;
+                Observe(request, reportFile, observer);
             }
             catch (Exception error) { observer.Diagnostic("error", error.Message); }
             finally
@@ -487,6 +465,103 @@ namespace REToolkit
                     catch (Exception error) { Debug.LogError("REToolkit could not write observation: " + Clip(error.Message, 8192)); }
                 }
             }
+        }
+
+        public static string InspectLive()
+        {
+            int dirtyScenes = 0;
+            for (int index = 0; index < SceneManager.sceneCount; index++)
+                if (SceneManager.GetSceneAt(index).isDirty) dirtyScenes++;
+            var json = new StringBuilder("{\"projectPath\":");
+            Quoted(json, Directory.GetParent(Application.dataPath).FullName);
+            json.Append(",\"unityVersion\":"); Quoted(json, Application.unityVersion);
+            json.Append(",\"isCompiling\":").Append(EditorApplication.isCompiling ? "true" : "false");
+            json.Append(",\"isPlaying\":").Append(EditorApplication.isPlayingOrWillChangePlaymode ? "true" : "false");
+            json.Append(",\"scriptCompilationFailed\":").Append(EditorUtility.scriptCompilationFailed ? "true" : "false");
+            json.Append(",\"dirtyScenes\":").Append(dirtyScenes.ToString(CultureInfo.InvariantCulture));
+            return json.Append('}').ToString();
+        }
+
+        // Invoked by the trusted CLI inside a disposable resident staging Editor.
+        public static string RunLive(string requestFile, string reportFile)
+        {
+            string projectDirectory = Directory.GetParent(Application.dataPath).FullName;
+            string controlDirectory = Directory.GetParent(projectDirectory).FullName;
+            string runDirectory = Path.GetDirectoryName(Path.GetFullPath(requestFile));
+            string runId = Path.GetFileName(runDirectory);
+            Guid parsed;
+            if (!Guid.TryParseExact(runId, "D", out parsed)) throw new InvalidOperationException("Resident run directory must be a UUID.");
+            string expectedDirectory = Path.Combine(controlDirectory, "runs", runId);
+            requestFile = ControlFile(requestFile, expectedDirectory);
+            reportFile = ControlFile(reportFile, expectedDirectory);
+            if (Path.GetFileName(requestFile) != "request.json" || Path.GetFileName(reportFile) != "observation.json")
+                throw new InvalidOperationException("Unexpected resident control filename.");
+            if (File.Exists(reportFile)) throw new InvalidOperationException("Resident observation already exists; use a fresh run.");
+            if (new FileInfo(requestFile).Length > MaxReportBytes) throw new LimitException("Request byte limit exceeded.");
+            var request = JsonUtility.FromJson<Request>(File.ReadAllText(requestFile, Encoding.UTF8));
+            Validate(request);
+            if (request.runId != runId) throw new InvalidOperationException("Resident run ID does not match its directory.");
+            if (request.unityVersion != Application.unityVersion) throw new InvalidOperationException("Exact Unity version mismatch.");
+            if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling || EditorUtility.scriptCompilationFailed)
+                throw new InvalidOperationException("Editor is playing, compiling, or has compilation errors.");
+            for (int index = 0; index < SceneManager.sceneCount; index++)
+                if (SceneManager.GetSceneAt(index).isDirty) throw new InvalidOperationException("Dirty scenes prevent resident observation.");
+            var observer = new Observer();
+            observer.dataCapture = request.dataCapture;
+            observer.report.runId = request.runId;
+            observer.report.graphRevision = request.graphRevision;
+            observer.report.unityVersion = Application.unityVersion;
+            observer.report.compilation.state = "succeeded";
+            Application.logMessageReceived += observer.Log;
+            try
+            {
+                // Reset disposable scene state without saving; dirty input scenes were rejected above.
+                EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                Observe(request, reportFile, observer);
+            }
+            catch (Exception error) { observer.Diagnostic("error", error.Message); }
+            finally
+            {
+                try { EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single); }
+                finally { Application.logMessageReceived -= observer.Log; }
+            }
+            // Cleanup and final atomic write must finish before the CLI receives an attestation.
+            if (EditorApplication.isCompiling || EditorUtility.scriptCompilationFailed)
+            {
+                observer.report.compilation.state = "failed";
+                observer.Diagnostic("error", "Compilation changed during resident cleanup.");
+            }
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                observer.Diagnostic("error", "Play state changed during resident observation.");
+            WriteReport(reportFile, observer);
+            return request.runId;
+        }
+
+        static void Observe(Request request, string reportFile, Observer observer)
+        {
+            observer.checkpoint = () => WriteReport(reportFile, observer);
+            foreach (var entry in request.scripts)
+            {
+                observer.currentPath = entry.path;
+                try { observer.Script(entry); }
+                catch (Exception error) { observer.Diagnostic("error", error.Message, entry.path); }
+            }
+            // A checkpoint is useful even if the Editor is stopped before the first asset.
+            WriteReport(reportFile, observer);
+            foreach (var entry in request.assets)
+            {
+                observer.currentPath = entry.path;
+                try { observer.Asset(entry); }
+                catch (Exception error) { observer.Diagnostic("error", error.Message, entry.path); }
+                WriteReport(reportFile, observer);
+            }
+            if (EditorApplication.isCompiling || EditorUtility.scriptCompilationFailed)
+            {
+                observer.report.compilation.state = "failed";
+                observer.Diagnostic("error", "Compilation changed during observation.");
+            }
+            observer.report.complete = !observer.errors && observer.report.scripts.Count == request.scripts.Length && observer.report.assets.Count == request.assets.Length;
+            foreach (var row in observer.report.assets) if (!row.traversal.complete) observer.report.complete = false;
         }
 
         static string Clip(string value, int length) { return value == null ? "" : value.Length <= length ? value : value.Substring(0, length); }

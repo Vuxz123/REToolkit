@@ -195,12 +195,15 @@ namespace UnityEngine
 }
 namespace UnityEngine.SceneManagement
 {
-    public struct Scene { public bool isLoaded { get { return false; } } public bool IsValid() { return false; } public UnityEngine.GameObject[] GetRootGameObjects() { return new UnityEngine.GameObject[0]; } }
+    public static class SceneManager { public static bool dirty; public static int sceneCount { get { return 1; } } public static Scene GetSceneAt(int index) { return new Scene(); } }
+    public struct Scene { public bool isDirty { get { return SceneManager.dirty; } } public bool isLoaded { get { return false; } } public bool IsValid() { return false; } public UnityEngine.GameObject[] GetRootGameObjects() { return new UnityEngine.GameObject[0]; } }
 }
 namespace UnityEditor.SceneManagement
 {
     public enum OpenSceneMode { Additive }
-    public static class EditorSceneManager { public static UnityEngine.SceneManagement.Scene OpenScene(string path, OpenSceneMode mode) { return new UnityEngine.SceneManagement.Scene(); } public static bool CloseScene(UnityEngine.SceneManagement.Scene scene, bool remove) { return true; } }
+    public enum NewSceneSetup { EmptyScene }
+    public enum NewSceneMode { Single }
+    public static class EditorSceneManager { public static int resets; public static UnityEngine.SceneManagement.Scene NewScene(NewSceneSetup setup, NewSceneMode mode) { resets++; return new UnityEngine.SceneManagement.Scene(); } public static UnityEngine.SceneManagement.Scene OpenScene(string path, OpenSceneMode mode) { return new UnityEngine.SceneManagement.Scene(); } public static bool CloseScene(UnityEngine.SceneManagement.Scene scene, bool remove) { return true; } }
 }
 namespace UnityEditor
 {
