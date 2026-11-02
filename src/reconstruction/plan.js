@@ -7,6 +7,7 @@ import {parseCSharp} from '../assets/csharp.js';
 import {scriptBindings} from './bindings.js';
 import {prepareBodyCandidates} from './source-bodies.js';
 import {assertScriptBindingsFresh} from '../assets/graph-storage.js';
+import {isSourceIndex,assertSourceIndex} from '../assets/source-index.js';
 
 const MiB=1024*1024,hash=value=>createHash('sha256').update(value).digest('hex');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -65,6 +66,7 @@ const payload=p=>{const {payloadSha256,...rest}=p;return fingerprint(rest);};
 function changedFiles(plan){const replacements=new Map(plan.changes.map(c=>[c.path,c]));return plan.inventory.map(f=>replacements.has(f.path)?{...f,sha256:replacements.get(f.path).afterSha256,size:replacements.get(f.path).afterSize}:f);}
 
 export async function createReconstructionPlan({projectDir,graph,scriptMap,request,editorPath,dump,evidence=[],assertContextCurrent=async()=>{}}){
+  if(isSourceIndex(graph)){assertSourceIndex(graph);check(request?.changes?.every(c=>['bodies','initialization','event-storage'].includes(c.mode)),'Source-only plans require an explicit compiler-checked source mode');}
   shape(request,['kind','schemaVersion','graphRevision','changes']);check(Buffer.byteLength(JSON.stringify(request))<=32*MiB,'Reconstruction request exceeds limit');
   check(request.kind==='retoolkit-reconstruction-request'&&request.schemaVersion===1&&request.graphRevision===graph.revision,'Invalid or stale reconstruction request revision');
   check(scriptMap?.kind==='retoolkit-script-map'&&scriptMap.graphRevision===graph.revision&&fingerprint(scriptMap.binding)===fingerprint(graph.binding),'Stale script map binding/revision');
@@ -85,6 +87,7 @@ export async function createReconstructionPlan({projectDir,graph,scriptMap,reque
   check(Buffer.byteLength(JSON.stringify(plan))<=64*MiB,'Plan exceeds limit');assertScriptBindingsFresh(graph);await verifyGraphFiles(projectDir,graph);await assertContextCurrent();assertScriptBindingsFresh(graph);return {...plan,payloadSha256:payload(plan)};
 }
 async function validatePlan(plan,graph,{projectDir,editorPath,dump}){
+  if(isSourceIndex(graph)){assertSourceIndex(graph);check(plan?.changes?.every(c=>['bodies','initialization','event-storage'].includes(c.mode)),'Source-only plans require an explicit compiler-checked source mode');}
   check(Buffer.byteLength(JSON.stringify(plan))<=64*MiB,'Plan exceeds limit');shape(plan,['kind','schemaVersion','operationId','graphRevision','binding','inventory','changes','compileReady','logic','payloadSha256']);
   check(plan.kind==='retoolkit-reconstruction-plan'&&plan.schemaVersion===1&&uuid(plan.operationId)&&plan.compileReady===false&&plan.logic==='unverified'&&plan.payloadSha256===payload(plan),'Invalid plan payload/hash');
   check(plan.graphRevision===graph.revision&&fingerprint(plan.binding)===fingerprint(graph.binding),'Stale graph revision/binding','stale_graph');inventory(plan.inventory);

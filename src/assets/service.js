@@ -4,6 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {assetPaths,selectedAssetBinding,assertAssetPath,assetError,assetProjectPath} from './context.js';
 import {indexUnityProject,locateUnityProject,verifyGraphFiles,queryGraph,UNITY_PROJECT_LIMITS} from './graph.js';
 import {createValidationSourceSnapshot} from './validation-snapshot.js';
+import {createSourceIndex,isSourceIndex,assertSourceIndex} from './source-index.js';
 import {refreshSourceGraph,assertSourceRefreshFresh,discardSourceRefresh} from './source-refresh.js';
 import {assertGraphManifest,isSqliteGraph,openStoredGraph,verifyStoredGraph,focusStoredScriptGraph} from './graph-storage.js';
 import {buildScriptMap} from '../reconstruction/map.js';
@@ -94,17 +95,31 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
   if(!ownsWorkspaceLock(paths.workspace))throw assetError('asset_lease_required','Asset operation requires the workspace lease');
   if(['reconstruct.resident-status','reconstruct.resident-stop'].includes(method)){paramsShape(params,[]);const {residentSessionOperation}=await import('../unity/resident.js');return residentSessionOperation(toolkit,name,method.endsWith('status')?'status':'stop',dependencies.validation?.resident);}
   const selected=selectedAssetBinding(toolkit,name),projectDir=await exportRoot(selected,toolkit,name);
+  const sourceIndexFile=path.join(paths.base,'source-index.json');
+  const publishSourceIndex=async()=>{
+    const index=await createSourceIndex({projectDir,binding:selected.binding});
+    if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(selected.binding))throw assetError('asset_input_stale','Inputs changed while indexing source');
+    writeJson(sourceIndexFile,index,{compact:true});return index;
+  };
   if(method==='assets.index') {
-    paramsShape(params,['graphMaxMiB','storage']);if(params.storage!==undefined&&!['json','sqlite'].includes(params.storage)||params.graphMaxMiB!==undefined&&(![128,256,512].includes(params.graphMaxMiB)||params.storage==='sqlite'))throw assetError('asset_params_invalid','Invalid graph storage or JSON budget');
+    paramsShape(params,['graphMaxMiB','storage','scope']);if(params.scope!==undefined&&!['source','full'].includes(params.scope))throw assetError('asset_params_invalid','Invalid index scope');
+    if(params.scope==='source'){
+      if(params.storage!==undefined||params.graphMaxMiB!==undefined)throw assetError('asset_params_invalid','Source index does not accept full graph storage options');
+      const index=await publishSourceIndex();return {state:'source_indexed',scope:'source',revision:index.revision,coverage:index.coverage,bindingsVerified:false,behavior:'unverified'};
+    }
+    if(params.storage!==undefined&&!['json','sqlite'].includes(params.storage)||params.graphMaxMiB!==undefined&&(![128,256,512].includes(params.graphMaxMiB)||params.storage==='sqlite'))throw assetError('asset_params_invalid','Invalid graph storage or JSON budget');
     const graphLimitBytes=(params.graphMaxMiB??128)*MiB,graph=await indexOwnedGraph(projectDir,selected.binding,paths,{storage:params.storage??'json',graphLimitBytes,onProgress:graphProgress(toolkit)});
     if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(selected.binding))throw assetError('asset_input_stale','Inputs changed while indexing');
     writeJson(paths.graphFile,graph,{maxBytes:UNITY_PROJECT_LIMITS.maxStoredGraphBytes,compact:true});await recordAssetState(toolkit,name,selected.binding,{state:'graph_ready',graph:'ready',graphRevision:graph.revision,graphStorage:params.storage??'json',...(isSqliteGraph(graph)?{}:{graphLimitBytes})});
+    if(fs.existsSync(sourceIndexFile))fs.unlinkSync(assertAssetPath(sourceIndexFile,paths.workspace));
     return {state:'indexed',storage:params.storage??'json',revision:graph.revision,profile:graph.profile,coverage:graph.coverage,limitations:graph.limitations};
   }
   if(method==='reconstruct.apply'||method==='reconstruct.verify') {
     paramsShape(params,['operationId']);if(!uuid(params.operationId))throw assetError('asset_params_invalid','Expected a saved reconstruction operation UUID');
     const saved=readAssetJson(assertAssetPath(path.join(paths.reconstructionDir,'plans',params.operationId+'.json'),paths.workspace));
-    assertGraphManifest(saved.graph,{expectedStorage:selected.project.assetReconstruction?.graphStorage==='sqlite'?'sqlite':undefined});
+    const sourceOnly=isSourceIndex(saved.graph);
+    if(sourceOnly)assertSourceIndex(saved.graph);
+    else assertGraphManifest(saved.graph,{expectedStorage:selected.project.assetReconstruction?.graphStorage==='sqlite'?'sqlite':undefined});
     if(saved.plan?.operationId!==params.operationId||fingerprint(saved.graph?.binding)!==fingerprint(selected.binding))throw assetError('stale_graph','Saved reconstruction binding changed');
     const journalDir=assertAssetPath(path.join(paths.reconstructionDir,'journal'),paths.workspace);
     if(method==='reconstruct.verify') {
@@ -119,7 +134,7 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     };
     const complete=graph=>isSqliteGraph(graph)||graph.assets?.length===graph.coverage?.assets&&graph.nodes?.length===graph.coverage?.nodes&&graph.edges?.length===graph.coverage?.edges;
     let baseline=isSqliteGraph(saved.graph)?saved.graph:null;
-    if(!baseline&&fs.existsSync(paths.graphFile)){
+    if(!sourceOnly&&!baseline&&fs.existsSync(paths.graphFile)){
       const current=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);assertGraphManifest(current);
       if(complete(current)&&current.revision===saved.graph.revision&&fingerprint(current.binding)===fingerprint(selected.binding)&&fingerprint(current.files)===fingerprint(saved.graph.files))baseline=current;
     }
@@ -130,7 +145,7 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     // Persist a second owner before source mutation. Even process death or a full
     // disk cannot make PID-only reclamation discard an unfinished transaction.
     writeJson(marker,{kind:'assets-write-in-progress',operationId:params.operationId},{exclusive:true});
-    try{receipt=await applyReconstructionPlan({projectDir,graph:focusStoredScriptGraph(saved.graph,paths.graphFile,{scriptIds:saved.plan?.changes?.map(c=>c.scriptId)}),plan:saved.plan,journalDir,editorPath:selected.project.unityEditorPath,...nativeContext,onEvent:async event=>{
+    try{receipt=await applyReconstructionPlan({projectDir,graph:sourceOnly?saved.graph:focusStoredScriptGraph(saved.graph,paths.graphFile,{scriptIds:saved.plan?.changes?.map(c=>c.scriptId)}),plan:saved.plan,journalDir,editorPath:selected.project.unityEditorPath,...nativeContext,onEvent:async event=>{
       if(fingerprint(selectedAssetBinding(toolkit,name).binding)!==fingerprint(selected.binding))throw assetError('asset_input_stale','Asset source changed during reconstruction');
       await report({phase:'source.'+event.phase});
     }});}
@@ -139,6 +154,13 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     // Keep the durable source receipt stable across retries. graphRefresh is
     // separate per-invocation observation, not part of that receipt's hash.
     await report({phase:'source.receipt',changedScripts:receipt.changes.length});
+    if(sourceOnly){
+      const started=Date.now();await report({phase:'refresh.source-index'});const updated=await publishSourceIndex();
+      if(fingerprint(updated.files)!==fingerprint(receipt.files))throw assetError('stale_graph','Source index no longer matches apply receipt');
+      await recordAssetState(toolkit,name,selected.binding,{state:'source_applied',source:'applied',graph:'deferred',bindingsVerified:false,lastOperation:params.operationId});
+      const {files,...summary}=receipt;
+      return {...summary,bindingsVerified:false,bindingCoverage:'unverified',inventoryFiles:files.length,storedReceipt:path.relative(paths.workspace,path.join(journalDir,params.operationId,'receipt.json')).split(path.sep).join('/'),graphRefresh:{strategy:'source-index',revision:updated.revision,changedScripts:receipt.changes.length,elapsedMs:Date.now()-started}};
+    }
     let updated,strategy='reuse';const refreshStarted=Date.now();
     if(fs.existsSync(paths.graphFile)){
       const candidate=readAssetJson(paths.graphFile,UNITY_PROJECT_LIMITS.maxStoredGraphBytes);
@@ -190,9 +212,15 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
     project.assetReconstruction={...(previous?.binding&&fingerprint(previous.binding)===fingerprint(selected.binding)?previous:{}),binding:selected.binding,state:result.state==='partial'?'partial':result.compileReady?(result.bindingsVerified?'bindings_verified':'compile_ready'):result.state,validationState:result.state,compilation:result.compilation,compileReady:result.compileReady,bindingsVerified:result.bindingsVerified,scopeBindingsVerified:result.scopeBindingsVerified,validationScope:result.scope,validationCoverage:result.coverage,behavior:'unverified',validationOperation:result.operationId};await toolkit.save(name,project);
     return result;
   }
-  const graph=currentGraph(paths,selected);await verifyGraphFiles(projectDir,graph);
+  const sourceOperation=['assets.scripts','assets.source','reconstruct.plan'].includes(method);
+  let graph;
+  if(sourceOperation&&(fs.existsSync(sourceIndexFile)||!fs.existsSync(paths.graphFile))){
+    graph=fs.existsSync(sourceIndexFile)?assertSourceIndex(readAssetJson(sourceIndexFile)):await publishSourceIndex();
+    if(fingerprint(graph.binding)!==fingerprint(selected.binding))throw assetError('stale_graph','Source index build changed; index source again');
+  }else graph=currentGraph(paths,selected);
+  await verifyGraphFiles(projectDir,graph);
   if(method==='assets.source') {
-    verifyStoredGraph(graph,paths.graphFile);
+    if(!isSourceIndex(graph))verifyStoredGraph(graph,paths.graphFile);
     paramsShape(params,['id']);if(typeof params.id!=='string'||params.id.length>2048)throw assetError('asset_params_invalid','Expected a script asset ID');
     const asset=graph.assets.find(a=>a.id===params.id);
     if(!asset?.path?.startsWith('Assets/')||!asset.path.endsWith('.cs'))throw assetError('asset_source_unsupported','Only exported C# source assets can be read');
@@ -222,8 +250,8 @@ export async function handleOwnedAssetOperation(toolkit,name,method,params={},de
   const file=path.join(paths.reconstructionDir,'plans',plan.operationId+'.json');
   // Saved reconstruction needs the complete file inventory, all source type
   // identities and all script bindings. Bulk/scene payloads are unnecessary.
-  const scriptEdges=sqlite?null:graph.edges.filter(e=>e.kind==='script'||e.field==='m_Script'),claimedNodes=sqlite?null:new Set(scriptEdges.map(e=>e.from));
-  const focusedGraph=sqlite?graph:{kind:graph.kind,schemaVersion:graph.schemaVersion,binding:graph.binding,revision:graph.revision,unityVersion:graph.unityVersion,profile:graph.profile,files:graph.files,assets:graph.assets.filter(a=>a.script),nodes:graph.nodes.filter(n=>n.scriptRef||claimedNodes.has(n.id)).map(n=>({id:n.id,scriptRef:n.scriptRef})),edges:scriptEdges};
+  const scriptEdges=sqlite||isSourceIndex(graph)?null:graph.edges.filter(e=>e.kind==='script'||e.field==='m_Script'),claimedNodes=sqlite||isSourceIndex(graph)?null:new Set(scriptEdges.map(e=>e.from));
+  const focusedGraph=sqlite||isSourceIndex(graph)?graph:{kind:graph.kind,schemaVersion:graph.schemaVersion,binding:graph.binding,revision:graph.revision,unityVersion:graph.unityVersion,profile:graph.profile,files:graph.files,assets:graph.assets.filter(a=>a.script),nodes:graph.nodes.filter(n=>n.scriptRef||claimedNodes.has(n.id)).map(n=>({id:n.id,scriptRef:n.scriptRef})),edges:scriptEdges};
   writeJson(file,{plan,graph:focusedGraph},{exclusive:true,compact:true});
   return reconstructionPreview(plan,path.relative(paths.workspace,file).split(path.sep).join('/'));
 }

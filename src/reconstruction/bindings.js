@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {storedScriptBindings} from '../assets/graph-storage.js';
+import {isSourceIndex} from '../assets/source-index.js';
 
 const MAX_SAMPLES=64,MAX_SAMPLE_BYTES=16384;
 const preview=value=>typeof value==='string'?value.slice(0,256):value??null;
@@ -25,6 +26,9 @@ export function summarizeScriptBindings(asset,rows){
 
 /** A GUID identifies an asset; its resolved local reference binds a component. */
 export function scriptBindings(graph,asset){
+ if(isSourceIndex(graph)){
+  return {components:[],unresolvedBindings:[],componentCount:null,unresolvedBindingCount:null,traversedBindingCount:0,scriptEdgeCount:null,traversalComplete:false,bindingCoverage:'unverified'};
+ }
  const attested=storedScriptBindings(graph,asset);if(attested)return attested;
  if(!Array.isArray(graph.nodes)||!Array.isArray(graph.edges))throw Object.assign(new Error('Complete binding graph or authenticated streamed traversal required'),{code:'asset_graph_invalid'});
  const bySource=new Map(),claimed=new Set(),counts=new Map();

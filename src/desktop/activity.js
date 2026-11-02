@@ -1,3 +1,4 @@
+import {readDesktopProjectSummary} from './project-summary.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -32,8 +33,7 @@ export function createDesktopActivityReader(root,{toolkit,ghidraActivity,isAlive
   buildDesktopCommand('workspace.status',{name});
   const workspace=assertAssetPath(path.join(root,'workspaces',name),root);
   if(path.resolve(toolkit.workspace(name))!==workspace)throw fail('DESKTOP_ACTIVITY_BINDING','Toolkit workspace does not match the selected project');
-  const project=assertAssetPath(path.join(workspace,'project.re.json'),workspace),stat=fs.lstatSync(project);
-  if(!stat.isFile()||stat.nlink!==1||stat.size>16*1024**2)throw fail('DESKTOP_ACTIVITY_PROJECT','Unsupported project record');
+  readDesktopProjectSummary(workspace);
   return workspace;
  }
  function durableRecord(workspace,id){

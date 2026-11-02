@@ -28,7 +28,7 @@ export const definitions={
  ...dataDefinitions,
  ...componentDefinitions,
  'assets.session.start':{properties:{}},'assets.session.status':{properties:{}},'assets.session.stop':{properties:{}},
- 'assets.export':{properties:{}},'assets.index':{properties:{storage:{type:'string',enum:['json','sqlite']},graphMaxMiB:{type:'integer',minimum:128,maximum:512,enum:[128,256,512]}}},
+ 'assets.export':{properties:{}},'assets.index':{properties:{scope:{type:'string',enum:['source','full']},storage:{type:'string',enum:['json','sqlite']},graphMaxMiB:{type:'integer',minimum:128,maximum:512,enum:[128,256,512]}}},
  'assets.raw':{properties:{format:{type:'string',enum:['json','yaml','text','binary','image','audio','model','font','video']},bundle:{type:'array',maxItems:64,items:{type:'integer',minimum:0,maximum:2147483647}},collection:{type:'integer',minimum:0,maximum:2147483647},pathID:{type:'string',minLength:1,maxLength:20}},required:['format','bundle','collection','pathID']},
  'assets.list':{properties:{...paging,kind:text,name:text,path:text,search:text}},
  'assets.get':{properties:{id:text},required:['id']},

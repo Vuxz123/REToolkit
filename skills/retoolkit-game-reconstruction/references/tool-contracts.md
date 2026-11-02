@@ -153,7 +153,10 @@ retk assets session start Game --json
 retk assets session status Game --json
 retk assets export Game --json
 retk assets session stop Game --json
-retk assets index Game --storage sqlite --json
+retk assets index Game --scope source --json
+retk assets scripts Game --query Namespace.Type --limit 20 --json
+# Only when asset-reference work or final static inspection needs the full graph:
+retk assets index Game --scope full --storage sqlite --json
 retk assets list Game --kind scene --limit 20 --json
 retk assets tree Game --id "asset:<scene-guid>" --depth 5 --limit 100 --json
 retk assets refs Game --id "object:<guid>:<fileID>" --direction both --limit 100 --json
@@ -161,8 +164,13 @@ retk assets scripts Game --query Namespace.Type --limit 20 --json
 retk assets source Game --id "asset:<script-guid>" --json
 ```
 
-This is a menu, not an unconditional script. Skip export/start when indexing an
-existing selected export. Session start means transport readiness; inspect load
+This is a menu, not an unconditional script. Skip export/start when an existing
+selected export is available. For code recovery use `--scope source` without storage flags.
+Source-only plans require explicit `bodies`, `initialization` or `event-storage`
+mode and the returned revision in `graphRevision`. Apply/verify retain hashes and
+receipts without parsing asset YAML; binding counts remain unverified. Build the
+full graph for static asset-reference queries, not as a prerequisite for code.
+Session start means transport readiness; inspect load
 job status. Export replaces only through its guarded stage/backup route. For a
 small graph use the default JSON storage; SQLite needs Node 24.15+. JSON's
 `--max-graph-mib` must not be combined with SQLite. Preserve returned cursors and
@@ -196,9 +204,10 @@ Source request shape:
 {
   "kind": "retoolkit-reconstruction-request",
   "schemaVersion": 1,
-  "graphRevision": "<current 64-character graph revision>",
+  "graphRevision": "<current 64-character source-index or graph revision>",
   "changes": [{
     "scriptId": "asset:<existing-script-guid>",
+    "mode": "bodies",
     "source": "<complete replacement C# source>",
     "evidenceIds": []
   }]

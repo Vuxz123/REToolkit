@@ -101,6 +101,11 @@ function safeYaml(text,label,{classID,summaries=[]}={}){
   // Preserve these exact bytes before numeric coercion, only at this schema
   // path; ordinary nonfinite floats and reference identifiers remain checked.
   if(classID===114&&parts.length===5&&parts[0]==='MonoBehaviour'&&parts[1]==='m_FontFeatureTable'&&parts[2]==='m_LigatureSubstitutionRecords'&&Number.isSafeInteger(parts[3])&&parts[4]==='m_ComponentGlyphIDs'&&YAML.isScalar(node)&&node.type==='PLAIN'&&!node.tag&&typeof node.source==='string'&&/^(?:[0-9a-fA-F]{8})+$/.test(node.source))return node.source;
+  // NonConvexColliderAsset declares HashOfSourceMeshes as long[], but exports
+  // can contain a decimal/exponent-like scalar instead of a sequence. Retain
+  // its lexeme as ambiguous read-only data; do not invent array values or
+  // certify typed preservation. Explicit tags and nonfinite literals still fail.
+  if(classID===114&&parts.length===2&&parts[0]==='MonoBehaviour'&&parts[1]==='HashOfSourceMeshes'&&YAML.isScalar(node)&&node.type==='PLAIN'&&!node.tag&&typeof node.value==='number'&&typeof node.source==='string'&&/^[+-]?[0-9]+(?:\.[0-9]+)?[eE][+-]?[0-9]+$/.test(node.source))return {kind:'ambiguous-unity-scalar',source:node.source,readOnly:true};
   // Other serialized user fields can also contain packed arrays. Without a
   // field type, do not claim a number or an element encoding. Keep the whole
   // ambiguous lexeme (including finite exponent lookalikes) as read-only data.

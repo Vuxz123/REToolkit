@@ -4,6 +4,7 @@ import {validateEvidence} from '../evidence-schema.js';
 import {verifyGraphFiles} from '../assets/graph.js';
 import {scriptBindings} from './bindings.js';
 import {dumpImageRanges} from './dump-images.js';
+import {isSourceIndex,assertSourceIndex} from '../assets/source-index.js';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
 const fail = message => {throw Object.assign(new Error(message),{code:'reconstruction_invalid'});};
@@ -23,7 +24,8 @@ function dumpTypes(text,images){
 
 /** Metadata declarations and observed native pseudocode are separate evidence. */
 export async function buildScriptMap(graph,{projectDir,dump,evidence=[],scriptIds}={}){
-  if(graph?.kind!=='retoolkit-asset-graph'||graph.schemaVersion!==1)fail('Invalid asset graph');
+  if(isSourceIndex(graph))assertSourceIndex(graph);
+  else if(graph?.kind!=='retoolkit-asset-graph'||graph.schemaVersion!==1)fail('Invalid asset graph');
   if(projectDir)await verifyGraphFiles(projectDir,graph);
   if(!Array.isArray(evidence)||evidence.length>10000)fail('Invalid evidence list');
   let metadata=[],verified=false;
@@ -55,8 +57,8 @@ export async function buildScriptMap(graph,{projectDir,dump,evidence=[],scriptId
       }).map(({id,value})=>({id,kind:'native-pseudocode',runId:value.runId,revision:value.revision,programIdentity:value.programIdentity,query:value.query}));
       return {...method,evidence:matches};
     });
-    const bodyCandidate=asset.path.startsWith('Assets/')&&asset.path.endsWith('.cs')&&info?.assembly&&!/editor/i.test(info.assembly)&&!asset.path.split('/').some(part=>part.toLowerCase()==='editor')&&bindings.traversalComplete&&!unresolvedBindingCount;
-    return {scriptId:asset.id,guid:asset.guid,path:asset.path,identity,...bindings,serializedFields:(type?.fields??[]).filter(f=>f.serialized),sourceCapabilities:{bodyReplacement:bodyCandidate?{mode:'bodies',state:'requires-plan-validation',parser:'exact-unity-bundled-roslyn',meta:asset.guid?'preserve':'generic-or-data-source-requires-classification'}:{state:'unsupported'},eventStorage:bodyCandidate?{mode:'event-storage',state:'requires-native-proof-and-plan-validation',preserves:'all-other-source-tokens',metadata:'fresh-same-build-dump',nativeFieldUse:'requires-independent-review',logic:'unverified'}:{state:'unsupported'},missingInitialization:bodyCandidate?{mode:'initialization',state:'requires-native-proof-and-plan-validation',constructors:'missing-static-or-parameterless-instance',preserves:'all-other-source-tokens',metadata:'fresh-same-build-dump',logic:'unverified'}:{state:'unsupported'}},state:{identity:!asset.guid?'opaque':types.length>1||duplicateIdentity?'ambiguous':!info?.supported||!type?'unsupported':'resolved',bindings:unresolvedBindingCount?'unresolved':componentCount?'resolved':'unreferenced',metadata:!verified?'unverified':candidates.length>1?'ambiguous':match?'matched':'unmatched',logic:'unverified',source:'exported-stub'},methods,evidence:methods.flatMap(m=>m.evidence),limitations:[...info?.limitations??[],...(unresolvedBindingCount?['Unresolved local fileID script bindings prevent source replacement']:[]),...(!asset.path.endsWith('.cs')?['DLL replacement requires a separate migration']:[])]};
+    const bodyCandidate=asset.path.startsWith('Assets/')&&asset.path.endsWith('.cs')&&info?.assembly&&!/editor/i.test(info.assembly)&&!asset.path.split('/').some(part=>part.toLowerCase()==='editor')&&(isSourceIndex(graph)||bindings.traversalComplete)&&!unresolvedBindingCount;
+    return {scriptId:asset.id,guid:asset.guid,path:asset.path,identity,...bindings,serializedFields:(type?.fields??[]).filter(f=>f.serialized),sourceCapabilities:{bodyReplacement:bodyCandidate?{mode:'bodies',state:'requires-plan-validation',parser:'exact-unity-bundled-roslyn',meta:asset.guid?'preserve':'generic-or-data-source-requires-classification'}:{state:'unsupported'},eventStorage:bodyCandidate?{mode:'event-storage',state:'requires-native-proof-and-plan-validation',preserves:'all-other-source-tokens',metadata:'fresh-same-build-dump',nativeFieldUse:'requires-independent-review',logic:'unverified'}:{state:'unsupported'},missingInitialization:bodyCandidate?{mode:'initialization',state:'requires-native-proof-and-plan-validation',constructors:'missing-static-or-parameterless-instance',preserves:'all-other-source-tokens',metadata:'fresh-same-build-dump',logic:'unverified'}:{state:'unsupported'}},state:{identity:!asset.guid?'opaque':types.length>1||duplicateIdentity?'ambiguous':!info?.supported||!type?'unsupported':'resolved',bindings:isSourceIndex(graph)?'unverified':unresolvedBindingCount?'unresolved':componentCount?'resolved':'unreferenced',metadata:!verified?'unverified':candidates.length>1?'ambiguous':match?'matched':'unmatched',logic:'unverified',source:'exported-stub'},methods,evidence:methods.flatMap(m=>m.evidence),limitations:[...info?.limitations??[],...(unresolvedBindingCount?['Unresolved local fileID script bindings prevent source replacement']:[]),...(!asset.path.endsWith('.cs')?['DLL replacement requires a separate migration']:[])]};
   });
   return {kind:'retoolkit-script-map',schemaVersion:1,graphRevision:graph.revision,binding:structuredClone(graph.binding),scripts,limitations:['Native pseudocode is untrusted evidence, not original C# source.','Compilation and behavior have not been verified.']};
 }

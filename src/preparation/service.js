@@ -111,7 +111,7 @@ async function freshInspection(toolkit,name,record) {
     if(valid&&['dump','import','analyze'].includes(stage.id)&&toolkit.tools?.dumper)valid=nativeEvidence(toolkit,name,stage.id);
     if(valid&&stage.id==='symbols'&&record.options.symbols==='apply'&&stage.result?.coverage==='complete'&&toolkit.tools?.dumper)valid=nativeEvidence(toolkit,name,'symbols');
     if(valid&&stage.id==='assets'&&toolkit.tools?.assetripper)valid=exportEvidence(toolkit,name);
-    if(stage.id==='index'&&toolkit.tools?.assetripper){const observed=await currentAssets();valid=valid&&observed.state==='indexed'&&(!stage.result?.revision||stage.result.revision===observed.revision);}
+    if(stage.id==='index'&&toolkit.tools?.assetripper){const observed=await currentAssets(),index=stage.result?.scope==='source'?observed.sourceIndex:observed;valid=valid&&index?.state===(stage.result?.scope==='source'?'ready':'indexed')&&(!stage.result?.revision||stage.result.revision===index.revision);}
     if(stage.id==='validation'&&stage.result?.operationId){const observed=await currentAssets();valid=observed.validationOperation===stage.result.operationId&&!['stale-or-unavailable',undefined].includes(observed.validationState)&&(!stage.result.compileReady||observed.compileReady===true)&&(!stage.result.bindingsVerified||observed.bindingsVerified===true);}
    }catch{valid=false;}
    if(!valid)stale(stage,'Saved outputs or receipts no longer verify against the current workspace');
@@ -130,7 +130,7 @@ function readiness(record) {
  return {
   nativeAnalysis:{state:ready('analyze')?'ready':stage('analyze')?.state??'unverified',...(record.options?.analysisMode==='on-demand'?{mode:'on-demand'}:{})},
   symbols:{state:ready('symbols')?(record.options?.symbols==='apply'?(symbols.result?.coverage==='complete'?'ready':'partial'):'planned'):symbols?.state??'unverified',coverage:symbols?.result?.coverage??'unverified'},
-  assetsIndex:{state:ready('index')?'ready':stage('index')?.state??'unverified',storage:stage('index')?.result?.storage??null,coverage:stage('index')?.result?.coverage??'unverified'},
+  assetsIndex:{state:ready('index')?'ready':stage('index')?.state??'unverified',scope:stage('index')?.result?.scope??'full',storage:stage('index')?.result?.storage??null,coverage:stage('index')?.result?.coverage??'unverified'},
   downloadedData:compact(android?.downloadedData??android?.readiness?.downloadedData??{state:'unverified',limitations:['Remote/on-demand asset coverage is unverified.']}),
   compilation:validation?{state:validation.compileReady?'ready':validation.compilation?.state??'unverified',coverage:validation.coverage??'unverified'}:validationUnavailable,
   bindings:validation?{state:validation.bindingsVerified?'ready':validation.scopeBindingsVerified?'partial':'unverified',coverage:validation.coverage??'unverified'}:validationUnavailable,
@@ -161,7 +161,7 @@ async function existingEvidence(toolkit,name,id,previous,dependencies) {
  if(manifestEvidence(toolkit,name,previous)){
   if(['dump','import','analyze'].includes(id)&&toolkit.tools?.dumper)return nativeEvidence(toolkit,name,id);
   if(id==='assets'&&!dependencies.invokeStage&&!dependencies.runStage)return exportEvidence(toolkit,name);
-  if(id==='index'&&!dependencies.invokeStage&&!dependencies.runStage)return (await (dependencies.inspectAssetReadiness??inspectAssetReadiness)(toolkit,name)).state==='indexed';
+  if(id==='index'&&!dependencies.invokeStage&&!dependencies.runStage){const observed=await (dependencies.inspectAssetReadiness??inspectAssetReadiness)(toolkit,name),index=previous.result?.scope==='source'?observed.sourceIndex:observed;return index?.state===(previous.result?.scope==='source'?'ready':'indexed')&&(!previous.result?.revision||previous.result.revision===index.revision);}
   return true;
  }
  return false;
@@ -285,11 +285,13 @@ async function defaults(id,context) {
   case 'index':{
    const observed=await (dependencies.inspectAssetReadiness??inspectAssetReadiness)(toolkit,name);
    if(observed.state==='indexed'&&p().assetReconstruction?.graphStorage==='sqlite')return {state:'ready',reused:true,storage:'sqlite',coverage:observed.coverage,outputs:outputManifest([assetPaths(toolkit,name).graphFile])};
-   const result=await assetsApi(toolkit,name,'assets.index',{storage:'sqlite'});
-   return {state:'ready',...result,outputs:outputManifest([assetPaths(toolkit,name).graphFile])};
+   const sourceFile=path.join(assetPaths(toolkit,name).base,'source-index.json');
+   if(observed.sourceIndex?.state==='ready')return {state:'ready',reused:true,scope:'source',revision:observed.sourceIndex.revision,coverage:observed.sourceIndex.coverage,outputs:outputManifest([sourceFile])};
+   const result=await assetsApi(toolkit,name,'assets.index',{scope:'source'});
+   return {...result,state:'ready',outputs:outputManifest([sourceFile])};
   }
   case 'scripts':{
-   // SQLite script mapping is intentionally a bounded first page, not a claim of full reconstruction coverage.
+   // Script mapping is a bounded first page, not a claim of binding or reconstruction coverage.
    const result=await assetsApi(toolkit,name,'assets.scripts',{limit:100});
    return {state:'ready',coverage:result.coverage,scope:{limit:100,hasMore:Boolean(result.nextCursor)},outputs:outputManifest([assetPaths(toolkit,name).mapFile])};
   }

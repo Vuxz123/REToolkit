@@ -2,6 +2,8 @@ import {once} from 'node:events';
 import {definitions,validateAssetParams,invokeAssetApi} from './api.js';
 const MAX_INPUT=1024**2,MAX_OUTPUT=2*1024**2;
 const jobDescriptions={
+ 'assets.index':'Use scope=source for code recovery: C# identities and hashed inventory only, no serialized graph. Omit storage in source scope. Use scope=full with storage=sqlite for asset reference queries or final project inspection. Source-only bindings remain unverified; compile scoped batches before final acceptance.',
+ 'assets.scripts':'List source identities and capabilities. Without an existing graph, creates a source-only index; bindings remain unverified. Use explicit bodies/initialization/event-storage modes for source-only plans.',
  'reconstruct.validate':'Validate compile and bindings. mode=resident reuses a dedicated Unity 6 Editor and syncs changed source; clean is the default/final acceptance mode. Resident completion is an invocation receipt, not process exit or gameplay proof.',
  'reconstruct.resident-status':'Read the dedicated resident Unity session identity and pending invocation.',
  'reconstruct.resident-stop':'Close only the dedicated resident project Editor and release its toolchain ownership after confirmed closure.',

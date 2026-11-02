@@ -238,6 +238,19 @@ test('owned asset export closes its session before indexing and binds generated 
  assert.equal(result.state,'succeeded');assert.deepEqual(calls,['assets.session.start','assets.export','assets.session.stop']);assert.equal(result.readiness.assetsIndex.state,'ready');
 });
 
+test('default reconstruction preparation requests only source indexing and retains its scope on resume',async t=>{
+ const f=await fixture(t),{runPreparation}=await service();const calls=[];
+ const dependencies={...f.dependencies,inspectAssetReadiness:async()=>({state:'unknown'}),assetApi:async(_toolkit,_name,method,params)=>{
+  calls.push({method,params});assert.equal(method,'assets.index');assert.deepEqual(params,{scope:'source'});
+  const file=path.join(f.workspace,'04_Notes/assets/source-index.json');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'{}');
+  return {state:'source_indexed',scope:'source',revision:'a'.repeat(64),coverage:{serializedReferences:'unverified'}};
+ },invokeStage:(id,c)=>id==='index'?c.runDefault():f.invokeStage(id,c)};
+ const first=await runPreparation(f.toolkit,'Game',{symbols:'skip'},dependencies);
+ assert.equal(first.state,'succeeded');assert.equal(first.readiness.assetsIndex.scope,'source');assert.equal(first.readiness.bindings.state,'unverified');
+ const resumed=await runPreparation(f.toolkit,'Game',{resumeRunId:first.runId},dependencies);
+ assert.equal(resumed.state,'succeeded');assert.equal(calls.length,1);
+});
+
 test('default current native analysis is reused without launching a second analysis',async t=>{
  const f=await fixture(t),{runPreparation}=await service();
  const toolsDir=path.join(f.root,'tools');fs.mkdirSync(toolsDir);for(const name of ['dumper.exe','headless.bat','java.exe'])fs.writeFileSync(path.join(toolsDir,name),name);

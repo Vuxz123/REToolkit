@@ -1,3 +1,4 @@
+import {readDesktopProjectSummary} from './project-summary.js';
 import fs from 'node:fs';import path from 'node:path';import {randomUUID} from 'node:crypto';import {spawn} from 'node:child_process';
 import {desktopOperations,buildDesktopCommand} from './operations.js';
 import {StringDecoder} from 'node:string_decoder';
@@ -86,7 +87,7 @@ export function createDesktopBroker(root,{node=process.execPath,spawnImpl=spawn,
   const directory=path.join(root,'workspaces'),workspaces=[];
   if(fs.existsSync(directory)&&!fs.lstatSync(directory).isSymbolicLink())for(const entry of fs.readdirSync(directory,{withFileTypes:true}).slice(0,500)){
    if(!entry.isDirectory()||entry.isSymbolicLink())continue;const file=path.join(directory,entry.name,'project.re.json');if(!fs.existsSync(file))continue;
-   try{const stat=fs.lstatSync(file);if(!stat.isFile()||stat.size>16*1024**2)throw Error('Unsupported project file');const project=JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
+   try{const project=readDesktopProjectSummary(path.join(directory,entry.name));
     workspaces.push({name:entry.name.slice(0,64),platform:typeof project.platform==='string'?project.platform.slice(0,64):null,candidatePath:typeof project.reconstructedSourceDir==='string'&&project.reconstructedSourceDir.length<=4096?project.reconstructedSourceDir:path.join(directory,entry.name,'05_ReconstructedSource'),state:fs.existsSync(path.join(directory,entry.name,'.retk-lock'))?'busy':'available',steps:Object.fromEntries(['extract','scan','dump','import','analyze','symbols','notes','assetripper'].filter(key=>project.steps?.[key]).map(key=>[key,String(project.steps[key]?.state??'unknown').slice(0,32)]))});
    }catch(error){workspaces.push({name:entry.name,state:'invalid',error:error.message});}
   }

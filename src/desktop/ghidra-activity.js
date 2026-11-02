@@ -1,3 +1,4 @@
+import {readDesktopProjectSummary} from './project-summary.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {assertAssetPath} from '../assets/context.js';
@@ -36,16 +37,7 @@ function logTail(workspace,relative,now){
 /** Observes saved state only. Never acquires/reclaims a lease or calls an engine. */
 export function createGhidraActivityReader(root,{isAlive=alive,now=Date.now}={}){
  root=path.resolve(root);
- let cachedProject;
- function projectState(workspace){
-  const file=assertAssetPath(path.join(workspace,'project.re.json'),workspace),stat=fs.lstatSync(file);
-  if(!stat.isFile()||stat.nlink!==1||stat.size>16*1024**2)throw Error('Unsupported project file');
-  const signature=[file,stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join('|');
-  if(cachedProject?.signature===signature)return cachedProject.project;
-  const raw=readJson(file,workspace,16*1024**2),project={steps:{}};
-  for(const key of ['import','analyze','symbols']){const step=raw.steps?.[key];if(step)project.steps[key]={state:step.state,runId:step.runId,owner:{pid:step.owner?.pid},startedAt:step.startedAt,completedAt:step.completedAt};}
-  cachedProject={signature,project};return project;
- }
+ const projectState=readDesktopProjectSummary;
  return function inspect(name){
   buildDesktopCommand('workspace.status',{name});
   const workspace=path.join(root,'workspaces',name),time=now(),result={name,state:'observed',observedAt:new Date(time).toISOString(),workspaceBusy:false,lock:{ownerPid:null,ownerAlive:null,engines:[]},tasks:[],jobsTruncated:false};

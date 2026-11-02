@@ -137,6 +137,11 @@ stepId and jobId. Codex registers continue-reconstruction and releases the claim
 inspect actual watcher waiting/transportReady or queued before ending. Queued is
 not resumed: claim again on notification, checkpoint and continue. Other harnesses
 retain a claim for active jobs_wait. Unknown registration is inspection only.
+For code recovery, prefer assets.index {scope:"source"} (no storage option) or
+assets.scripts when no index exists. Do not wait for a full asset graph to recover
+code. Source-only plans require explicit bodies/initialization/event-storage modes;
+serialized bindings remain unverified. Build a full graph only for asset-reference
+work that needs it or final project inspection. Never restart an active index.
 Batch dependent evidenced source within the 16-file limit, verify every apply,
 then validate scoped Unity at a compile-coherent feature boundary. Reuse current
 setup/index. Missing gameplay observations/runner is an explicit blocker, never

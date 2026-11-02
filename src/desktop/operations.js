@@ -25,7 +25,8 @@ for(const [id,label]of [['add','Nhập APK/XAPK'],['scan','Quét thư mục'],['
 add('workspace.export','Xuất workspace .re','workspace',{name,out:text},p=>['export',p.name,p.out]);
 for(const [id,label]of [['start','Mở AssetRipper session'],['status','Trạng thái session'],['stop','Đóng session']])add('assets.'+id,label,'assets',{name},p=>['assets','session',id,p.name]);
 for(const [id,label]of [['export','Export Unity project'],['list','Danh sách asset'],['scripts','Mapping script']])add('assets.'+id,label,'assets',{name},p=>['assets',id,p.name]);
-add('assets.index','Lập graph asset','assets',{name},p=>['assets','index',p.name,...(p.graphMaxMiB?['--max-graph-mib',p.graphMaxMiB]:[]),...(p.storage?['--storage',p.storage]:[])],{graphMaxMiB:value=>['128','256','512'].includes(value),storage:value=>['json','sqlite'].includes(value)});
+add('assets.source-index','Lập chỉ mục code (nhanh)','assets',{name},p=>['assets','index',p.name,'--scope','source']);
+add('assets.index','Lập graph asset đầy đủ','assets',{name},p=>['assets','index',p.name,...(p.graphMaxMiB?['--max-graph-mib',p.graphMaxMiB]:[]),...(p.storage?['--storage',p.storage]:[])],{graphMaxMiB:value=>['128','256','512'].includes(value),storage:value=>['json','sqlite'].includes(value)});
 for(const [id,label]of [['get','Chi tiết asset'],['tree','Hierarchy'],['refs','Tham chiếu'],['source','Đọc script']])add('assets.'+id,label,'assets',{name,id:text},p=>['assets',id,p.name,'--id',p.id]);
 add('reconstruct.plan','Lập kế hoạch script','reconstruct',{name,request:text},p=>['reconstruct','plan',p.name,'--request',p.request]);
 add('recovery.create','Tạo bản project tái dựng','reconstruct',{name},p=>['recovery','create',p.name]);

@@ -193,7 +193,15 @@ the next data_verify. Through recovery_run qualification keeps the current
 project revision. Do not create .meta/GUIDs or replace the baseline with values
 from a later candidate to make acceptance pass.
 
-Export when needed, index, then query small pages: scenes/prefabs, `.asset` tables, their trees,
+For code-only recovery, use `assets.index {scope:"source"}` without storage
+options. If no graph/index exists, `assets.scripts` also creates this source index.
+Broken asset YAML does not block this route. It retains candidate inventory and
+C# identity, but serialized binding coverage remains unverified. Do not require
+a full asset graph or perform unrelated data/library work before recovering the
+authorized code batch. See `docs/source-first-reconstruction.md`.
+
+For asset-reference work, export when needed, build a full graph explicitly with
+`assets.index {scope:"full",storage:"sqlite"}`, then query small pages: scenes/prefabs, `.asset` tables, their trees,
 components, incoming/outgoing references, scripts and exact source stubs. Use
 returned IDs and revision-bound cursors. Keep PathIDs, exported GUIDs and fileIDs
 distinct; preserve large numeric IDs as strings. Missing/opaque/truncated content
@@ -302,6 +310,8 @@ apply rechecks fresh dump, source inventory and exact metadata/evidence identity
 See checkout `docs/source-recovery.md` for the DTO and supported class scope.
 
 After source apply, read `graphRefresh` and job `assetProgress`: source publication
+with `graphRefresh.strategy:"source-index"` refreshes only the source index and
+does not build a full graph. For full-graph plans, source publication
 and graph copy/update/sealing are separate stages. A matching complete graph is
 refreshed without rebuilding serialized structure; SQLite still copies/hashes
 database bytes and checks full inventory. Do not start another index job while
@@ -315,7 +325,15 @@ source replacement, including errors past the sample. Never raise materializatio
 limits or omit components to claim complete validation. Runtime DLL stubs need
 their own verified implementation/migration; these source routes do not fix them.
 
-Create `reconstruct.plan` for the current graph revision; inspect the full saved
+For source-only plans, explicitly choose `mode:"bodies"`, `"initialization"` or
+`"event-storage"` according to the intended change and required evidence. Legacy
+whole-source replacement requires the full-graph route. Use the returned source
+index revision in the existing `graphRevision` request field. Unknown binding
+counts are not zero or proof of unused scripts. Keep the authorized batch scope;
+compile at a coherent boundary and defer full graph inspection to asset work or
+final acceptance, without treating compile success as gameplay verification.
+
+Create `reconstruct.plan` for the current source-index or graph revision; inspect the full saved
 plan when its inline preview is incomplete. Apply the saved operation UUID only
 within existing authorization; show concrete changes before any additional
 approval genuinely required by the task. Do not ask again for already-authorized

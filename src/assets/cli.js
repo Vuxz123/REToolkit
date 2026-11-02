@@ -7,7 +7,7 @@ import {validationProgressPreview} from '../unity/progress.js';
 export const assetUsage=`AssetRipper AI bridge (exported Unity project)
   node re.js assets session start|status|stop <Game>
   node re.js assets export|mcp <Game>
-  node re.js assets index <Game> [--storage json|sqlite] [--max-graph-mib 128|256|512]
+  node re.js assets index <Game> [--scope source|full] [--storage json|sqlite] [--max-graph-mib 128|256|512]
   node re.js assets list <Game> [--kind <kind>] [--search <text>]
   node re.js assets get|tree|refs|source <Game> --id <asset/object ID>
   node re.js assets scripts <Game> [--query <full type/path>] [--evidence <json>]
